@@ -17,9 +17,9 @@
 
 ## ⚡ 개요 (Overview)
 
-`Lib.Db.TvpGen`은 **Roslyn Source Generator**를 활용하여 SQL Server Table-Valued Parameters (TVP)와 DbDataReader 결과 매핑 코드를 컴파일 타임에 자동 생성합니다. **v2.0 'Quantum Leap'** 업데이트를 통해 런타임 오버헤드를 제로화하고, **Track 5 하이브리드 알고리즘**을 도입하여 극한의 성능을 제공합니다.
+`Lib.Db.TvpGen`은 **Roslyn Source Generator**를 활용하여 SQL Server Table-Valued Parameters (TVP)와 DbDataReader 결과 매핑 코드를 컴파일 타임에 자동 생성합니다. **v1.0** 업데이트를 통해 런타임 오버헤드를 제로화하고, **Track 5 하이브리드 알고리즘**을 도입하여 극한의 성능을 제공합니다.
 
-### 🚀 핵심 기능 (v2.0)
+### 🚀 핵심 기능 (v1.0)
 
 1.  **Track 5 Hybrid Algorithm**:
     *   **Small (≤12)**: `Span.SequenceEqual` 기반의 고속 `else-if` 분기.

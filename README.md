@@ -1,4 +1,4 @@
-# Lib.Db (v2.0 'Quantum Leap')
+# Lib.Db (v1.0)
 
 **Extreme Performance Data Access Library for .NET 10+**
 
@@ -8,7 +8,7 @@
 <!-- AI_CONTEXT: END -->
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
-[![NuGet](https://img.shields.io/badge/NuGet-2.0.0-blue)](https://www.nuget.org/packages/Lib.Db/)
+[![NuGet](https://img.shields.io/badge/NuGet-1.0.0-blue)](https://www.nuget.org/packages/Lib.Db/)
 [![AOT Ready](https://img.shields.io/badge/Native_AOT-Ready-green)](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zero Allocation](https://img.shields.io/badge/Performance-Zero_Allocation-orange)]()
@@ -53,8 +53,8 @@
 | **Native AOT** | .NET 10 | 모든 버전 | ✅ 완벽 지원 |
 
 **NuGet Packages**:
-- `Lib.Db` - 런타임 라이브러리 (v2.0.0)
-- `Lib.Db.TvpGen` - Source Generator (v2.0.0)
+- `Lib.Db` - 런타임 라이브러리 (v1.0.0)
+- `Lib.Db.TvpGen` - Source Generator (v1.0.0)
   - Table-Valued Parameters (TVP) 자동 생성
   - DbDataReader → DTO 고성능 매핑 (Track 5 알고리즘)
   - Native AOT 완벽 지원 (리플렉션 제로)

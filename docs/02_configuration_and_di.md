@@ -250,10 +250,10 @@ builder.Services.AddOpenTelemetry()
 **권장 설정**:
 - **프로덕션**: `false` (보안 준수)
 
-### 4-5. 설정 유효성 검증 (Strict Validation)
+### 4-5. 설정 유효성### 3-1. Strict Validation (C# 14 Field Syntax)
 
-`Lib.Db`는 v2.0부터 **C# 14 `field` 키워드**를 활용한 강력한 설정 검증을 도입했습니다.
-잘못된 설정값이 감지되면 애플리케이션 시작 시 즉시 `ArgumentOutOfRangeException` 또는 `ArgumentNullException`이 발생하며 실행이 중단됩니다 (Fail-Fast).
+`Lib.Db`는 v1.0부터 **C# 14 `field` 키워드**를 활용한 강력한 설정 검증을 도입했습니다.
+잘못된 설정 값(예: 음수 Time-to-Live, 0 이하의 Batch Size)이 입력되면 애플리케이션 시작 즉시 예외(`ArgumentOutOfRangeException`)를 발생시켜 **Fail-Fast**를 보장합니다.NullException`이 발생하며 실행이 중단됩니다 (Fail-Fast).
 
 **주요 검증 규칙**:
 *   **Resilience**:
