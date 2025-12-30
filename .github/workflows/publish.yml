@@ -1,0 +1,35 @@
+name: Publish to NuGet
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags like v1.0.0, v2.0-beta
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x' # Use .NET 10 Preview/RC if stable not available, or specific version
+        
+    - name: Restore dependencies
+      run: dotnet restore Lib.Db/Lib.Db.csproj
+      
+    - name: Build (Release)
+      # Build in Release mode to ensure Lib.Db.TvpGen is packed correctly
+      run: dotnet build Lib.Db/Lib.Db.csproj --configuration Release --no-restore
+      
+    - name: Test
+      # Run tests to ensure quality before publishing
+      run: dotnet test Tests/Lib.Db.TestSuite/Lib.Db.TestSuite.csproj --configuration Release --no-build --verbosity normal
+      
+    - name: Pack
+      run: dotnet pack Lib.Db/Lib.Db.csproj --configuration Release --no-build --output ./nupkgs
+      
+    - name: Push to NuGet
+      run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
