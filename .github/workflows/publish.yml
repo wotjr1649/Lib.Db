@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*' # Trigger on version tags like v1.0.0, v2.0-beta
 
+permissions:
+  id-token: write # Required for NuGet Trusted Publishing
+  contents: read  # Required to checkout code
+  checks: write   # Optional (for test reporting)
+
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
