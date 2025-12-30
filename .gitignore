@@ -1,0 +1,29 @@
+## Core .NET
+[Bb]in/
+[Oo]bj/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+## NuGet
+*.nupkg
+*.snupkg
+/nupkgs/
+
+## Test Results
+TestResults/
+*.trdx
+*.coverage
+
+## OS specific
+.DS_Store
+Thumbs.db
+
+## Lib.Db specific
+# 공유 메모리 캐시 파일 (개발 중 생성된 것)
+*.mmf
+# 임시 파일
+.gemini/

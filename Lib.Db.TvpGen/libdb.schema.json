@@ -1,0 +1,35 @@
+{
+    "Tvps": {
+        "dbo.TestUserKey": [
+            {
+                "Name": "UserId",
+                "Type": "Int"
+            },
+            {
+                "Name": "UserName",
+                "Type": "NVarChar",
+                "Length": 50
+            }
+        ],
+        "dbo.OrderLineItem": [
+            {
+                "Name": "OrderId",
+                "Type": "BigInt"
+            },
+            {
+                "Name": "ProductId",
+                "Type": "Int"
+            },
+            {
+                "Name": "Quantity",
+                "Type": "Int"
+            },
+            {
+                "Name": "Price",
+                "Type": "Decimal",
+                "Precision": 18,
+                "Scale": 2
+            }
+        ]
+    }
+}

@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+
+	<ImplicitUsings>enable</ImplicitUsings>
+	<Nullable>enable</Nullable>
+	<LangVersion>latest</LangVersion>
+
+	<!-- Roslyn Component(Generator)로 명시 -->
+	<IsRoslynComponent>true</IsRoslynComponent>
+	
+	<!-- Extended Analyzer Rules 활성화 -->
+	<EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+	
+	<!-- Source Generator 표준 경고 억제 (기능 정상 동작) -->
+	<NoWarn>$(NoWarn);RS1038;RS1041;RS2008;IL2060</NoWarn>
+
+	<!-- 패키지/참조 노출 방지 -->
+	<IncludeBuildOutput>false</IncludeBuildOutput>
+	<NeutralLanguage>ko-KR</NeutralLanguage>	  
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+	  <!--<PackageReference Include="Microsoft.CodeAnalysis" Version="5.0.0" PrivateAssets="all" />-->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

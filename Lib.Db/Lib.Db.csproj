@@ -1,0 +1,92 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+	<LangVersion>preview</LangVersion>
+	<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+	  <!-- AOT 및 Trimming 호환성 -->
+	  <IsAotCompatible>true</IsAotCompatible>
+	  <IsPublishTrimmed>true</IsPublishTrimmed>
+	  <PublishAot>true</PublishAot>
+
+	  <!-- 분석기/제너레이터가 모든 빌드에서 항상 동작하도록 -->
+	<EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+	
+	<!-- AOT 분석 경고 억제 (일반 JIT 컴파일 사용 시 영향 없음) -->
+	<NoWarn>$(NoWarn);IL2060;SYSLIB0020</NoWarn>
+
+	  <!-- 생성 파일 디버깅/확인용(선택) -->
+	  <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+	  <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)\generated</CompilerGeneratedFilesOutputPath>
+	  <NeutralLanguage>ko-KR</NeutralLanguage>
+  
+</PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.3" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Hybrid" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Resilience" Version="10.1.0" />
+    <PackageReference Include="Polly" Version="8.6.5" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.1" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <Version>2.0.0</Version>
+    <Authors>Lib.Db Team</Authors>
+    <Company>Lib.Db Inc.</Company>
+    <Description>High-Performance Data Access Library for .NET 10 (v2.0 Quantum Leap)</Description>
+    <PackageTags>sql-server;performance;aot;resilience</PackageTags>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <!-- Include symbols and source for debugging -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    
+    <!-- Package Metadata -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/YourOrg/Lib.Db</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageIcon>icon.png</PackageIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- icon.png가 존재한다고 가정하거나, 파일이 없으면 빌드 경고가 뜰 수 있음. 우선은 구색만 갖춤 -->
+    <!-- <None Include="icon.png" Pack="true" PackagePath="\" /> -->
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+	  <!-- Explicitly pack the generator DLL -->
+	  <None Include="..\Lib.Db.TvpGen\bin\$(Configuration)\net10.0\Lib.Db.TvpGen.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Keep ProjectReference for build dependency but do not reference assembly -->
+    <ProjectReference Include="..\Lib.Db.TvpGen\Lib.Db.TvpGen.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+	<ItemGroup>
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+			<_Parameter1>DynamicProxyGenAssembly2</_Parameter1>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+			<_Parameter1>Lib.Db.TestSuite</_Parameter1>
+		</AssemblyAttribute>
+	</ItemGroup>
+
+</Project>

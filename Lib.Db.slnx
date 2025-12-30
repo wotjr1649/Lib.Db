@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/Tests/">
+    <Project Path="Tests/Lib.Db.TestRunner/Lib.Db.TestRunner.csproj" />
+    <Project Path="Tests/Lib.Db.TestSuite/Lib.Db.TestSuite.csproj" />
+  </Folder>
+  <Project Path="Lib.Db.TvpGen/Lib.Db.TvpGen.csproj" Id="940b60eb-bc50-4628-b270-ce7968ba0082" />
+  <Project Path="Lib.Db/Lib.Db.csproj" />
+</Solution>

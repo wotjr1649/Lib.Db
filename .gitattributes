@@ -1,0 +1,20 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Custom for Visual Studio
+*.cs     text diff=csharp
+*.sln    text merge=union
+*.csproj text merge=union
+*.slnx   text merge=union
+*.xml    text
+*.json   text
+*.md     text
+*.sql    text
+
+# Binary files
+*.dll binary
+*.exe binary
+*.pdb binary
+*.nupkg binary
+*.snupkg binary
+*.zip binary
