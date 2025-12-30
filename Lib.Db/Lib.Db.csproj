@@ -51,7 +51,7 @@
     <!-- Package Metadata -->
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/YourOrg/Lib.Db</RepositoryUrl>
+    <RepositoryUrl>https://github.com/wotjr1649/Lib.Db.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
