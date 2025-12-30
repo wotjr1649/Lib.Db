@@ -53,7 +53,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/wotjr1649/Lib.Db.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageIcon>icon.png</PackageIcon>
+    <!-- <PackageIcon>icon.png</PackageIcon> -->
   </PropertyGroup>
 
   <ItemGroup>
