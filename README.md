@@ -58,7 +58,7 @@
   - Table-Valued Parameters (TVP) 자동 생성
   - DbDataReader → DTO 고성능 매핑 (Track 5 알고리즘)
   - Native AOT 완벽 지원 (리플렉션 제로)
-  - 📘 **[상세 가이드 →](../Lib.Db.TvpGen/README.md)**
+  - 📘 **[상세 가이드 →](./Lib.Db.TvpGen/README.md)**
 
 ---
 
