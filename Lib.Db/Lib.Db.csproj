@@ -57,7 +57,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
     <!-- icon.png가 존재한다고 가정하거나, 파일이 없으면 빌드 경고가 뜰 수 있음. 우선은 구색만 갖춤 -->
     <!-- <None Include="icon.png" Pack="true" PackagePath="\" /> -->
   </ItemGroup>
