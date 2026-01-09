@@ -496,87 +496,63 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
     /// </list>
     /// </remarks>
     public async Task<SchemaBulkData> GetAllSchemaMetadataAsync(
-        string schemaName,
+        IEnumerable<string> schemaNames,
         string instanceHash,
         List<string> includePatterns,
         List<string> excludePatterns,
         CancellationToken ct)
     {
-        #region [로컬 유틸] 패턴 처리(사용자 패턴 -> SQL LIKE)
+        #region [로컬 유틸] 패턴 처리 및 동적 WHERE 생성
 
-        /// <summary>
-        /// 사용자가 입력한 와일드카드 패턴을 SQL LIKE 패턴으로 변환합니다.
-        /// </summary>
         static string ConvertToSqlPattern(string userPattern)
             => userPattern.Replace("*", "%").Replace("?", "_");
 
-        /// <summary>
-        /// 포함 필터(OR) 절을 생성합니다. 패턴이 없으면 빈 문자열을 반환합니다.
-        /// </summary>
         static string BuildFilterClause(List<string> patterns, string objectAlias)
         {
-            if (patterns == null || patterns.Count == 0)
-                return string.Empty;
-
+            if (patterns == null || patterns.Count == 0) return string.Empty;
             var conditions = new List<string>(patterns.Count);
-            for (int i = 0; i < patterns.Count; i++)
-                conditions.Add($"{objectAlias}.name LIKE @p{i}");
-
+            for (int i = 0; i < patterns.Count; i++) conditions.Add($"{objectAlias}.name LIKE @p{i}");
             return $"AND ({string.Join(" OR ", conditions)})";
         }
 
-        /// <summary>
-        /// 포함 패턴 파라미터를 바인딩합니다.
-        /// </summary>
         static void BindPatternParameters(SqlCommand cmd, List<string> patterns)
         {
-            for (int i = 0; i < patterns.Count; i++)
-            {
-                string sqlPattern = ConvertToSqlPattern(patterns[i]);
-                cmd.Parameters.AddWithValue($"@p{i}", sqlPattern);
-            }
+            for (int i = 0; i < patterns.Count; i++) cmd.Parameters.AddWithValue($"@p{i}", ConvertToSqlPattern(patterns[i]));
         }
 
-        /// <summary>
-        /// 제외 필터(NOT (OR ...)) 절을 생성합니다. 패턴이 없으면 빈 문자열을 반환합니다.
-        /// </summary>
         static string BuildExcludeClause(List<string> patterns, string objectAlias)
         {
-            if (patterns == null || patterns.Count == 0)
-                return string.Empty;
-
+            if (patterns == null || patterns.Count == 0) return string.Empty;
             var conditions = new List<string>(patterns.Count);
-            for (int i = 0; i < patterns.Count; i++)
-                conditions.Add($"{objectAlias}.name LIKE @e{i}");
-
+            for (int i = 0; i < patterns.Count; i++) conditions.Add($"{objectAlias}.name LIKE @e{i}");
             return $"AND NOT ({string.Join(" OR ", conditions)})";
         }
 
-        /// <summary>
-        /// 제외 패턴 파라미터를 바인딩합니다.
-        /// </summary>
         static void BindExcludeParameters(SqlCommand cmd, List<string> patterns)
         {
-            for (int i = 0; i < patterns.Count; i++)
-            {
-                string sqlPattern = ConvertToSqlPattern(patterns[i]);
-                cmd.Parameters.AddWithValue($"@e{i}", sqlPattern);
-            }
+            for (int i = 0; i < patterns.Count; i++) cmd.Parameters.AddWithValue($"@e{i}", ConvertToSqlPattern(patterns[i]));
         }
 
         #endregion
 
-        #region [1] 동적 WHERE 절 구성(포함/제외)
+        #region [1] 동적 WHERE 절 구성 (Schema IN Clause + Patterns)
+
+        var schemas = schemaNames.ToList();
+        if (schemas.Count == 0) return new SchemaBulkData(); // 대상 없으면 빈 결과
+
+        // 스키마 IN 절 동적 생성 (@s0, @s1 ...)
+        var schemaParams = new List<string>(schemas.Count);
+        for (int i = 0; i < schemas.Count; i++) schemaParams.Add($"@s{i}");
+        string schemaInClause = $"s.name IN ({string.Join(", ", schemaParams)})";
 
         string spInclude = BuildFilterClause(includePatterns, "o");
         string tvpInclude = BuildFilterClause(includePatterns, "tt");
-
         string spExclude = BuildExcludeClause(excludePatterns, "o");
         string tvpExclude = BuildExcludeClause(excludePatterns, "tt");
 
         #endregion
 
-        #region [2] 일괄 조회 SQL 구성(4 ResultSets)
+        #region [2] 일괄 조회 SQL 구성 (4 ResultSets)
 
         string sql = $"""
             SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
@@ -584,14 +560,14 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             -- 1. SP List
             SELECT o.name, CAST(DATEDIFF_BIG(microsecond, '1970-01-01', o.modify_date) AS bigint)
             FROM sys.objects o JOIN sys.schemas s ON o.schema_id = s.schema_id
-            WHERE s.name = @Schema AND o.type = 'P' {spInclude} {spExclude};
+            WHERE {schemaInClause} AND o.type = 'P' {spInclude} {spExclude};
 
             -- 2. TVP List
             SELECT tt.name, CAST(DATEDIFF_BIG(microsecond, '1970-01-01', o.modify_date) AS bigint)
             FROM sys.table_types tt 
             JOIN sys.schemas s ON tt.schema_id = s.schema_id
             JOIN sys.objects o ON tt.type_table_object_id = o.object_id
-            WHERE s.name = @Schema {tvpInclude} {tvpExclude};
+            WHERE {schemaInClause} {tvpInclude} {tvpExclude};
 
             -- 3. SP Params (전체)
             SELECT 
@@ -604,7 +580,7 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             JOIN sys.schemas s ON o.schema_id = s.schema_id
             JOIN sys.types t_user ON p.user_type_id = t_user.user_type_id 
             LEFT JOIN sys.types t_sys ON p.system_type_id = t_sys.system_type_id AND t_sys.user_type_id = t_sys.system_type_id
-            WHERE s.name = @Schema AND o.type = 'P' {spInclude} {spExclude}
+            WHERE {schemaInClause} AND o.type = 'P' {spInclude} {spExclude}
             ORDER BY o.name, p.parameter_id;
 
             -- 4. TVP Columns (전체)
@@ -614,8 +590,11 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             JOIN sys.table_types tt ON c.object_id = tt.type_table_object_id
             JOIN sys.schemas s ON tt.schema_id = s.schema_id
             JOIN sys.types t_sys ON c.system_type_id = t_sys.system_type_id AND t_sys.user_type_id = t_sys.system_type_id
-            WHERE s.name = @Schema {tvpInclude} {tvpExclude}
+            WHERE {schemaInClause} {tvpInclude} {tvpExclude}
             ORDER BY tt.name, c.column_id;
+
+            -- 5. Found Schemas (Validation)
+            SELECT name FROM sys.schemas WHERE {schemaInClause};
             """;
 
         #endregion
@@ -624,7 +603,12 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
 
         await using var conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
         await using var cmd = new SqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("@Schema", schemaName);
+
+        // 스키마 파라미터 바인딩
+        for (int i = 0; i < schemas.Count; i++)
+        {
+            cmd.Parameters.AddWithValue($"@s{i}", schemas[i]);
+        }
 
         if (includePatterns != null && includePatterns.Count > 0)
             BindPatternParameters(cmd, includePatterns);
@@ -700,6 +684,14 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
                 IsComputed: reader.GetBoolean(8),
                 IsNullable: reader.GetBoolean(9)
             ));
+        }
+
+        await reader.NextResultAsync(ct).ConfigureAwait(false);
+
+        // 5) Found Schemas
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            result.FoundSchemas.Add(reader.GetString(0));
         }
 
         return result;

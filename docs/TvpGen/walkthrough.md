@@ -1,6 +1,6 @@
 # Lib.Db.TvpGen 워크스루 (Walkthrough)
 
-**버전**: v1.0 (Track 5 Optimized)  
+**버전**: v1.1 (Track 5 Optimized)  
 **대상**: 신규 개발자 및 AI 에이전트
 
 ---

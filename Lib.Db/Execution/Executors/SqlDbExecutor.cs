@@ -20,6 +20,7 @@ using System.Runtime.CompilerServices;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
+using Lib.Db.Core;
 
 namespace Lib.Db.Execution;
 
@@ -1725,9 +1726,10 @@ internal sealed partial class SqlDbExecutor(
 
         static string QuotePart(string part)
         {
-            // [Security Fix] 기존 대괄호를 제거한 뒤, 닫는 대괄호를 이스케이프(']' -> ']]')하여 인젝션을 방지합니다.
-            var trimmed = part.Trim('[', ']');
-            return $"[{trimmed.Replace("]", "]]")}]";
+            // [Optimization] StringPreprocessor.RemoveBrackets 사용하여
+            // 내부 대괄호도 모두 제거되므로 Injection 및 Malformed Identifier 방지
+            var clean = StringPreprocessor.RemoveBrackets(part);
+            return $"[{clean}]";
         }
     }
 

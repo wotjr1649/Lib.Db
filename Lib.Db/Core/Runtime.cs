@@ -304,6 +304,48 @@ internal static class StringPreprocessor
         "\u2028\u2029\u202F\u205F\u3000\u200B\u2060\u200C\u200D\uFEFF\u00AD\u180E"
     );
 
+    private static readonly System.Buffers.SearchValues<char> s_brackets = System.Buffers.SearchValues.Create("[]");
+
+    /// <summary>
+    /// 문자열에서 대괄호([])를 제거합니다. (Zero-Allocation if none found)
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static string RemoveBrackets(string input)
+    {
+        if (string.IsNullOrEmpty(input)) 
+            return input;
+
+        // Fast Path: 대괄호가 없으면 원본 반환 (할당 0)
+        if (!input.AsSpan().ContainsAny(s_brackets))
+            return input;
+
+        // Slow Path: 대괄호 제거 및 새 문자열 생성
+        // 1. 새 길이 계산
+        int removeCount = 0;
+        foreach (char c in input)
+        {
+            if (c == '[' || c == ']') 
+                removeCount++;
+        }
+        
+        int newLength = input.Length - removeCount;
+        if (newLength == 0) 
+            return string.Empty;
+
+        // 2. string.Create로 단일 할당 생성
+        return string.Create(newLength, input, (span, state) =>
+        {
+            int idx = 0;
+            foreach (char c in state)
+            {
+                if (c != '[' && c != ']')
+                {
+                    span[idx++] = c;
+                }
+            }
+        });
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ReadOnlySpan<char> Sanitize(string? input)
         => input is null ? ReadOnlySpan<char>.Empty : Sanitize(input.AsSpan());

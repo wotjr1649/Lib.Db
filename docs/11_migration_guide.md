@@ -358,7 +358,7 @@ using (var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled)
 **Lib.Db**: `Lib.Db.TvpGen` 패키지 필수 설치.
 
 ```xml
-<PackageReference Include="Lib.Db.TvpGen" Version="1.0.0" />
+<PackageReference Include="Lib.Db.TvpGen" Version="1.1.0" />
 ```
 
 ---

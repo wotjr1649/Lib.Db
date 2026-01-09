@@ -290,18 +290,26 @@ internal sealed class SchemaService(
     #region [1.4] 공용 API - 워밍업 / Flush / Invalidate
 
     /// <inheritdoc />
-    public async Task PreloadSchemaAsync(string schemaName, string instanceHash, CancellationToken ct)
+    public async Task<PreloadResult> PreloadSchemaAsync(IEnumerable<string> schemaNames, string instanceHash, CancellationToken ct)
     {
         using var activity = s_activity.StartActivity("PreloadSchema");
 
+        var schemaList = schemaNames.ToList();
+        string schemaLogStr = string.Join(",", schemaList);
+
+        if (schemaList.Count == 0)
+        {
+             return new PreloadResult(0, []);
+        }
+
         logger.LogInformation("[스키마 워밍업] 시작: 스키마 '{Schema}', 인스턴스 '{Instance}'",
-            schemaName, instanceHash);
+            schemaLogStr, instanceHash);
 
         var bulkData = await repo.GetAllSchemaMetadataAsync(
-            schemaName, 
+            schemaList, 
             instanceHash,
             options.PrewarmIncludePatterns,
-            options.PrewarmExcludePatterns,  // ✅ Exclude 패턴 전달
+            options.PrewarmExcludePatterns,
             ct).ConfigureAwait(false);
 
         var now = DateTime.UtcNow;
@@ -364,8 +372,34 @@ internal sealed class SchemaService(
             bulkData.SpVersions.Count, bulkData.TvpVersions.Count);
 
         // 메트릭: 스키마 워밍업 성공
-        var info = BuildSchemaInfo(instanceHash, "schema.preload", schemaName);
+        var info = BuildSchemaInfo(instanceHash, "schema.preload", schemaLogStr);
         DbMetrics.TrackSchemaRefresh(success: true, kind: "All.Preload", info);
+
+        // 검증: 요청했으나 DB에서 발견되지 않은 스키마 식별
+        // (FoundSchemas는 SqlSchemaRepository에서 5번째 ResultSet으로 채워짐)
+        var loadedCount = bulkData.SpVersions.Count + bulkData.TvpVersions.Count;
+        var missingSchemas = new List<string>();
+
+        if (bulkData.FoundSchemas.Count > 0)
+        {
+            foreach (var req in schemaList)
+            {
+                // FoundSchemas는 대소문자 구분 없이 비교 필요할 수 있으나,
+                // SqlDataReader.GetString()으로 가져온 값이므로 DB Collation을 따름.
+                // 여기서는 안전하게 OrdinalIgnoreCase 사용
+                if (!bulkData.FoundSchemas.Contains(req, StringComparer.OrdinalIgnoreCase))
+                {
+                    missingSchemas.Add(req);
+                }
+            }
+        }
+        else if (schemaList.Count > 0 && loadedCount == 0)
+        {
+             // FoundSchemas가 비어있고 로드된 것도 없다면 모든 요청 스키마가 누락된 것으로 간주
+             missingSchemas.AddRange(schemaList);
+        }
+
+        return new PreloadResult(loadedCount, missingSchemas);
     }
 
     /// <inheritdoc />
@@ -622,9 +656,14 @@ internal sealed class SchemaService(
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string Normalize(string name)
-        => name.Contains('.', StringComparison.Ordinal)
+    {
+        // 최적화: StringPreprocessor.RemoveBrackets 사용 (할당 최소화)
+        name = StringPreprocessor.RemoveBrackets(name);
+
+        return name.Contains('.', StringComparison.Ordinal)
             ? name
             : $"dbo.{name}";
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string Tag(string hash, string? type = null)

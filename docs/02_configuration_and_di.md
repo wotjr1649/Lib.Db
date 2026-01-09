@@ -13,15 +13,12 @@
 NuGet 패키지 관리자 또는 .NET CLI를 통해 패키지를 설치합니다.
 
 ```bash
-# Core Library
+# Lib.Db 설치 (Source Generator 포함)
 dotnet add package Lib.Db
-
-# Source Generator (필수)
-dotnet add package Lib.Db.TvpGen
 ```
 
-> [!CAUTION]
-> **Native AOT 필수**: `Lib.Db`는 리플렉션을 사용하지 않으므로, `Lib.Db.TvpGen` 없이는 데이터 매핑이 작동하지 않습니다.
+> [!NOTE]
+> **All-in-One 패키지**: `Lib.Db` 패키지에는 `Lib.Db.TvpGen`(Source Generator)이 내장되어 있습니다. 별도로 설치할 필요가 없으며, 설치 즉시 Native AOT 호환 데이터 매핑 코드가 생성됩니다.
 
 ---
 
@@ -182,6 +179,20 @@ builder.Services.AddHighPerformanceDb(options =>
 ## 4. 주요 옵션 설명
 
 ### 4-1. 스키마 워밍업 (Prewarm) 패턴
+
+`Lib.Db`는 애플리케이션 시작 시 **여러 스키마의 메타데이터를 단일 배치 쿼리(Bulk Query)로 효율적으로 로드**합니다.
+따라서 스키마가 분리된(MSA 등) 환경에서도 DB 연결 비용 증가 없이 안전하게 워밍업을 구성할 수 있습니다.
+
+**설정 예시**:
+```json
+"PrewarmSchemas": ["dbo", "auth", "logs"], // 여러 스키마를 배열로 지정
+"PrewarmMaxConcurrency": 4                 // 인스턴스별 병렬 처리 수
+```
+
+> [!TIP]
+> **성능 최적화**: `PrewarmSchemas`에 10개의 스키마를 지정하더라도, 내부적으로는 **인스턴스 당 단 1번의 DB 요청**만 발생합니다. (Network Round-trip 최소화)
+>
+> **검증(Validation)**: 지정한 스키마가 데이터베이스에 실제로 존재하지 않는 경우, 초기화 과정에서 **경고(Warn) 로그**가 발생하며 해당 항목은 무시됩니다. 이를 통해 오타나 잘못된 설정을 조기에 발견할 수 있습니다.
 
 `PrewarmIncludePatterns`와 `PrewarmExcludePatterns`는 **와일드카드 문법**(`*`, `?`)을 사용하여 대상을 필터링합니다.
 

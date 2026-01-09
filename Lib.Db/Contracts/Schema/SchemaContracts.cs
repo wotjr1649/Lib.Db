@@ -12,6 +12,24 @@ using Lib.Db.Contracts.Models;
 
 namespace Lib.Db.Contracts.Schema;
 
+#region 프리워밍 결과 구조체
+
+/// <summary>
+/// 스키마 프리워밍(Preload) 결과를 나타내는 구조체입니다.
+/// <para>
+/// <b>[설계 의도]</b>
+/// - <b>검증 강화</b>: 요청한 스키마 중 실제 로드된 것과 누락된 것을 구분하여 호출자에게 경고/예외 처리의 기회를 제공합니다.
+/// </para>
+/// </summary>
+/// <param name="LoadedItemsCount">로드된 총 객체(SP + TVP) 수</param>
+/// <param name="MissingSchemas">요청했으나 DB에서 발견되지 않은 스키마 목록</param>
+public readonly record struct PreloadResult(
+    int LoadedItemsCount,
+    List<string> MissingSchemas
+);
+
+#endregion
+
 #region 스키마 서비스 계약
 
 /// <summary>
@@ -33,15 +51,16 @@ public interface ISchemaService
     #region 사전 로딩
 
     /// <summary>
-    /// 지정된 스키마(예: <c>"dbo"</c>)에 속한 객체(SP, TVP)의 메타데이터를 미리 로딩합니다.
+    /// 지정된 스키마들(예: <c>["dbo", "sales"]</c>)에 속한 객체(SP, TVP)의 메타데이터를 미리 로딩합니다.
     /// <para>
     /// Cold Start 방지 및 애플리케이션 시작 시 워밍업 목적에 사용합니다.
     /// </para>
     /// </summary>
-    /// <param name="schemaName">데이터베이스 스키마 이름</param>
+    /// <param name="schemaNames">데이터베이스 스키마 이름 목록</param>
     /// <param name="instanceHash">대상 DB 인스턴스 해시(연결 문자열 식별자)</param>
     /// <param name="ct">취소 토큰</param>
-    Task PreloadSchemaAsync(string schemaName, string instanceHash, CancellationToken ct);
+    /// <returns>로딩 결과(성공 수, 누락된 스키마 등)</returns>
+    Task<PreloadResult> PreloadSchemaAsync(IEnumerable<string> schemaNames, string instanceHash, CancellationToken ct);
 
     #endregion
 
@@ -151,8 +170,8 @@ public interface ISchemaService
     /// <param name="schemaName">스키마 이름(예: dbo)</param>
     /// <param name="instance">DB 인스턴스 식별 값 객체</param>
     /// <param name="ct">취소 토큰</param>
-    async Task PreloadSchemaAsync(string schemaName, DbInstanceId instance, CancellationToken ct)
-        => await PreloadSchemaAsync(schemaName, instance.Value, ct).ConfigureAwait(false);
+    async Task<PreloadResult> PreloadSchemaAsync(string schemaName, DbInstanceId instance, CancellationToken ct)
+        => await PreloadSchemaAsync([schemaName], instance.Value, ct).ConfigureAwait(false);
 
     /// <summary>
     /// <see cref="DbInstanceId"/>를 사용하는 전체 Flush 오버로드입니다.

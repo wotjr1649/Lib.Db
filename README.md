@@ -1,4 +1,4 @@
-# Lib.Db (v1.0)
+# Lib.Db (v1.1)
 
 **Extreme Performance Data Access Library for .NET 10+**
 
@@ -8,7 +8,7 @@
 <!-- AI_CONTEXT: END -->
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
-[![NuGet](https://img.shields.io/badge/NuGet-1.0.0-blue)](https://www.nuget.org/packages/Lib.Db/)
+[![NuGet](https://img.shields.io/badge/NuGet-1.1.0-blue)](https://www.nuget.org/packages/Lib.Db/)
 [![AOT Ready](https://img.shields.io/badge/Native_AOT-Ready-green)](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zero Allocation](https://img.shields.io/badge/Performance-Zero_Allocation-orange)]()
@@ -53,8 +53,8 @@
 | **Native AOT** | .NET 10 | 모든 버전 | ✅ 완벽 지원 |
 
 **NuGet Packages**:
-- `Lib.Db` - 런타임 라이브러리 (v1.0.0)
-- `Lib.Db.TvpGen` - Source Generator (v1.0.0)
+- `Lib.Db` - 런타임 라이브러리 (v1.1.0)
+- `Lib.Db.TvpGen` - Source Generator (v1.1.0)
   - Table-Valued Parameters (TVP) 자동 생성
   - DbDataReader → DTO 고성능 매핑 (Track 5 알고리즘)
   - Native AOT 완벽 지원 (리플렉션 제로)
@@ -105,23 +105,28 @@ await host.RunAsync();
 {
   "LibDb": {
     "ConnectionStrings": {
-      "Main": "Server=localhost;Database=LibDb;Trusted_Connection=True;TrustServerCertificate=True;"
+      "Default": "Server=User_Server;Database=User_Db;User Id=user_id;Password=user_password;TrustServerCertificate=True;Encrypt=False;"
     },
-    // 실행 옵션
-    "Execution": {
-      "DefaultCommandTimeoutSeconds": 30,
-      "StrictRequiredParameterCheck": true  // [중요] C# 14 Validation으로 잘못된 값 즉시 예외 발생
-    },
-    // 캐싱 및 공유 메모리
-    "Caching": {
-      "EnableSharedMemoryCache": true,
-      "MaxCacheSize": 2048
-    },
-    // 장애 주입 (테스트용)
-    "Chaos": {
-      "Enabled": false,
-      "ExceptionRate": 0.05
-    }
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // [1] 스키마 캐싱 및 워밍업 (Schema Caching & Warmup)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "EnableSchemaCaching": true,                    // 스키마 캐싱 활성화 (필수 권장)
+    "SchemaRefreshIntervalSeconds": 60,             // 캐시 갱신 주기 (기본값: 60초)
+    "PrewarmSchemas": [                             // 앱 시작 시 미리 로드할 스키마 목록
+      "dbo"
+    ],
+    "PrewarmIncludePatterns": [],                   // 워밍업 포함 패턴 (비어있으면 전체)
+    "PrewarmExcludePatterns": [                     // 워밍업 제외 패턴 (와일드카드 지원)
+      "*_Test*",
+      "*_Legacy*"
+    ],
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // [2] 실행 정책 (Execution Policy)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    "StrictRequiredParameterCheck": true,           // 필수 파라미터 누락 시 즉시 예외 발생
+    "EnableGeneratedTvpBinder": true,               // Source Generator 기반 고성능 TVP 바인더 사용
+    "EnableResilience": true                        // Polly 기반 자동 회복(Retry/CircuitBreaker) 활성화
   }
 }
 ```
@@ -209,6 +214,8 @@ public class UserRepository(IDbContext db)
 - 📊 **Resumable Query** - 네트워크 단절 시 자동 재개
 - 🔐 **SQL Injection 자동 방지** - SqlInterpolatedStringHandler
 - 📈 **OpenTelemetry 통합** - 성능 메트릭 자동 수집
+- 🛡️ **Schema Validation** - 워밍업 시 누락된 스키마 자동 감지 및 경고
+- ⚡ **Optimized Normalization** - SIMD 기반 고속 식별자 처리
 - 🧪 **Chaos Engineering** - 개발 환경 장애 시뮬레이션
 
 ---

@@ -48,6 +48,20 @@ await db.Default
 
 데이터 통신에 필요한 모든 바이트 배열은 `ArrayPool<byte>.Shared`를 통해 재사용합니다.
 
+### 1-3. 식별자 정규화 (Identifier Normalization)
+
+SQL Server 객체 이름(예: `[dbo].[Table]`)을 정규화할 때 `string.Replace` 대신 **SIMD 가속(SearchValues)**과 `string.Create`를 사용하여 메모리 할당을 최소화합니다.
+
+```csharp
+// ❌ 일반적 방식 (2번 할당 + 2번 순회)
+var normalized = input.Replace("[", "").Replace("]", "");
+
+// ✅ Lib.Db 방식 (0~1번 할당 + 1번 순회 + SIMD 가속)
+var normalized = StringPreprocessor.RemoveBrackets(input);
+// -> 대괄호가 없으면 할당 0 (원본 반환)
+// -> 대괄호가 있으면 딱 1번만 할당 (SearchValues로 고속 스캔)
+```
+
 ---
 
 ## 2. Span<T> 기반 파싱

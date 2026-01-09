@@ -139,6 +139,12 @@ public sealed class SchemaBulkData
     /// <para>Key: TVP 이름, Value: 컬럼 목록</para>
     /// </summary>
     public Dictionary<string, List<TvpColumnInfo>> TvpColumns { get; init; } = [];
+
+    /// <summary>
+    /// DB에서 실제로 발견된 스키마 목록
+    /// <para>요청한 스키마 중 실제 존재하는지 검증하기 위함</para>
+    /// </summary>
+    public HashSet<string> FoundSchemas { get; init; } = [];
 }
 
 #endregion
@@ -245,8 +251,8 @@ internal interface ISchemaRepository
         CancellationToken ct);
 
     /// <summary>
-    /// 특정 스키마(dbo 등)에 포함된 모든 객체(SP/TVP)의
-    /// 메타데이터를 한 번에 대량(Bulk)으로 조회합니다.
+    /// 지정한 스키마들(<paramref name="schemaNames"/>)에 대해
+    /// SP/TVP 목록과 각 SP의 파라미터, 각 TVP의 컬럼을 <b>한 번의 왕복</b>으로 일괄 조회합니다.
     /// <para>
     /// <b>[선택적 필터링]</b><br/>
     /// <paramref name="includePatterns"/>이 비어있으면 모든 객체를 조회합니다.<br/>
@@ -254,13 +260,13 @@ internal interface ISchemaRepository
     /// <paramref name="excludePatterns"/>로 제외할 패턴을 지정할 수 있습니다.
     /// </para>
     /// </summary>
-    /// <param name="schemaName">스키마 이름 (예: "dbo")</param>
+    /// <param name="schemaNames">스키마 이름 목록 (예: ["dbo", "app"])</param>
     /// <param name="instanceHash">DB 인스턴스 해시</param>
     /// <param name="includePatterns">포함할 객체 이름 패턴 목록 (* 문법)</param>
     /// <param name="excludePatterns">제외할 객체 이름 패턴 목록 (* 문법)</param>
     /// <param name="ct">취소 토큰</param>
     Task<SchemaBulkData> GetAllSchemaMetadataAsync(
-        string schemaName,
+        IEnumerable<string> schemaNames,
         string instanceHash,
         List<string> includePatterns,
         List<string> excludePatterns,

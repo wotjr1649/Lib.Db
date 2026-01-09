@@ -98,23 +98,25 @@ public sealed class SchemaWarmupService(
     #region [1. 워밍업 대상 구성]
 
     /// <summary>
-    /// ConnectionStrings × PrewarmSchemas 조합으로 워밍업 대상 목록을 작성합니다.
+    /// ConnectionStrings를 순회하며 각 인스턴스에 대해 모든 PrewarmSchemas를 단일 타겟으로 구성합니다.
     /// </summary>
     private List<WarmupTarget> BuildWarmupTargets()
     {
         var result = new List<WarmupTarget>(
-            capacity: _options.ConnectionStrings!.Count * _options.PrewarmSchemas!.Count);
+            capacity: _options.ConnectionStrings!.Count);
 
         foreach (var kvp in _options.ConnectionStrings!)
         {
             var instanceId = kvp.Key;
 
-            foreach (var schemaName in _options.PrewarmSchemas!)
+            // 빈 문자열 등을 필터링하여 유효한 스키마만 추출
+            var targetSchemas = _options.PrewarmSchemas!
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .ToList();
+            
+            if (targetSchemas.Count > 0)
             {
-                if (string.IsNullOrWhiteSpace(schemaName))
-                    continue;
-
-                result.Add(new WarmupTarget(instanceId, schemaName));
+                result.Add(new WarmupTarget(instanceId, targetSchemas));
             }
         }
 
@@ -172,7 +174,7 @@ public sealed class SchemaWarmupService(
     }
 
     /// <summary>
-    /// 단일 인스턴스/스키마 조합에 대해 스키마 워밍업을 수행하고, Warmup 전용 메트릭을 기록합니다.
+    /// 단일 인스턴스/스키마 목록 조합에 대해 스키마 워밍업을 수행하고, Warmup 전용 메트릭을 기록합니다.
     /// </summary>
     private async Task ExecuteWarmupForTargetAsync(
         WarmupTarget target,
@@ -184,22 +186,33 @@ public sealed class SchemaWarmupService(
             var requestInfo = CreateWarmupRequestInfo(in target);
             var stopwatch = Stopwatch.StartNew();
             var success = false;
+            string schemaLogStr = string.Join(",", target.SchemaNames);
 
             try
             {
-                await _schemaService
-                    .PreloadSchemaAsync(target.SchemaName, target.InstanceId, cancellationToken)
+                var preloadResult = await _schemaService
+                    .PreloadSchemaAsync(target.SchemaNames, target.InstanceId, cancellationToken)
                     .ConfigureAwait(false);
+
+                // 검증 결과 확인 및 경고 로깅
+                if (preloadResult.MissingSchemas.Count > 0)
+                {
+                    var missingStr = string.Join(",", preloadResult.MissingSchemas);
+                    // LogFastWarn(Exception? ex, string message) pattern
+                    _logger.LogFastWarn(
+                        null,
+                        $"[SchemaWarmup] 경고 - 요청한 스키마 중 일부가 DB에서 발견되지 않아 워밍업에서 제외되었습니다. 누락된 스키마: [{missingStr}], 인스턴스: '{target.InstanceId}'");
+                }
 
                 success = true;
 
                 _logger.LogFastInfo(
-                    $"[SchemaWarmup] 인스턴스='{target.InstanceId}', 스키마='{target.SchemaName}' 사전 로드 완료.");
+                    $"[SchemaWarmup] 인스턴스='{target.InstanceId}', 스키마='{schemaLogStr}' 사전 로드 완료. (로드된 항목: {preloadResult.LoadedItemsCount})");
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 _logger.LogFastInfo(
-                    $"[SchemaWarmup] 취소됨 - 인스턴스='{target.InstanceId}', 스키마='{target.SchemaName}'.");
+                    $"[SchemaWarmup] 취소됨 - 인스턴스='{target.InstanceId}', 스키마='{schemaLogStr}'.");
                 throw;
             }
             catch (Exception ex)
@@ -207,7 +220,7 @@ public sealed class SchemaWarmupService(
                 // 개별 워밍업 실패는 로깅만 하고 전체 Warmup은 계속 진행
                 _logger.LogFastWarn(
                     ex,
-                    $"[SchemaWarmup] 인스턴스='{target.InstanceId}', 스키마='{target.SchemaName}' 사전 로드 중 오류 발생. (애플리케이션은 계속 실행됩니다.)");
+                    $"[SchemaWarmup] 인스턴스='{target.InstanceId}', 스키마='{schemaLogStr}' 사전 로드 중 오류 발생. (애플리케이션은 계속 실행됩니다.)");
             }
             finally
             {
@@ -238,7 +251,7 @@ public sealed class SchemaWarmupService(
     /// - Operation: "SCHEMA_WARMUP"<br/>
     /// - CommandKind: "Warmup"<br/>
     /// - IsTransactional: false<br/>
-    /// - CorrelationId: "warmup:{InstanceId}:{SchemaName}"
+    /// - CorrelationId: "warmup:{InstanceId}:{SchemaCount}"
     /// </para>
     /// </summary>
     /// <param name="target">워밍업 대상 인스턴스/스키마 정보</param>
@@ -251,10 +264,10 @@ public sealed class SchemaWarmupService(
             ServerAddress: null,
             ServerPort: null,
             Operation: "SCHEMA_WARMUP", // Warmup 전용 Operation
-            Target: target.SchemaName,  // 스키마 이름을 Target으로 사용
+            Target: "bulk-load", // 여러 스키마이므로 고정값 사용
             CommandKind: "Warmup",
             IsTransactional: false,
-            CorrelationId: $"warmup:{target.InstanceId}:{target.SchemaName}"
+            CorrelationId: $"warmup:{target.InstanceId}:{target.SchemaNames.Count}"
         );
 
     #endregion
@@ -262,13 +275,13 @@ public sealed class SchemaWarmupService(
     #region [4. 내부 레코드 - 워밍업 대상 모델]
 
     /// <summary>
-    /// 스키마 워밍업 대상(인스턴스 ID + 스키마 이름)을 나타내는 경량 레코드입니다.
+    /// 스키마 워밍업 대상(인스턴스 ID + 스키마 이름 목록)을 나타내는 경량 레코드입니다.
     /// </summary>
     /// <param name="InstanceId">LibDbOptions.ConnectionStrings 의 키 (인스턴스 해시/이름)</param>
-    /// <param name="SchemaName">워밍업 대상 스키마 이름</param>
+    /// <param name="SchemaNames">워밍업 대상 스키마 이름 목록</param>
     private readonly record struct WarmupTarget(
         string InstanceId,
-        string SchemaName
+        List<string> SchemaNames
     );
 
     #endregion

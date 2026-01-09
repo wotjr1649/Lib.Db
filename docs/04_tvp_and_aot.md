@@ -375,10 +375,10 @@ public record ProductDto
 
   <ItemGroup>
     <!-- Runtime 라이브러리 -->
-    <PackageReference Include="Lib.Db" Version="1.0.0" />
+    <PackageReference Include="Lib.Db" Version="1.1.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.0" />
     <!-- Source Generator (PrivateAssets="all" 권장) -->
-    <PackageReference Include="Lib.Db.TvpGen" Version="1.0.0">
+    <PackageReference Include="Lib.Db.TvpGen" Version="1.1.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
