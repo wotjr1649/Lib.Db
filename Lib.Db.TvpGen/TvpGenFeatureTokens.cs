@@ -1,4 +1,4 @@
-﻿// File: Lib.Db.TvpGen/TvpGenFeatureTokens.cs
+// File: Lib.Db.TvpGen/TvpGenFeatureTokens.cs
 #nullable enable
 
 namespace Lib.Db.TvpGen;

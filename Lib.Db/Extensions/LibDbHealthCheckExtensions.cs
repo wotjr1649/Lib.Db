@@ -6,12 +6,7 @@
 
 #nullable enable
 
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Lib.Db.Contracts.Infrastructure;
-using Lib.Db.Core;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Microsoft.Extensions.DependencyInjection;

@@ -355,17 +355,17 @@ using (var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled)
 
 **기존**: 런타임 리플렉션으로 매핑.
 
-**Lib.Db**: `Lib.Db.TvpGen` 패키지 필수 설치.
+**Lib.Db**: `Lib.Db` 패키지에 Source Generator가 내장되어 있어 별도 설치가 필요 없습니다.
 
 ```xml
-<PackageReference Include="Lib.Db.TvpGen" Version="1.1.0" />
+<PackageReference Include="Lib.Db" Version="x.x.x" />
 ```
 
 ---
 
 ## 마이그레이션 체크리스트
 
-- [ ] `Lib.Db` 및 `Lib.Db.TvpGen` 패키지 설치
+- [ ] `Lib.Db` 패키지 설치 (Source Generator 포함)
 - [ ] `appsettings.json`에 `ConnectionStrings` 설정
 - [ ] DI 컨테이너에 `AddHighPerformanceDb` 등록
 - [ ] `UseHighPerformanceDbAsync()` 호출 추가 (초기화)

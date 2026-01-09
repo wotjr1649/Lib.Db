@@ -6,26 +6,16 @@
 
 #nullable enable
 
-using System;
-using System.IO;
-using System.Linq;
 using Lib.Db.Caching;
-using Lib.Db.Configuration;
 using Lib.Db.Contracts.Entry;
-using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Schema;
-using Lib.Db.Core;
 using Lib.Db.Execution.Binding;
-using Lib.Db.Execution.Executors;
 using Lib.Db.Hosting;
-using Lib.Db.Repository;
 using Lib.Db.Schema;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -65,11 +55,30 @@ public static class LibDbServiceCollectionExtensions
     {
         return services.AddHighPerformanceDb(options =>
         {
-            // [AOT Safe Strategy]
-            // 직접 LibDbOptions를 바인딩하면 JsonSerializerOptions 등 런타임 객체로 인해 AOT 경고가 발생합니다.
-            // 따라서 순수 데이터 객체인 Shadow DTO(LibDbConfig)로 바인딩 후 값을 매핑합니다.
+            // [AOT Safe Strategy & Dual-Layer Binding]
+            // 1. Shadow DTO 생성
             var config = new Lib.Db.Configuration.Internal.LibDbConfig();
-            configuration.Bind(config);
+
+            // 2. [Global Scope] 최상위 'ConnectionStrings' 섹션 바인딩 (Standard)
+            //    - ASP.NET Core 표준 위치의 연결 문자열을 먼저 로드합니다.
+            var rootConnectionStrings = configuration.GetSection("ConnectionStrings");
+            if (rootConnectionStrings.Exists())
+            {
+                foreach (var child in rootConnectionStrings.GetChildren())
+                {
+                    if (child.Value is not null)
+                    {
+                        config.ConnectionStrings[child.Key] = child.Value;
+                    }
+                }
+            }
+
+            // 3. [Local Scope] 'LibDb' 섹션 바인딩 (Legacy & Specific)
+            //    - LibDb 전용 설정 및 로컬 연결 문자열Overrides를 로드합니다.
+            //    - Dictionary.Bind는 기존 키를 덮어쓰거나 새 키를 추가하는 방식으로 병합(Merge)됩니다.
+            configuration.GetSection("LibDb").Bind(config); 
+
+            // 4. 최종 옵션 적용
             config.ApplyTo(options);
         });
     }

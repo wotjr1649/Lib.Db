@@ -502,7 +502,7 @@ throw new OptionsValidationException(
 
 ---
 
-**이 API 레퍼런스는 `Lib.Db v1.1` 기준입니다. 향후 버전에서 변경될 수 있습니다.**
+**이 API 레퍼런스는 `Lib.Db` 최신 버전 기준입니다. 향후 버전에서 변경될 수 있습니다.**
 
 ---
 

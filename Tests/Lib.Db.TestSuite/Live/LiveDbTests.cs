@@ -95,7 +95,7 @@ public class LiveDbFixture : IDisposable
         {
            options.ConnectionStrings = new Dictionary<string, string> 
             { 
-                { "Default", "Server=(local);Database=LIBDB_VERIFICATION_TEST;Trusted_Connection=True;TrustServerCertificate=True;" } 
+                { "Default", "Server=127.0.0.1;Database=LIBDB_VERIFICATION_TEST;User Id=sa;Password=123456;TrustServerCertificate=True;Encrypt=False;" } 
             };
             options.EnableResilience = true;
         });

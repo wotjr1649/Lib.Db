@@ -14,10 +14,13 @@ public class IT05_FluentResumable_Gap_Tests
     private readonly ITestOutputHelper _output;
     private IDbContext Db => _fixture.Db;
 
+    private readonly Lib.Db.Configuration.LibDbOptions _options;
+
     public IT05_FluentResumable_Gap_Tests(TestDatabaseFixture fixture, ITestOutputHelper output)
     {
         _fixture = fixture;
         _output = output;
+        _options = fixture.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Lib.Db.Configuration.LibDbOptions>>().Value;
     }
 
     [Fact]
@@ -61,8 +64,8 @@ public class IT05_FluentResumable_Gap_Tests
         // Since Db.Default is bound to "Default", we checking "Default" hash for Fluent, 
         // and we will use "Default" hash for IDbExecutor as well to match.
         
-        // Let's use "Default" as the hash because that's what Db.Default uses.
-        var targetInstanceHash = "Default";
+        // Let's use the actual configured connection name (e.g. "Default" or "Defaults")
+        var targetInstanceHash = _options.ConnectionStringName ?? "Default";
         
         // Ensure clean slate for "Default"
         await Db.Default.Sql("DELETE FROM [core].[CursorState] WHERE InstanceHash = @Hash")

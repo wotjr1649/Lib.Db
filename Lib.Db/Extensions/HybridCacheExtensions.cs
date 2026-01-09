@@ -6,10 +6,6 @@
 
 #nullable enable
 
-using System;
-using Microsoft.Extensions.Caching.Hybrid;
-using Microsoft.Extensions.DependencyInjection;
-
 namespace Lib.Db.Extensions;
 
 #region [확장 메서드] HybridCache 서비스 등록

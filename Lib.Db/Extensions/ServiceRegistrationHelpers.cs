@@ -6,33 +6,19 @@
 
 #nullable enable
 
-using System;
-using System.IO;
-using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text;
 using Lib.Db.Caching;
-using Lib.Db.Configuration;
 using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
-using Lib.Db.Core;
-using Lib.Db.Diagnostics;
 using Lib.Db.Execution;
 using Lib.Db.Execution.Executors;
 using Lib.Db.Infrastructure;
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Caching.Hybrid;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Polly;
-using Polly.CircuitBreaker;
-using Polly.Registry;
-using Polly.Retry;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -218,7 +204,8 @@ internal static class ServiceRegistrationHelpers
             }
 
             // IsolationKey 생성 (DI를 통한 서비스 사용)
-            var connectionString = options.ConnectionStrings?.TryGetValue("Default", out var cs) == true
+            var targetName = options.ConnectionStringName ?? "Default";
+            var connectionString = options.ConnectionStrings?.TryGetValue(targetName, out var cs) == true
                 ? cs
                 : GetFirstConnectionStringOrThrow(options, "ProcessSlotAllocator");
 
@@ -251,7 +238,8 @@ internal static class ServiceRegistrationHelpers
             }
 
             // 공유 메모리 활성화 - IsolationKey 생성 (DI 사용)
-            var connectionString = options.ConnectionStrings?.TryGetValue("Default", out var cs) == true
+            var targetName = options.ConnectionStringName ?? "Default";
+            var connectionString = options.ConnectionStrings?.TryGetValue(targetName, out var cs) == true
                 ? cs
                 : GetFirstConnectionStringOrThrow(options, "SharedMemoryCache");
 
@@ -304,7 +292,8 @@ internal static class ServiceRegistrationHelpers
 
             var keyGenerator = sp.GetRequiredService<Lib.Db.Contracts.Cache.IIsolationKeyGenerator>();
             
-            var connectionString = options.ConnectionStrings?.TryGetValue("Default", out var cs) == true
+            var targetName = options.ConnectionStringName ?? "Default";
+            var connectionString = options.ConnectionStrings?.TryGetValue(targetName, out var cs) == true
                 ? cs
                 : GetFirstConnectionStringOrThrow(options, "CacheLeaderElection");
 

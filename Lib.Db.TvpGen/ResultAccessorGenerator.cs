@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // File: Lib.Db.TvpGen/ResultAccessorGenerator.cs
 // Role: DbDataReader 결과를 DTO(class / record class)에 고성능(Track 5)으로 매핑하는
 //       Result Accessor 코드를 생성하는 Source Generator

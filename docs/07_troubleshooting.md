@@ -32,9 +32,9 @@ error CS0246: The type or namespace name 'UserDtoTvpBuilder' could not be found
 **원인**: 패키지 참조가 누락되었거나 IDE 캐시 문제.
 
 **해결**:
-1. `dotnet add package Lib.Db.TvpGen` 확인.
+1. `Lib.Db` 패키지 설치 확인 (TvpGen 내장).
    ```bash
-   dotnet list package | grep Lib.Db.TvpGen
+   dotnet list package | grep Lib.Db
    ```
 
 2. 솔루션 정리(Clean) 후 다시 빌드(Rebuild).

@@ -6,9 +6,7 @@
 
 #nullable enable
 
-using System.Collections.Generic;
 using Microsoft.Extensions.Options;
-using Lib.Db.Core;
 
 namespace Lib.Db.Configuration;
 

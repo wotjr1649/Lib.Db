@@ -128,7 +128,14 @@ public sealed class DbSession(
             if (options.ConnectionStrings.Count == 0)
                 throw new InvalidOperationException("설정된 연결 문자열이 없습니다. LibDbOptions.ConnectionStrings에 최소 하나의 인스턴스를 등록해야 합니다.");
             
-            // Dictionary 열거자는 struct이므로 힙 할당 없음
+            // [Smart Pointer] ConnectionStringName이 유효하면 해당 인스턴스 사용
+            var targetKey = options.ConnectionStringName;
+            if (options.ConnectionStrings.ContainsKey(targetKey))
+            {
+                return UseInstance(targetKey);
+            }
+            
+            // Dictionary 열거자는 struct이므로 힙 할당 없음 (Fallback)
             using var enumerator = options.ConnectionStrings.Keys.GetEnumerator();
             enumerator.MoveNext();
             return UseInstance(enumerator.Current);

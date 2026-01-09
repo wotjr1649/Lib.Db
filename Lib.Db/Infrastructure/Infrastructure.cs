@@ -126,9 +126,19 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
         // [3순위] 옵션 기반(설정)
         else
         {
-            if (!options.ConnectionStrings.TryGetValue(instanceHash, out connStr!))
+            // [Smart Pointer Fallback]
+            // 요청한 키가 "Default"인데 설정에 없고, ConnectionStringName(별칭)이 유효하다면 대체 사용
+            string targetKey = instanceHash;
+            if (instanceHash == "Default" 
+                && !options.ConnectionStrings.ContainsKey("Default")
+                && options.ConnectionStrings.ContainsKey(options.ConnectionStringName))
             {
-                throw new ArgumentException($"인스턴스 '{instanceHash}'에 대한 연결 문자열을 찾을 수 없습니다.");
+                targetKey = options.ConnectionStringName;
+            }
+
+            if (!options.ConnectionStrings.TryGetValue(targetKey, out connStr!))
+            {
+                throw new ArgumentException($"인스턴스 '{instanceHash}' (Resolved: '{targetKey}')에 대한 연결 문자열을 찾을 수 없습니다.");
             }
         }
 
@@ -594,7 +604,7 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             ORDER BY tt.name, c.column_id;
 
             -- 5. Found Schemas (Validation)
-            SELECT name FROM sys.schemas WHERE {schemaInClause};
+            SELECT s.name FROM sys.schemas s WHERE {schemaInClause};
             """;
 
         #endregion

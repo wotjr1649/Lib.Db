@@ -358,7 +358,7 @@ app.MapHealthChecks("/health");
 ### 7-1. 커스터마이징 가능 여부
 
 > [!IMPORTANT]
-> **현재 버전(v1.1)에서는 Resilience Pipeline의 직접 커스터마이징이 제한적입니다.**
+> **현재 버전에서는 Resilience Pipeline의 직접 커스터마이징이 제한적입니다.**
 
 `Lib.Db`는 내부적으로 최적화된 Pipeline을 사용하며, `appsettings.json`을 통해 **파라미터 조정만 가능**합니다.
 

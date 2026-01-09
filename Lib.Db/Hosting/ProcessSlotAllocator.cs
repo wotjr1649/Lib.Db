@@ -13,7 +13,6 @@
 
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Infrastructure;
-using Microsoft.Extensions.Logging;
 
 namespace Lib.Db.Hosting;
 

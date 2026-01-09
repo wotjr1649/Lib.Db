@@ -55,16 +55,22 @@ public class TestDatabaseFixture : IAsyncLifetime
         services.AddSingleton(_configuration);
         
         // Lib.Db 서비스 등록
-        // [중요] IConfigurationSection을 직접 바인딩해야 IOptionsMonitor가 변경 사항을 실시간으로 감지함
-        services.Configure<Lib.Db.Configuration.LibDbOptions>(_configuration.GetSection("LibDb"));
-        
-        services.AddHighPerformanceDb(_ => {});
+        // [수정] AddLibDb 메서드로 교체하여 Dual-Layer Binding 및 스마트 포인터 로직 활성화
+        services.AddLibDb(_configuration);
         
         // [Integration Phase 4] Override IResumableStateStore with Real DB implementation
         services.RemoveAll(typeof(Lib.Db.Contracts.Execution.IResumableStateStore));
-        services.AddSingleton<Lib.Db.Contracts.Execution.IResumableStateStore>(sp => 
-            new Lib.Db.Verification.Tests.Infrastructure.TestSqlResumableStateStore(
-                _configuration["LibDb:ConnectionStrings:Default"]!));
+        services.AddSingleton<Lib.Db.Contracts.Execution.IResumableStateStore>(sp =>
+        {
+             // [Fix] ConnectionStringName 참조하여 연결 문자열 획득
+             var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Lib.Db.Configuration.LibDbOptions>>().Value;
+             var connStrName = opts.ConnectionStringName ?? "Default";
+             var connStr = opts.ConnectionStrings.TryGetValue(connStrName, out var cs) ? cs 
+                          : opts.ConnectionStrings.TryGetValue("Default", out var defCs) ? defCs
+                          : throw new InvalidOperationException("Connection string not found for tests.");
+                          
+             return new Lib.Db.Verification.Tests.Infrastructure.TestSqlResumableStateStore(connStr);
+        });
 
         // [Fix] Register SchemaFlushService for manual trigger tests
         services.AddTransient<Lib.Db.Schema.SchemaFlushService>();

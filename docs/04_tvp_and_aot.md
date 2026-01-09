@@ -374,14 +374,9 @@ public record ProductDto
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Runtime 라이브러리 -->
-    <PackageReference Include="Lib.Db" Version="1.1.0" />
+    <!-- Runtime 라이브러리 (All-in-One: Source Generator 포함) -->
+    <PackageReference Include="Lib.Db" Version="x.x.x" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.0" />
-    <!-- Source Generator (PrivateAssets="all" 권장) -->
-    <PackageReference Include="Lib.Db.TvpGen" Version="1.1.0">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
   </ItemGroup>
 </Project>
 ```
@@ -427,13 +422,13 @@ ls bin/Release/net10.0/win-x64/publish/
 error CS0246: The type or namespace name 'UserDtoTvpBuilder' could not be found
 ```
 
-**원인**: `Lib.Db.TvpGen` 패키지가 설치되지 않았거나 Source Generator가 실행되지 않음.
+**원인**: `Lib.Db` 패키지가 설치되지 않았거나 Source Generator가 IDE에서 갱신되지 않음.
 
 **해결**:
-1. 패키지 확인:
-   ```bash
-   dotnet list package | grep Lib.Db.TvpGen
-   ```
+1.  **패키지 확인**:
+    ```bash
+    dotnet list package | grep Lib.Db
+    ```
 
 2. Clean & Rebuild:
    ```bash

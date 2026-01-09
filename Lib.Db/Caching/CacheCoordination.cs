@@ -112,7 +112,7 @@ public sealed class GlobalCacheEpoch : IDisposable
 public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : IDisposable
 {
     private readonly string _basePath = basePath ?? throw new ArgumentNullException(nameof(basePath));
-    // Lazy initialization of 1024 mutexes
+    // 1024개 뮤텍스의 지연 초기화 (Lazy Initialization)
     private readonly Lazy<Mutex[]> _mutexStripes = new(() => 
         Enumerable.Range(0, 1024)
             .Select(i => CreateFallbackMutex($"Lib.Db.Epoch.Stripe{i}", logger))
@@ -123,7 +123,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
         // 생성자 진입 시 디렉토리 생성
     }
 
-    // Lazy Mutex 생성 로직 (3-Tier Fallback)
+    // 지연 뮤텍스 생성 로직 (3단계 폴백 전략)
     private static Mutex CreateFallbackMutex(string name, ILogger logger)
     {
         try
@@ -147,7 +147,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
     /// </summary>
     public long IncrementEpoch(string instanceHash)
     {
-        if (string.IsNullOrWhiteSpace(instanceHash)) throw new ArgumentException("Hash required", nameof(instanceHash));
+        if (string.IsNullOrWhiteSpace(instanceHash)) throw new ArgumentException("해시값은 필수입니다.", nameof(instanceHash));
 
         var sw = Stopwatch.StartNew();
         var filePath = GetEpochFilePath(instanceHash);
@@ -167,12 +167,12 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
                 logger.LogWarning("[Epoch] Abandoned Mutex Recovered: {Hash}", instanceHash);
             }
 
-            if (!acquired) throw new TimeoutException($"Epoch Lock Timeout: {instanceHash}");
+            if (!acquired) throw new TimeoutException($"Epoch 잠금 타임아웃 발생: {instanceHash}");
 
             long current = ReadEpochSafe(filePath);
             long newEpoch = current + 1;
 
-            // Phase 1: Write to temp (Zero-Allocation)
+            // 1단계: 임시 파일에 쓰기 (Zero-Allocation)
             using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
             {
                 Span<byte> buffer = stackalloc byte[8];
@@ -181,7 +181,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
                 fs.Flush(true);
             }
 
-            // Phase 2: Atomic Swap
+            // 2단계: 원자적 교체 (Atomic Swap)
             File.Move(tempPath, filePath, overwrite: true);
 
             DbMetrics.TrackDurationFromScope(sw.Elapsed);
@@ -198,7 +198,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
     /// </summary>
     public long GetEpoch(string instanceHash)
     {
-        if (string.IsNullOrWhiteSpace(instanceHash)) throw new ArgumentException("Hash required", nameof(instanceHash));
+        if (string.IsNullOrWhiteSpace(instanceHash)) throw new ArgumentException("해시값은 필수입니다.", nameof(instanceHash));
         return ReadEpochWithFallback(instanceHash);
     }
 
@@ -254,20 +254,20 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
         var newPath = GetEpochFilePath(instanceHash);
         if (File.Exists(newPath)) return ReadEpochSafe(newPath);
 
-        // Legacy Fallback
+        // 레거시 폴백 (호환성 유지)
         var legacyPath = GetLegacyFilePath(instanceHash);
         if (File.Exists(legacyPath))
         {
             long val = ReadEpochSafe(legacyPath);
             try
             {
-                // Auto-Migrate
+                // 자동 마이그레이션
                 var temp = newPath + ".tmp";
                 File.WriteAllBytes(temp, BitConverter.GetBytes(val));
                 File.Move(temp, newPath, true);
                 File.Delete(legacyPath);
             }
-            catch { /* Ignore migration failure */ }
+            catch { /* 마이그레이션 실패 무시 */ }
             return val;
         }
         return 0;

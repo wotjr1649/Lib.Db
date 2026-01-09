@@ -36,6 +36,29 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddLibDb(builder.Configuration);
 ```
 
+### 2-1. 연결 문자열 구성 (Connection Strings)
+
+`Lib.Db`는  **최상위 `ConnectionStrings` 섹션**을 기본으로 지원하며, **"이중 레이어 바인딩(Dual-Layer Binding)"** 전략을 사용합니다.
+
+```json
+{
+  "ConnectionStrings": {
+    "SalesDb": "Server=...;Database=Sales;",        // [표준 연결 문자열]
+    "LogDb": "Server=...;Database=Logs;"
+  },
+  "LibDb": {
+    "ConnectionStringName": "SalesDb",              // [Smart Pointer] 'Default'로 사용할 연결 지정
+    "EnableSchemaCaching": true
+  }
+}
+```
+
+*   **Smart Pointer (`ConnectionStringName`)**: `Lib.Db`가 내부적으로 `Default`로 사용할 연결의 키를 지정합니다. 코드 수정 없이 설정만으로 주 데이터베이스를 변경할 수 있습니다.
+*   **우선순위**:
+    1.  **Global Scope**: 최상위 `ConnectionStrings` 섹션 (권장)
+    2.  **Local Scope**: `LibDb:ConnectionStrings` 섹션 (레거시/오버라이드)
+    *   *동일한 키가 존재할 경우, 최상위 섹션 설정이 병합됩니다.*
+
 ### 수동 구성 (Manual Configuration)
 특정 섹션을 수동으로 지정하거나 코드로 옵션을 설정할 때 사용합니다.
 
@@ -56,7 +79,6 @@ builder.Services.AddHighPerformanceDb(options =>
 
 ```json
 {
-  "LibDb": {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // [1] 연결 및 인프라 설정
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -64,7 +86,8 @@ builder.Services.AddHighPerformanceDb(options =>
       "Main": "Server=localhost;Database=LibDb;Trusted_Connection=True;TrustServerCertificate=True;",  // [필수]
       "LogDb": "..."  // [선택] 추가 연결 문자열
     },
-    
+    "LibDb": {
+    "ConnectionStringName": "SalesDb",              // [Smart Pointer] 'Default'로 사용할 연결 지정
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // [2] 스키마 캐싱 및 워밍업
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

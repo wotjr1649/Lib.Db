@@ -10,6 +10,7 @@ namespace Lib.Db.Configuration
     [JsonSerializable(typeof(TvpSchema))]
     [JsonSourceGenerationOptions(WriteIndented = true, 
         IgnoreReadOnlyProperties = false,
+        PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
     internal partial class LibDbJsonContext : JsonSerializerContext
     {

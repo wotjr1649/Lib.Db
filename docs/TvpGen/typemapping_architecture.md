@@ -1,7 +1,7 @@
 # TypeMappingRegistry 아키텍처
 
 **역할**: C# ↔ SQL Server 타입 매핑의 **단일 진실 원천** (Single Source of Truth)  
-**버전**: v1.1  
+**버전**: Latest  
 **파일**: `Lib.Db.TvpGen/TypeMappingRegistry.cs`
 
 ---
@@ -9,10 +9,10 @@
 ## 🏗️ 설계 철학 (Design Philosophy)
 
 ### 1. SSOT (Single Source of Truth)
-과거에는 `TvpAccessorGenerator`와 `ResultAccessorGenerator`가 각자 타입 매핑 로직을 가지고 있어 약 90줄 이상의 중복 코드와 정합성 문제가 발생했습니다. v1.1에서는 `TypeMappingRegistry`를 도입하여 모든 매핑 규칙을 한곳으로 통합했습니다. 이제 매핑 로직 변경 시 이 파일 하나만 수정하면 모든 제너레이터에 일관되게 반영됩니다.
+과거에는 `TvpAccessorGenerator`와 `ResultAccessorGenerator`가 각자 타입 매핑 로직을 가지고 있어 약 90줄 이상의 중복 코드와 정합성 문제가 발생했습니다. 최신 버전에서는 `TypeMappingRegistry`를 도입하여 모든 매핑 규칙을 한곳으로 통합했습니다. 이제 매핑 로직 변경 시 이 파일 하나만 수정하면 모든 제너레이터에 일관되게 반영됩니다.
 
 ### 2. FullyQualified Stability
-`type.Name`에 의존하는 방식은 `System.Guid`와 `MyApp.Guid`를 구별하지 못하는 치명적인 결함이 있었습니다. v1.1은 `SymbolDisplayFormat.FullyQualifiedFormat`을 사용하여 모든 타입을 `global::System.Guid`와 같이 절대 경로로 식별합니다. 이는 네임스페이스 충돌을 100% 방지하고 컴파일 안정성을 보장합니다.
+`type.Name`에 의존하는 방식은 `System.Guid`와 `MyApp.Guid`를 구별하지 못하는 치명적인 결함이 있었습니다. 최신 버전은 `SymbolDisplayFormat.FullyQualifiedFormat`을 사용하여 모든 타입을 `global::System.Guid`와 같이 절대 경로로 식별합니다. 이는 네임스페이스 충돌을 100% 방지하고 컴파일 안정성을 보장합니다.
 
 ---
 

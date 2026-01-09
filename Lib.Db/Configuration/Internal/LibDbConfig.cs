@@ -6,10 +6,6 @@
 
 #nullable enable
 
-using System;
-using System.Collections.Generic;
-using Lib.Db.Contracts.Core; // TvpValidationMode
-
 namespace Lib.Db.Configuration.Internal;
 
 /// <summary>
@@ -29,7 +25,10 @@ internal sealed class LibDbConfig
         set => field = value ?? throw new ArgumentNullException(nameof(value));
     } = [];
 
-    // [2] 스키마 캐싱
+    // [2] 연결 별칭 (Smart Pointer)
+    public string ConnectionStringName { get; set; } = "Default";
+
+    // [3] 스키마 캐싱
     public bool EnableSchemaCaching { get; set; } = true;
     
     public int SchemaRefreshIntervalSeconds
@@ -44,7 +43,7 @@ internal sealed class LibDbConfig
     } = 60;
 
     public List<string> WatchedInstances { get; set; } = [];
-    public List<string> PrewarmSchemas { get; set; } = ["dbo"];
+    public List<string>? PrewarmSchemas { get; set; } = null;
     public List<string> PrewarmIncludePatterns { get; set; } = [];
     public List<string> PrewarmExcludePatterns { get; set; } = [];
 
@@ -235,10 +234,13 @@ internal sealed class LibDbConfig
         options.ConnectionStrings = this.ConnectionStrings;
         
         // [2]
+        options.ConnectionStringName = this.ConnectionStringName;
+
+        // [3]
         options.EnableSchemaCaching = this.EnableSchemaCaching;
         options.SchemaRefreshIntervalSeconds = this.SchemaRefreshIntervalSeconds;
         options.WatchedInstances = this.WatchedInstances;
-        options.PrewarmSchemas = this.PrewarmSchemas;
+        options.PrewarmSchemas = this.PrewarmSchemas ?? ["dbo"];
         options.PrewarmIncludePatterns = this.PrewarmIncludePatterns;
         options.PrewarmExcludePatterns = this.PrewarmExcludePatterns;
 

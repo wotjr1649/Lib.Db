@@ -5,14 +5,9 @@
 // ============================================================================
 #nullable enable
 
-using System;
 using System.Collections.Concurrent;
-using System.Linq;
 using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
 using Lib.Db.Contracts.Schema;
-using Lib.Db.Core;
 using Lib.Db.Execution.Binding;
 using Lib.Db.Execution.Tvp;
 
@@ -69,8 +64,11 @@ public static class LibDbHostExtensions
             var validator = host.Services.GetRequiredService<ITvpSchemaValidator>();
             var options = host.Services.GetRequiredService<LibDbOptions>();
             
-            // 첫 번째 연결 문자열 사용
-            string instanceKey = options.ConnectionStrings.Keys.FirstOrDefault() ?? "DefaultConnection";
+            // 첫 번째 연결 문자열 사용 (Smart Pointer 적용)
+            // options.ConnectionStringName이 유효하면 그것을, 아니면 Fallback으로 첫 번째 키 사용
+            string instanceKey = options.ConnectionStrings.ContainsKey(options.ConnectionStringName)
+                ? options.ConnectionStringName
+                : (options.ConnectionStrings.Keys.FirstOrDefault() ?? "Default");
             var key = (dtoType, udtName);
 
             // 중복 검증 방지를 위한 Task 캐싱

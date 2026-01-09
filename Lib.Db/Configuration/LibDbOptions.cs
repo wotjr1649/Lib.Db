@@ -10,14 +10,9 @@
 
 #nullable enable
 
-using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Lib.Db.Caching;
-using Lib.Db.Core;
-using Lib.Db.Contracts.Core; // TvpValidationMode 등 참조
 
 namespace Lib.Db.Configuration;
 
@@ -57,7 +52,21 @@ public class LibDbOptions
 
     #endregion
 
-    #region [2] 스키마 캐싱 및 워밍업
+    #region [2] 연결 별칭 (Smart Pointer)
+
+    /// <summary>
+    /// 기본(Default)으로 사용할 연결 문자열의 키(별칭)입니다. (기본값: "Default")
+    /// <para>
+    /// <b>[설계의도]</b><br/>
+    /// 다중 DB 환경에서 소스 코드 수정 없이 설정 변경만으로 주(Primary) 데이터베이스를 스위칭할 수 있도록 돕는 '스마트 포인터'입니다.<br/>
+    /// <see cref="ConnectionStrings"/> 딕셔너리 내의 키를 가리킵니다.
+    /// </para>
+    /// </summary>
+    public string ConnectionStringName { get; set; } = "Default";
+
+    #endregion
+
+    #region [3] 스키마 캐싱 및 워밍업
 
     /// <summary>
     /// 스키마 캐싱 기능 사용 여부 (기본값: true)
@@ -159,7 +168,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [3] 쿼리 실행 정책
+    #region [4] 쿼리 실행 정책
 
     /// <summary>
     /// Dry Run(모의 실행) 모드 활성화 여부 (기본값: false)
@@ -175,7 +184,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [4] 데이터 직렬화 및 검증
+    #region [5] 데이터 직렬화 및 검증
 
 
     /// <summary>
@@ -206,7 +215,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [5] 타임아웃 및 성능 튜닝
+    #region [6] 타임아웃 및 성능 튜닝
 
 
     /// <summary>
@@ -256,7 +265,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [6] 리소스 관리 및 메모리
+    #region [7] 리소스 관리 및 메모리
 
 
     /// <summary>
@@ -321,7 +330,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [7] 재시도 및 복구 (Resumable Query)
+    #region [8] 재시도 및 복구 (Resumable Query)
 
 
     /// <summary>
@@ -467,7 +476,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [8] 회복 탄력성 (Resilience)
+    #region [9] 회복 탄력성 (Resilience)
 
     /// <summary>
     /// 매퍼(Mapper) 및 팩토리 캐시의 최대 항목 수 (기본값: 10,000)
@@ -502,7 +511,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [9] L2 캐시 및 공유 메모리
+    #region [10] L2 캐시 및 공유 메모리
 
 
     /// <summary>
@@ -556,7 +565,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [10] 카오스 엔지니어링
+    #region [11] 카오스 엔지니어링
 
     /// <summary>
     /// 카오스 엔지니어링 설정 (기본값: 비활성)
@@ -573,7 +582,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [11] 관측 가능성 및 헬스 체크
+    #region [12] 관측 가능성 및 헬스 체크
 
 
     /// <summary>
@@ -626,7 +635,7 @@ public class LibDbOptions
 
     #endregion
 
-    #region [12] 내부 튜닝 및 고급 옵션
+    #region [13] 내부 튜닝 및 고급 옵션
 
 
     /// <summary>

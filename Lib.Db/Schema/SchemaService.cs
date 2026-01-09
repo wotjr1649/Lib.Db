@@ -294,7 +294,14 @@ internal sealed class SchemaService(
     {
         using var activity = s_activity.StartActivity("PreloadSchema");
 
-        var schemaList = schemaNames.ToList();
+        // [Smart Deduplication]
+        // 1. 중복 제거: "dbo", "dbo" -> "dbo" (Distinct)
+        // 2. 대소문자 무시: "dbo", "DBO" -> "dbo" (OrdinalIgnoreCase)
+        // 3. 유효성 체크: 빈 문자열 필터링
+        var schemaList = schemaNames
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         string schemaLogStr = string.Join(",", schemaList);
 
         if (schemaList.Count == 0)

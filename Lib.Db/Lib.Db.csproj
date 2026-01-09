@@ -23,6 +23,9 @@
 	  <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)\generated</CompilerGeneratedFilesOutputPath>
 	  <NeutralLanguage>ko-KR</NeutralLanguage>
   
+	  <!-- JIT Optimization -->
+	  <TieredPGO>true</TieredPGO>
+  
 </PropertyGroup>
 
   <ItemGroup>

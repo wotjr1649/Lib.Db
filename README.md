@@ -1,4 +1,4 @@
-# Lib.Db (v1.1)
+# Lib.Db
 
 **Extreme Performance Data Access Library for .NET 10+**
 
@@ -8,7 +8,7 @@
 <!-- AI_CONTEXT: END -->
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
-[![NuGet](https://img.shields.io/badge/NuGet-1.1.0-blue)](https://www.nuget.org/packages/Lib.Db/)
+[![NuGet](https://img.shields.io/badge/NuGet-Latest-blue)](https://www.nuget.org/packages/Lib.Db/)
 [![AOT Ready](https://img.shields.io/badge/Native_AOT-Ready-green)](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zero Allocation](https://img.shields.io/badge/Performance-Zero_Allocation-orange)]()
@@ -53,8 +53,8 @@
 | **Native AOT** | .NET 10 | 모든 버전 | ✅ 완벽 지원 |
 
 **NuGet Packages**:
-- `Lib.Db` - 런타임 라이브러리 (v1.1.0)
-- `Lib.Db.TvpGen` - Source Generator (v1.1.0)
+- `Lib.Db` - 런타임 라이브러리
+- `Lib.Db.TvpGen` - Source Generator
   - Table-Valued Parameters (TVP) 자동 생성
   - DbDataReader → DTO 고성능 매핑 (Track 5 알고리즘)
   - Native AOT 완벽 지원 (리플렉션 제로)
@@ -103,10 +103,11 @@ await host.RunAsync();
 ### 2. appsettings.json 구성
 ```json
 {
-  "LibDb": {
     "ConnectionStrings": {
       "Default": "Server=User_Server;Database=User_Db;User Id=user_id;Password=user_password;TrustServerCertificate=True;Encrypt=False;"
     },
+    "LibDb": {
+     "ConnectionStringName": "Default",              // [Smart Pointer] 'Default'로 사용할 연결 지정
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // [1] 스키마 캐싱 및 워밍업 (Schema Caching & Warmup)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -216,6 +217,7 @@ public class UserRepository(IDbContext db)
 - 📈 **OpenTelemetry 통합** - 성능 메트릭 자동 수집
 - 🛡️ **Schema Validation** - 워밍업 시 누락된 스키마 자동 감지 및 경고
 - ⚡ **Optimized Normalization** - SIMD 기반 고속 식별자 처리
+- 🚀 **Extreme Performance** - TieredPGO & SkipLocalsInit (.NET 10+)
 - 🧪 **Chaos Engineering** - 개발 환경 장애 시뮬레이션
 
 ---

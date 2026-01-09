@@ -369,7 +369,44 @@ builder.Services.AddOpenTelemetry()
 
 ---
 
-## 6. 모범 사례
+## 7. 극한의 성능 (Extreme Performance - .NET 10+)
+
+`Lib.Db`는 .NET의 최신 컴파일러 및 런타임 기술을 최대한 활용하여 하드웨어 성능을 극한까지 끌어올립니다.
+
+### 7-1. TieredPGO (Profile-Guided Optimization)
+
+`Lib.Db.csproj`에는 `<TieredPGO>true</TieredPGO>`가 기본 활성화되어 있습니다.
+이 기술은 애플리케이션 실행 중 자주 사용되는 코드 경로(Hot Path)를 런타임이 식별하고, 해당 경로에 대해 **더 공격적인 기계어 최적화**를 수행하는 JIT 기술입니다.
+
+*   **효과**: 인터페이스 메서드 호출(Interface Dispatch) 비용 감소 및 분기 예측(Branch Prediction) 성능 향상.
+*   **사용자 조치**: 별도 설정 불필요 (Lib.Db 사용 시 자동 적용).
+
+### 7-2. [SkipLocalsInit] 및 Zero-Clearing 제거
+
+일반적인 C# 메서드는 보안을 위해 로컬 변수(특히 `stackalloc` 버퍼)를 0으로 초기화합니다. 하지만 이는 고성능 시나리오에서 CPU 사이클을 낭비하는 오버헤드가 됩니다.
+
+`Lib.Db`는 성능이 중요한 모든 모듈에 `[module: SkipLocalsInit]` 속성을 적용하여 이 초기화 과정을 생략합니다.
+
+```csharp
+// Lib.Db 내부 동작 예시
+[SkipLocalsInit]
+public void WriteData(ReadOnlySpan<char> data)
+{
+    // 0으로 초기화되지 않은 'Dirty' 메모리 할당 (즉시 사용 가능)
+    Span<byte> buffer = stackalloc byte[data.Length]; 
+    
+    // 안전 보장: 할당 즉시 데이터를 덮어씀 (Write-Before-Read)
+    Encoding.UTF8.GetBytes(data, buffer);
+    
+    // ...
+}
+```
+
+*   **안전성 검증**: `Lib.Db` 팀은 모든 `stackalloc` 및 `ArrayPool` 사용 지점에서 **"읽기 전 덮어쓰기(Overwrite-Before-Read)"** 패턴을 철저히 검증하여 메모리 오염(Memory Corruption) 가능성을 원천 차단했습니다.
+
+---
+
+## 8. 모범 사례
 
 ### ✅ 1. Async/Await 올바르게 사용하기
 

@@ -5,6 +5,7 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+
 #region [1. 시스템 핵심 네임스페이스]
 
 global using System;
@@ -48,7 +49,6 @@ global using Lib.Db.Repository;
 
 #region [5. 타입 별칭 (Type Aliases)]
 
-/// <summary>저장 프로시저 이름을 나타내는 타입 별칭입니다.</summary>
 /// <summary>저장 프로시저 이름을 나타내는 타입 별칭입니다.</summary>
 global using SpName = Lib.Db.Contracts.Core.DbObjectName<Lib.Db.Contracts.Core.SpTrait>;
 
