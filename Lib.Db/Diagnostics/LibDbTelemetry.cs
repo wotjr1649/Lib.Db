@@ -1,3 +1,9 @@
+// ============================================================================
+// 파일: Lib.Db/Diagnostics/LibDbTelemetry.cs
+// 설명: Lib.Db 텔레메트리 — ActivitySource 및 Meter 기반 계측 인프라
+// 대상: .NET 10 / C# 14
+// ============================================================================
+
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
@@ -35,6 +41,23 @@ public static class LibDbTelemetry
         "libdb.db_request_duration_ms",
         unit: "ms",
         description: "Duration of DB requests in milliseconds.");
+
+    // A-2) Connection Pool Metrics
+    /// <summary>연결 획득 소요 시간 (밀리초)</summary>
+    public static readonly Histogram<double> ConnectionAcquireDuration = Meter.CreateHistogram<double>(
+        "libdb.connection.acquire_duration_ms",
+        unit: "ms",
+        description: "연결 획득 소요 시간");
+
+    /// <summary>연결 풀 대기 횟수 (100ms 이상 소요 시 카운트)</summary>
+    public static readonly Counter<long> ConnectionPoolWaits = Meter.CreateCounter<long>(
+        "libdb.connection.pool_waits",
+        description: "연결 풀 대기 횟수");
+
+    /// <summary>연결 풀 타임아웃 횟수</summary>
+    public static readonly Counter<long> ConnectionPoolTimeouts = Meter.CreateCounter<long>(
+        "libdb.connection.pool_timeouts",
+        description: "연결 풀 타임아웃 횟수");
 
     // B) Cache Metrics
     public static readonly Counter<long> CacheRequestsTotal = Meter.CreateCounter<long>(

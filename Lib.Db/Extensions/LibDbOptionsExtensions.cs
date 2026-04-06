@@ -32,7 +32,7 @@ public static class LibDbOptionsExtensions
         this IServiceCollection services,
         Action<LibDbOptions>? configure = null)
     {
-        var builder = services.AddOptions<LibDbOptions>()
+        OptionsBuilder<LibDbOptions> builder = services.AddOptions<LibDbOptions>()
                               .ValidateOnStart();
 
         if (configure != null)
@@ -68,7 +68,7 @@ public static class LibDbOptionsExtensions
         IConfiguration configuration,
         string sectionName = "LibDb")
     {
-        var builder = services.AddOptions<LibDbOptions>()
+        OptionsBuilder<LibDbOptions> builder = services.AddOptions<LibDbOptions>()
                               .Configure(options => BindLibDbOptions(options, configuration.GetSection(sectionName)))
                               .ValidateOnStart();
 
@@ -89,47 +89,61 @@ public static class LibDbOptionsExtensions
     private static void BindLibDbOptions(LibDbOptions options, IConfigurationSection section)
     {
         // 1. General
-        if (bool.TryParse(section["EnableSchemaCaching"], out var esc)) options.EnableSchemaCaching = esc;
-        if (int.TryParse(section["SchemaRefreshIntervalSeconds"], out var sris)) options.SchemaRefreshIntervalSeconds = sris;
-        if (bool.TryParse(section["EnableDryRun"], out var edr)) options.EnableDryRun = edr;
-        
-        // ConnectionStrings (Dictionary)
-        var connSection = section.GetSection("ConnectionStrings");
-        foreach (var child in connSection.GetChildren())
+        if (bool.TryParse(section["EnableSchemaCaching"], out bool esc))
+            options.EnableSchemaCaching = esc;
+        if (int.TryParse(section["SchemaRefreshIntervalSeconds"], out int sris))
+            options.SchemaRefreshIntervalSeconds = sris;
+        if (bool.TryParse(section["EnableDryRun"], out bool edr))
+            options.EnableDryRun = edr;
+
+        // ConnectionStringNames (List)
+        IConfigurationSection connNamesSection = section.GetSection("ConnectionStringNames");
+        if (connNamesSection.Exists())
         {
-            options.ConnectionStrings[child.Key] = child.Value ?? "";
+            List<string> names = [];
+            foreach (IConfigurationSection child in connNamesSection.GetChildren())
+            {
+                if (child.Value is not null)
+                    names.Add(child.Value);
+            }
+            if (names.Count > 0)
+                options.ConnectionStringNames = names;
         }
 
         // PrewarmSchemas (List)
-        var prewarmSection = section.GetSection("PrewarmSchemas");
+        IConfigurationSection prewarmSection = section.GetSection("PrewarmSchemas");
         if (prewarmSection.Exists())
         {
             options.PrewarmSchemas.Clear(); // Override default
-            foreach (var child in prewarmSection.GetChildren())
+            foreach (IConfigurationSection child in prewarmSection.GetChildren())
             {
-                if (child.Value != null) options.PrewarmSchemas.Add(child.Value);
+                if (child.Value != null)
+                    options.PrewarmSchemas.Add(child.Value);
             }
         }
-        
+
         // Resilience (Complex)
-        var resSection = section.GetSection("Resilience");
+        IConfigurationSection resSection = section.GetSection("Resilience");
         if (resSection.Exists())
         {
-             // ... Simple binding for key props
-             if (bool.TryParse(section["EnableResilience"], out var er)) options.EnableResilience = er;
-             
-             // ResilienceOptions
-             if (int.TryParse(resSection["MaxRetryCount"], out var mrc)) options.Resilience.MaxRetryCount = mrc;
-             if (int.TryParse(resSection["BaseRetryDelayMs"], out var brd)) options.Resilience.BaseRetryDelayMs = brd;
+            // ... Simple binding for key props
+            if (bool.TryParse(section["EnableResilience"], out bool er))
+                options.EnableResilience = er;
+
+            // ResilienceOptions
+            if (int.TryParse(resSection["MaxRetryCount"], out int mrc))
+                options.Resilience.MaxRetryCount = mrc;
+            if (int.TryParse(resSection["BaseRetryDelayMs"], out int brd))
+                options.Resilience.BaseRetryDelayMs = brd;
         }
 
         // SharedMemoryCache (Complex)
-        var smcSection = section.GetSection("SharedMemoryCache");
+        IConfigurationSection smcSection = section.GetSection("SharedMemoryCache");
         if (smcSection.Exists())
         {
-             // Bind relevant props
+            // Bind relevant props
         }
-        
+
         // Skip JsonOptions (SYSLIB1100 Trigger)
     }
 

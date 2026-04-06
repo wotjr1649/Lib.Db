@@ -151,12 +151,12 @@ public static class MutexHelper
         // ====================================================================
         try
         {
-            var globalMutex = new Mutex(false, $"Global\\{logicalName}");
-            
+            Mutex globalMutex = new Mutex(false, $"Global\\{logicalName}");
+
             logger.LogDebug(
-                "[MutexHelper] Global Mutex 생성 성공 - 이름: {Name}", 
+                "[MutexHelper] Global Mutex 생성 성공 - 이름: {Name}",
                 logicalName);
-            
+
             return globalMutex;
         }
         catch (UnauthorizedAccessException)
@@ -164,14 +164,14 @@ public static class MutexHelper
             // Global 네임스페이스 접근 권한 없음 (예상된 케이스)
             logger.LogWarning(
                 "[MutexHelper] Global 네임스페이스 권한 없음. Local로 전환합니다. " +
-                "이름: {Name}, 영향: 동일 세션 내 프로세스만 동기화됨", 
+                "이름: {Name}, 영향: 동일 세션 내 프로세스만 동기화됨",
                 logicalName);
         }
         catch (Exception ex)
         {
             // 예상치 못한 예외 (플랫폼 문제, 이름 규칙 위반 등)
-            logger.LogError(ex, 
-                "[MutexHelper] Global Mutex 생성 중 예외 발생. Local로 폴백 시도. 이름: {Name}", 
+            logger.LogError(ex,
+                "[MutexHelper] Global Mutex 생성 중 예외 발생. Local로 폴백 시도. 이름: {Name}",
                 logicalName);
         }
 
@@ -180,21 +180,21 @@ public static class MutexHelper
         // ====================================================================
         try
         {
-            var localMutex = new Mutex(false, $"Local\\{logicalName}");
-            
+            Mutex localMutex = new Mutex(false, $"Local\\{logicalName}");
+
             logger.LogInformation(
                 "[MutexHelper] Local Mutex 생성 성공 - 이름: {Name}, " +
-                "영향: 동일 세션 내 프로세스 간 동기화", 
+                "영향: 동일 세션 내 프로세스 간 동기화",
                 logicalName);
-            
+
             return localMutex;
         }
         catch (Exception ex)
         {
             // Local도 실패 (매우 드문 케이스: OS 리소스 고갈, 플랫폼 비호환 등)
-            logger.LogError(ex, 
+            logger.LogError(ex,
                 "[MutexHelper] Local Mutex 생성 실패. Unnamed Mutex로 최종 폴백. " +
-                "이름: {Name}, 영향: 프로세스 내부만 동기화 (프로세스 간 공유 불가)", 
+                "이름: {Name}, 영향: 프로세스 내부만 동기화 (프로세스 간 공유 불가)",
                 logicalName);
         }
 
@@ -203,9 +203,9 @@ public static class MutexHelper
         // ====================================================================
         logger.LogWarning(
             "[MutexHelper] ⚠️ Unnamed Mutex 사용 - 프로세스 간 동기화가 작동하지 않습니다. " +
-            "원래 이름: {Name}", 
+            "원래 이름: {Name}",
             logicalName);
-        
+
         // ⚠️ 중요: 이름이 없으므로 다른 프로세스와 공유되지 않습니다.
         // 하지만 앱이 죽지 않도록 최소한의 동기화는 제공합니다.
         return new Mutex(false);

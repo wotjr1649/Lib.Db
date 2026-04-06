@@ -166,8 +166,8 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
         // ====================================================================
         for (int i = 0; i < MAX_SLOTS; i++)
         {
-            var mutexName = $"Lib.Db.{isolationKey}.Slot.{i}";
-            var mutex = MutexHelper.CreateProcessMutex(mutexName, logger);
+            string mutexName = $"Lib.Db.{isolationKey}.Slot.{i}";
+            Mutex mutex = MutexHelper.CreateProcessMutex(mutexName, logger);
 
             try
             {

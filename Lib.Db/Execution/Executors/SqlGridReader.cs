@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일: Lib.Db.Execution/SqlGridReader.cs
 // 역할: 다중 ResultSet 소비용 GridReader 구현체
 // 타겟: .NET 10 / C# 14
@@ -68,8 +68,8 @@ internal sealed class SqlGridReader(
 
         _isConsumed = true;
 
-        var mapper = mapperFactory.GetMapper<T>();
-        var list = new List<T>();
+        ISqlMapper<T> mapper = mapperFactory.GetMapper<T>();
+        List<T> list = new List<T>();
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
             list.Add(mapper.MapResult(reader));
@@ -85,7 +85,7 @@ internal sealed class SqlGridReader(
 
         _isConsumed = true;
 
-        var mapper = mapperFactory.GetMapper<T>();
+        ISqlMapper<T> mapper = mapperFactory.GetMapper<T>();
         return await reader.ReadAsync(ct).ConfigureAwait(false)
             ? mapper.MapResult(reader)
             : default;

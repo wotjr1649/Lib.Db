@@ -33,7 +33,7 @@ namespace Lib.Db.Configuration;
 /// </list>
 /// </para>
 /// </summary>
-public class LibDbOptions
+public sealed class LibDbOptions
 {
     #region [1] 연결 및 인프라 설정
 
@@ -52,17 +52,26 @@ public class LibDbOptions
 
     #endregion
 
-    #region [2] 연결 별칭 (Smart Pointer)
+    #region [2] 연결 문자열 이름 목록
 
     /// <summary>
-    /// 기본(Default)으로 사용할 연결 문자열의 키(별칭)입니다. (기본값: "Default")
+    /// Lib.Db가 사용할 연결 문자열 키(별칭) 목록입니다.
     /// <para>
-    /// <b>[설계의도]</b><br/>
-    /// 다중 DB 환경에서 소스 코드 수정 없이 설정 변경만으로 주(Primary) 데이터베이스를 스위칭할 수 있도록 돕는 '스마트 포인터'입니다.<br/>
-    /// <see cref="ConnectionStrings"/> 딕셔너리 내의 키를 가리킵니다.
+    /// <b>[설계 의도]</b><br/>
+    /// 최상위 <c>ConnectionStrings</c> 섹션에 정의된 키 중, Lib.Db가 실제로 접근할 수 있는 키만
+    /// 명시적으로 지정합니다. 목록의 첫 번째 항목이 기본(Default) 인스턴스로 사용됩니다.
     /// </para>
     /// </summary>
-    public string ConnectionStringName { get; set; } = "Default";
+    public IReadOnlyList<string> ConnectionStringNames
+    {
+        get;
+        set
+        {
+            if (value is null) throw new ArgumentNullException(nameof(value), "연결 문자열 이름 목록은 null일 수 없습니다.");
+            if (value.Count == 0) throw new ArgumentException("최소 1개 이상의 연결 문자열 이름이 필요합니다.", nameof(value));
+            field = value;
+        }
+    } = ["Default"];
 
     #endregion
 
@@ -369,7 +378,7 @@ public class LibDbOptions
     /// <summary>
     /// 회복 탄력성(Resilience) 정책을 정의하는 옵션 클래스입니다.
     /// </summary>
-    public class ResilienceOptions
+    public sealed class ResilienceOptions
     {
         // ---------------------------------------------------------------------------------
         // Retry Configuration
@@ -382,7 +391,8 @@ public class LibDbOptions
             get;
             set
             {
-                if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), value, "재시도 횟수는 0 이상이어야 합니다.");
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "재시도 횟수는 0 이상이어야 합니다.");
                 field = value;
             }
         } = 3;
@@ -394,7 +404,8 @@ public class LibDbOptions
             get;
             set
             {
-                if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), value, "지연 시간은 0ms 이상이어야 합니다.");
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "지연 시간은 0ms 이상이어야 합니다.");
                 field = value;
             }
         } = 100;
@@ -406,7 +417,8 @@ public class LibDbOptions
             get;
             set
             {
-                if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), value, "최대 지연 시간은 0ms 이상이어야 합니다.");
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "최대 지연 시간은 0ms 이상이어야 합니다.");
                 field = value;
             }
         } = 2000;
@@ -432,7 +444,8 @@ public class LibDbOptions
             get;
             set
             {
-                if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value), value, "임계값은 0보다 커야 합니다.");
+                if (value <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "임계값은 0보다 커야 합니다.");
                 field = value;
             }
         } = 5;
@@ -444,7 +457,8 @@ public class LibDbOptions
             get;
             set
             {
-                if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value), value, "샘플링 기간은 0ms보다 커야 합니다.");
+                if (value <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "샘플링 기간은 0ms보다 커야 합니다.");
                 field = value;
             }
         } = 30000;
@@ -456,7 +470,8 @@ public class LibDbOptions
             get;
             set
             {
-                if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value), value, "차단 기간은 0ms보다 커야 합니다.");
+                if (value <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "차단 기간은 0ms보다 커야 합니다.");
                 field = value;
             }
         } = 30000;
@@ -468,7 +483,8 @@ public class LibDbOptions
             get;
             set
             {
-                if (value is < 0.0 or > 1.0) throw new ArgumentOutOfRangeException(nameof(value), value, "실패 비율은 0.0 ~ 1.0 사이여야 합니다.");
+                if (value is < 0.0 or > 1.0)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "실패 비율은 0.0 ~ 1.0 사이여야 합니다.");
                 field = value;
             }
         } = 0.5;
@@ -635,7 +651,28 @@ public class LibDbOptions
 
     #endregion
 
-    #region [13] 내부 튜닝 및 고급 옵션
+    #region [13] Always Encrypted 지원
+
+    /// <summary>
+    /// Always Encrypted 연결 문자열 설정을 검증합니다.
+    /// <para><c>Column Encryption Setting=Enabled</c> 가 포함된 연결 문자열의 유효성을 확인합니다.</para>
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// 런타임에서 Always Encrypted 설정 누락으로 인한 예기치 않은 동작을 사전에 감지하기 위해,
+    /// 연결 문자열 수준에서 설정 여부를 정적으로 검증할 수 있는 유틸리티를 제공합니다.
+    /// </para>
+    /// </summary>
+    /// <param name="connectionString">검증할 연결 문자열</param>
+    /// <returns>Always Encrypted가 활성화되어 있으면 <c>true</c></returns>
+    public static bool IsAlwaysEncryptedEnabled(string connectionString)
+    {
+        SqlConnectionStringBuilder builder = new(connectionString);
+        return builder.ColumnEncryptionSetting == SqlConnectionColumnEncryptionSetting.Enabled;
+    }
+
+    #endregion
+
+    #region [14] 내부 튜닝 및 고급 옵션
 
 
     /// <summary>
@@ -693,7 +730,7 @@ public class LibDbOptions
 /// 프로덕션 환경에서는 실수로 활성화되지 않도록 기본값을 비활성화 상태로 유지하며, C# 14 <c>field</c> 키워드를 활용해 설정값의 안전성을 보장합니다.
 /// </para>
 /// </summary>
-public class ChaosOptions
+public sealed class ChaosOptions
 {
     /// <summary>
     /// 카오스 주입 활성화 여부 (기본값: false)

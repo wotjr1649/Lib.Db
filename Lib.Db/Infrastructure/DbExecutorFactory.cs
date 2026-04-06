@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일명 : Lib.Db/Contracts/Execution/DbExecutorFactory.cs
 // 설명   : DB 실행기 팩터리 구현
 // 대상   : .NET 10 / C# 14
@@ -11,13 +11,11 @@
 
 #nullable enable
 
+using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Schema;
-using Lib.Db.Contracts.Execution; // Added for IDbExecutorFactory, IDbExecutor, etc.
-
 using Lib.Db.Execution;
-
 using Lib.Db.Execution.Executors;
 using Polly;
 using Polly.Registry;
@@ -69,10 +67,8 @@ internal sealed class DbExecutorFactory : IDbExecutorFactory
     private readonly IResiliencePipelineProvider _pipelineProvider;
     private readonly ISchemaService _schemaService;
     private readonly IMapperFactory _mapperFactory;
-    private readonly IResumableStateStore _resumableStore;
-    private readonly IMemoryPressureMonitor _memoryMonitor;
-    private readonly IChaosInjector _chaosInjector;
     private readonly IEnumerable<IDbCommandInterceptor> _interceptors;
+    private readonly IEnumerable<IDbInterceptor> _userInterceptors;
     private readonly LibDbOptions _options;
     private readonly ILogger<SqlDbExecutor> _logger;
 
@@ -83,10 +79,8 @@ internal sealed class DbExecutorFactory : IDbExecutorFactory
         IResiliencePipelineProvider pipelineProvider,
         ISchemaService schemaService,
         IMapperFactory mapperFactory,
-        IResumableStateStore resumableStore,
-        IMemoryPressureMonitor memoryMonitor,
-        IChaosInjector chaosInjector,
         IEnumerable<IDbCommandInterceptor> interceptors,
+        IEnumerable<IDbInterceptor> userInterceptors,
         LibDbOptions options,
         ILogger<SqlDbExecutor> logger)
     {
@@ -94,10 +88,8 @@ internal sealed class DbExecutorFactory : IDbExecutorFactory
         _pipelineProvider = pipelineProvider;
         _schemaService = schemaService;
         _mapperFactory = mapperFactory;
-        _resumableStore = resumableStore;
-        _memoryMonitor = memoryMonitor;
-        _chaosInjector = chaosInjector;
         _interceptors = interceptors;
+        _userInterceptors = userInterceptors;
         _options = options;
         _logger = logger;
     }
@@ -113,24 +105,22 @@ internal sealed class DbExecutorFactory : IDbExecutorFactory
     public IDbExecutor CreateResilient()
     {
         // 회복 탄력성 실행 전략 구성
-        var strategy = new ResilientStrategy(
+        ResilientStrategy strategy = new ResilientStrategy(
             _connFactory,
             _pipelineProvider,
             _schemaService,
             _logger);
 
         // 인터셉터 체인 구성 (로깅/Mock/계측 등)
-        var chain = new InterceptorChain(_interceptors);
+        InterceptorChain chain = new InterceptorChain(_interceptors);
 
         // 최종 실행기 조립
         return new SqlDbExecutor(
             strategy,
             _schemaService,
             _mapperFactory,
-            _resumableStore,
-            _memoryMonitor,
-            _chaosInjector,
             chain,
+            _userInterceptors,
             _options,
             _logger);
     }
@@ -148,24 +138,22 @@ internal sealed class DbExecutorFactory : IDbExecutorFactory
     public IDbExecutor CreateTransactional(SqlConnection conn, SqlTransaction tx)
     {
         // 외부 트랜잭션을 사용하는 실행 전략 구성
-        var strategy = new TransactionalStrategy(
+        TransactionalStrategy strategy = new TransactionalStrategy(
             conn,
             tx,
             _schemaService,
             _logger);
 
         // 인터셉터 체인 구성
-        var chain = new InterceptorChain(_interceptors);
+        InterceptorChain chain = new InterceptorChain(_interceptors);
 
         // 최종 실행기 조립
         return new SqlDbExecutor(
             strategy,
             _schemaService,
             _mapperFactory,
-            _resumableStore,
-            _memoryMonitor,
-            _chaosInjector,
             chain,
+            _userInterceptors,
             _options,
             _logger);
     }

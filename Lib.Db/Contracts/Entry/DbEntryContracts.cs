@@ -1,145 +1,120 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일명 : Lib.Db/Contracts/Entry/DbEntryContracts.cs
-// 설명   : DB 작업 진입점/세션/트랜잭션 스코프 계약 + 보간 SQL 핸들러
+// 설명   : DB 작업 진입점(IDbSession) + 트랜잭션 스코프(IDbTransactionScope) 계약
 // 대상   : .NET 10 / C# 14
 // 역할   :
 //   - 외부(사용자) 관점의 "DB 작업 시작"과 "수명 주기" 계약을 단일 파일로 통합
-//   - 인스턴스 선택, 세션/트랜잭션 수명, 보간 SQL(Zero-Allocation) 진입 제공
+//   - IDbContext를 제거하고 IDbSession이 유일한 진입점 역할 수행
 // ============================================================================
 
 #nullable enable
 
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
+using Lib.Db.Contracts.Core;
 
 namespace Lib.Db.Contracts.Entry;
 
-#region DB 컨텍스트 계약
+#region DB 세션 계약
 
 /// <summary>
-/// 데이터베이스 작업의 진입점(Entry Point)을 정의하는 컨텍스트 인터페이스입니다.
+/// DB 작업의 유일한 진입점. Fluent API의 시작점이며 인스턴스별 독립 트랜잭션을 지원한다.
 /// <para>
 /// <b>[설계 의도]</b><br/>
-/// - <b>추상화 계층</b>: 구체적인 DB 구현(Sql, Oracle 등)에 의존하지 않고 논리적인 진입점만 제공합니다.<br/>
-/// - <b>DI 친화적</b>: 애플리케이션 서비스에서 이 인터페이스를 주입받아 모든 데이터 액세스를 시작합니다.<br/>
-/// - <b>책임 분리</b>: 실제 실행(<see cref="IDbSession"/>)과 진입(<see cref="IDbContext"/>)을 분리하여 관심사를 명확히 합니다.
-/// </para>
-/// <para>
-/// 이 컨텍스트는 실제 DB 실행 로직을 직접 수행하지 않으며,
-/// Fluent 실행 파이프라인(<see cref="IProcedureStage"/>)의 시작점 역할만 담당합니다.
+/// - <b>단일 진입점</b>: 외부 프로젝트는 이 인터페이스만으로 모든 DB 작업을 수행합니다.<br/>
+/// - <b>라이프사이클 통합</b>: 연결(Connection), 트랜잭션(Transaction), 실행(Execution)의 수명 주기를 하나의 세션 객체를 통해 일관되게 관리합니다.<br/>
+/// - <b>리소스 안전성</b>: <see cref="IAsyncDisposable"/> 구현으로 비동기 리소스 해제를 보장합니다.
 /// </para>
 /// </summary>
-public interface IDbContext
+public interface IDbSession : IAsyncDisposable
 {
     #region 인스턴스 선택
 
     /// <summary>
-    /// 설정 파일(appsettings.json 등)에 등록된
-    /// DB 인스턴스 이름을 사용하여 작업을 시작합니다.
+    /// 등록된 DB 인스턴스로 작업을 시작합니다.
     /// </summary>
     /// <param name="instanceName">등록된 DB 인스턴스 이름</param>
     /// <returns>저장 프로시저/SQL 선택 단계 인터페이스</returns>
-    IProcedureStage UseInstance(string instanceName);
+    IProcedureStage Use(string instanceName);
 
     /// <summary>
-    /// Ad-hoc 연결 문자열(Connection String)을 직접 지정하여
-    /// DB 작업을 시작합니다.
-    /// <para>
-    /// 주로 테스트, 임시 연결, 멀티 테넌트 시나리오에서 사용됩니다.
-    /// </para>
+    /// Ad-hoc 연결 문자열로 작업을 시작합니다.
+    /// <para>주로 테스트, 임시 연결, 멀티 테넌트 시나리오에서 사용됩니다.</para>
     /// </summary>
     /// <param name="connectionString">직접 사용할 연결 문자열</param>
     /// <returns>저장 프로시저/SQL 선택 단계 인터페이스</returns>
     IProcedureStage UseConnectionString(string connectionString);
 
     /// <summary>
-    /// 기본 인스턴스(<c>"Default"</c>)를 사용하여
-    /// DB 작업을 시작합니다.
-    /// <para>
-    /// 별도의 인스턴스 선택이 필요 없는
-    /// 일반적인 애플리케이션 시나리오에서 사용됩니다.
-    /// </para>
+    /// 기본 인스턴스(<c>"Default"</c>)로 작업을 시작합니다.
+    /// <para>별도의 인스턴스 선택이 필요 없는 일반적인 시나리오에서 사용됩니다.</para>
     /// </summary>
     IProcedureStage Default { get; }
+
+    #endregion
+
+    #region 벌크 연산
+
+    /// <summary>
+    /// SqlBulkCopy 기반 대량 INSERT를 수행합니다.
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// - <b>고성능 벌크</b>: TVP 대비 수만~수십만 건 이상에서 더 빠른 성능을 제공합니다.<br/>
+    /// - <b>Reflection 사용</b>: T의 public property를 열 매핑에 사용하므로 AOT 환경에서는 지원되지 않습니다.<br/>
+    /// - <b>DbResult 패턴</b>: 성공/실패를 명시적으로 반환합니다.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="T">레코드 타입 (public property가 대상 테이블 컬럼과 매핑)</typeparam>
+    /// <param name="instanceName">등록된 DB 인스턴스 이름</param>
+    /// <param name="destinationTable">대상 테이블 이름 (예: "[gap].[BulkTarget]")</param>
+    /// <param name="records">삽입할 레코드 컬렉션</param>
+    /// <param name="options">벌크 삽입 옵션 (null 시 기본값 사용)</param>
+    /// <param name="ct">취소 토큰</param>
+    /// <returns>삽입된 행 수를 포함하는 <see cref="DbResult{T}"/></returns>
+    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(
+        "BulkInsertAsync는 Reflection을 사용하여 T의 속성을 열거합니다. AOT 환경에서는 사용할 수 없습니다.")]
+    Task<DbResult<long>> BulkInsertAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkInsertOptions? options = null,
+        CancellationToken ct = default) where T : class;
 
     #endregion
 
     #region 트랜잭션 시작
 
     /// <summary>
-    /// 명시적 데이터베이스 트랜잭션 스코프를 시작합니다.
+    /// 인스턴스별 독립 트랜잭션을 시작합니다. (기본 격리 수준: ReadCommitted)
     /// <para>
     /// 반환되는 <see cref="IDbTransactionScope"/>는
     /// <c>await using</c> 패턴으로 사용하는 것을 권장합니다.
-    /// </para>
-    /// <para>
-    /// 커밋이 호출되지 않은 상태로 Dispose 될 경우,
-    /// 자동으로 롤백됩니다.
+    /// 커밋이 호출되지 않은 상태로 Dispose 될 경우, 자동으로 롤백됩니다.
     /// </para>
     /// </summary>
     /// <param name="instanceName">대상 DB 인스턴스 이름</param>
-    /// <param name="isoLevel">
-    /// 트랜잭션 격리 수준
-    /// (<see cref="IsolationLevel.ReadCommitted"/>가 기본값)
-    /// </param>
     /// <param name="ct">취소 토큰</param>
     /// <returns>트랜잭션 스코프 인터페이스</returns>
     Task<IDbTransactionScope> BeginTransactionAsync(
         string instanceName,
-        IsolationLevel isoLevel = IsolationLevel.ReadCommitted,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// 지정 인스턴스에서 특정 격리 수준으로 트랜잭션을 시작합니다.
+    /// <para>
+    /// 반환되는 <see cref="IDbTransactionScope"/>는
+    /// <c>await using</c> 패턴으로 사용하는 것을 권장합니다.
+    /// 커밋이 호출되지 않은 상태로 Dispose 될 경우, 자동으로 롤백됩니다.
+    /// </para>
+    /// </summary>
+    /// <param name="instanceName">대상 DB 인스턴스 이름</param>
+    /// <param name="isolationLevel">트랜잭션 격리 수준</param>
+    /// <param name="ct">취소 토큰</param>
+    /// <returns>트랜잭션 스코프 인터페이스</returns>
+    Task<IDbTransactionScope> BeginTransactionAsync(
+        string instanceName,
+        System.Data.IsolationLevel isolationLevel,
         CancellationToken ct = default);
 
     #endregion
-}
-
-#endregion
-
-#region DB 세션 계약
-
-/// <summary>
-/// [통합] 데이터베이스 세션 인터페이스
-/// <para>
-/// <b>[설계 의도]</b><br/>
-/// - <b>라이프사이클 통합</b>: 연결(Connection), 트랜잭션(Transaction), 실행(Execution)의 수명 주기를 하나의 세션 객체를 통해 일관되게 관리합니다.<br/>
-/// - <b>리소스 안전성</b>: <see cref="IAsyncDisposable"/> 구현으로 비동기 리소스 해제를 보장합니다.
-/// </para>
-/// </summary>
-public interface IDbSession : IAsyncDisposable, IDisposable
-{
-    // --- [핵심 진입점] ---
-    /// <summary>
-    /// 지정된 인스턴스를 대상으로 작업을 시작합니다.
-    /// </summary>
-    /// <param name="instanceName">연결 대상 인스턴스 이름</param>
-    /// <returns>프로시저 단계를 시작할 수 있는 빌더</returns>
-    IProcedureStage Use(string instanceName);
-
-    // --- [트랜잭션 관리] ---
-    /// <summary>
-    /// 명시적 트랜잭션을 시작합니다.
-    /// </summary>
-    /// <param name="isoLevel">격리 수준 (기본: ReadCommitted)</param>
-    /// <param name="ct">취소 토큰</param>
-    Task BeginTransactionAsync(IsolationLevel isoLevel = IsolationLevel.ReadCommitted, CancellationToken ct = default);
-
-    /// <summary>
-    /// 활성 트랜잭션을 커밋합니다.
-    /// </summary>
-    /// <param name="ct">취소 토큰</param>
-    Task CommitAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// 활성 트랜잭션을 롤백합니다.
-    /// </summary>
-    /// <param name="ct">취소 토큰</param>
-    Task RollbackAsync(CancellationToken ct = default);
-
-    // --- [단축 실행 API] ---
-    /// <summary>
-    /// Zero-Allocation SQL 문자열 보간 지원
-    /// </summary>
-    IExecutionStage<Dictionary<string, object?>> Sql(
-        [InterpolatedStringHandlerArgument("")] ref SessionSqlStringHandler handler);
 }
 
 #endregion
@@ -151,37 +126,12 @@ public interface IDbSession : IAsyncDisposable, IDisposable
 /// <para>
 /// <b>[설계 의도]</b><br/>
 /// - <b>안전한 기본값</b>: 명시적 커밋(Commit) 없이는 절대 반영되지 않는 'Secure by Default' 원칙을 따릅니다.<br/>
-/// - <b>자동 롤백</b>: 예외 발생이나 실수로 인한 커밋 누락 시, Dispose 단계에서 자동으로 롤백하여 데이터 무결성을 지킵니다.
+/// - <b>자동 롤백</b>: 예외 발생이나 실수로 인한 커밋 누락 시, Dispose 단계에서 자동으로 롤백하여 데이터 무결성을 지킵니다.<br/>
+/// - <b>Fluent API 통합</b>: <see cref="IProcedureStage"/>를 상속하여 트랜잭션 내에서 Fluent 체이닝을 직접 시작할 수 있습니다.
 /// </para>
 /// </summary>
-public interface IDbTransactionScope : IAsyncDisposable
+public interface IDbTransactionScope : IProcedureStage, IAsyncDisposable
 {
-    #region 명령 준비
-
-    /// <summary>
-    /// 저장 프로시저(SP) 실행을 트랜잭션 컨텍스트 내에서 준비합니다.
-    /// <para>
-    /// 반환되는 <see cref="IParameterStage"/>를 통해
-    /// 파라미터 설정 및 실제 실행 단계로 이어집니다.
-    /// </para>
-    /// </summary>
-    /// <param name="spName">실행할 저장 프로시저 이름</param>
-    /// <returns>파라미터 설정 단계 인터페이스</returns>
-    IParameterStage Procedure(string spName);
-
-    /// <summary>
-    /// 일반 SQL 쿼리(Text) 실행을 트랜잭션 컨텍스트 내에서 준비합니다.
-    /// <para>
-    /// 반환되는 <see cref="IParameterStage"/>를 통해
-    /// 파라미터 설정 및 실제 실행 단계로 이어집니다.
-    /// </para>
-    /// </summary>
-    /// <param name="sqlText">실행할 SQL 텍스트</param>
-    /// <returns>파라미터 설정 단계 인터페이스</returns>
-    IParameterStage Sql(string sqlText);
-
-    #endregion
-
     #region 트랜잭션 제어
 
     /// <summary>
@@ -192,7 +142,8 @@ public interface IDbTransactionScope : IAsyncDisposable
     /// </para>
     /// </summary>
     /// <param name="ct">취소 토큰</param>
-    Task CommitAsync(CancellationToken ct = default);
+    /// <returns>커밋 성공 여부를 포함하는 <see cref="DbResult{T}"/></returns>
+    Task<DbResult<bool>> CommitAsync(CancellationToken ct = default);
 
     /// <summary>
     /// 현재 트랜잭션을 명시적으로 롤백합니다.
@@ -202,65 +153,10 @@ public interface IDbTransactionScope : IAsyncDisposable
     /// </para>
     /// </summary>
     /// <param name="ct">취소 토큰</param>
-    Task RollbackAsync(CancellationToken ct = default);
+    /// <returns>롤백 성공 여부를 포함하는 <see cref="DbResult{T}"/></returns>
+    Task<DbResult<bool>> RollbackAsync(CancellationToken ct = default);
 
     #endregion
 }
-
-#endregion
-
-#region 보간 핸들러
-
-/// <summary>
-/// <see cref="DbSession.Sql(ref SessionSqlStringHandler)"/> 메서드 전용 핸들러.
-/// <para>
-/// <b>[설계 의도]</b><br/>
-/// - <b>Zero-Allocation</b>: <c>ref struct</c>로 설계되어 힙 할당 없이 스택 상에서만 존재하며, 내부 버퍼를 재사용합니다.<br/>
-/// - <b>안전한 파라미터화</b>: 보간된 값들을 자동으로 추출하여 파라미터화하므로 SQL Injection을 원천 차단합니다.
-/// </para>
-/// </summary>
-[InterpolatedStringHandler]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public ref struct SessionSqlStringHandler
-{
-    private readonly StringBuilder _builder;
-    public readonly Dictionary<string, object?> Parameters;
-    private int _paramIndex;
-
-    /// <summary>
-    /// [컴파일러 호출] DbSession의 내부 리소스를 빌려서 사용합니다.
-    /// </summary>
-    public SessionSqlStringHandler(
-        int literalLength,
-        int formattedCount,
-        DbSession session) // <--- session 인스턴스가 주입됨
-    {
-        // 세션의 공유 빌더 사용
-        _builder = session.GetSharedBuilder();
-        _builder.EnsureCapacity(_builder.Length + literalLength + (formattedCount * 5));
-
-        // 파라미터 딕셔너리 생성 (풀링 가능하지만 여기선 새로 생성)
-        Parameters = new Dictionary<string, object?>(formattedCount);
-        _paramIndex = 0;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void AppendLiteral(string s)
-    {
-        _builder.Append(s);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void AppendFormatted<T>(T value)
-    {
-        string paramName = $"@p{_paramIndex++}";
-        _builder.Append(paramName);
-        Parameters[paramName] = value;
-    }
-
-    // 포맷 지정자 지원
-    public void AppendFormatted<T>(T value, string? format) => AppendFormatted(value);
-}
-
 
 #endregion

@@ -61,35 +61,32 @@ public static class LibDbHostExtensions
         // DataBindingEngine(Static) -> Validator(DI Instance) 브리지 설정
         DbBinder.ValidatorCallback = (dtoType, udtName) =>
         {
-            var validator = host.Services.GetRequiredService<ITvpSchemaValidator>();
-            var options = host.Services.GetRequiredService<LibDbOptions>();
-            
-            // 첫 번째 연결 문자열 사용 (Smart Pointer 적용)
-            // options.ConnectionStringName이 유효하면 그것을, 아니면 Fallback으로 첫 번째 키 사용
-            string instanceKey = options.ConnectionStrings.ContainsKey(options.ConnectionStringName)
-                ? options.ConnectionStringName
-                : (options.ConnectionStrings.Keys.FirstOrDefault() ?? "Default");
-            var key = (dtoType, udtName);
+            ITvpSchemaValidator validator = host.Services.GetRequiredService<ITvpSchemaValidator>();
+            LibDbOptions options = host.Services.GetRequiredService<LibDbOptions>();
+
+            // 첫 번째 연결 문자열 사용 (ConnectionStringNames[0] 기반)
+            string instanceKey = options.ConnectionStringNames[0];
+            (Type dtoType, string udtName) key = (dtoType, udtName);
 
             // 중복 검증 방지를 위한 Task 캐싱
-            var validationTask = s_tvpValidationTasks.GetOrAdd(key, (tuple, state) =>
+            Task validationTask = s_tvpValidationTasks.GetOrAdd(key, (tuple, state) =>
             {
-                var (dto, udt) = tuple;
-                var (v, accessorInfo, validateInfo, connKey) = 
+                (Type? dto, string? udt) = tuple;
+                (ITvpSchemaValidator? v, MethodInfo? accessorInfo, MethodInfo? validateInfo, string? connKey) =
                     ((ITvpSchemaValidator, MethodInfo, MethodInfo, string))state;
 
                 // 1. Accessor 생성
-                var accessors = accessorInfo.MakeGenericMethod(dto).Invoke(null, null)
+                object accessors = accessorInfo.MakeGenericMethod(dto).Invoke(null, null)
                     ?? throw new InvalidOperationException($"TVP Accessor 생성 실패: {dto.Name}");
 
                 // 2. ValidateAsync 호출 (Task 반환)
-                var method = validateInfo.MakeGenericMethod(dto);
+                MethodInfo method = validateInfo.MakeGenericMethod(dto);
                 return (Task)method.Invoke(v, [udt, accessors, connKey, CancellationToken.None])!;
             }, (validator, s_getTypedAccessorsOpenMethod, s_validateAsyncOpenMethod, instanceKey));
 
             // 동기 컨텍스트에서 대기 (Sync-over-Async: 초기화 시점에만 발생)
             validationTask.GetAwaiter().GetResult();
-            
+
             // 예외 없이 완료되었다면 검증 성공
             return true;
         };

@@ -12,8 +12,6 @@ using System.IO.Hashing;
 using System.IO.MemoryMappedFiles;
 using Microsoft.Extensions.Options;
 
-using System.Security.Cryptography;
-
 namespace Lib.Db.Caching;
 
 
@@ -40,25 +38,26 @@ public sealed class GlobalCacheEpoch : IDisposable
 
     public GlobalCacheEpoch(IOptions<SharedMemoryCacheOptions> options)
     {
-        var basePath = CacheInternalHelpers.ResolveBasePath(options.Value);
-        var mutexPrefix = CacheInternalHelpers.GetMutexPrefix(options.Value);
-        
+        string basePath = CacheInternalHelpers.ResolveBasePath(options.Value);
+        string mutexPrefix = CacheInternalHelpers.GetMutexPrefix(options.Value);
+
         // MMF 파일 경로
-        var filePath = Path.Combine(basePath, EPOCH_FILE_NAME);
+        string filePath = Path.Combine(basePath, EPOCH_FILE_NAME);
         Directory.CreateDirectory(basePath);
 
         // FileStream 열기 (8바이트 확보)
-        var fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
-        if (fs.Length < 8) fs.SetLength(8);
+        FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+        if (fs.Length < 8)
+            fs.SetLength(8);
 
         _mmf = MemoryMappedFile.CreateFromFile(fs, null, 8, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, false);
         _accessor = _mmf.CreateViewAccessor(0, 8);
-        
+
         // Mutex 생성 (쓰기 보호용)
         _mutex = new Mutex(false, $"{mutexPrefix}EpochMutex");
     }
 
-    public GlobalCacheEpoch(string basePath) 
+    public GlobalCacheEpoch(string basePath)
         : this(Options.Create(new SharedMemoryCacheOptions { BasePath = basePath })) { }
 
     /// <summary>현재 글로벌 Epoch 값을 읽습니다 (비잠금).</summary>
@@ -67,16 +66,27 @@ public sealed class GlobalCacheEpoch : IDisposable
     /// <summary>Epoch를 1 증가시키고 새 값을 반환합니다 (Thread-Safe IPC).</summary>
     public long Increment()
     {
+        bool acquired = false;
         try
         {
-            _mutex.WaitOne();
-            var next = _accessor.ReadInt64(0) + 1;
+            try
+            {
+                _mutex.WaitOne();
+                acquired = true;
+            }
+            catch (AbandonedMutexException)
+            {
+                acquired = true;
+                // 이전 소유자가 비정상 종료한 Mutex를 복구
+            }
+
+            long next = _accessor.ReadInt64(0) + 1;
             _accessor.Write(0, next);
             return next;
         }
         finally
         {
-            _mutex.ReleaseMutex();
+            if (acquired) _mutex.ReleaseMutex();
         }
     }
 
@@ -105,16 +115,16 @@ public sealed class GlobalCacheEpoch : IDisposable
 /// <para><strong>핵심 기능 (Zero-Copy &amp; Atomic)</strong></para>
 /// <list type="bullet">
 /// <item><description><strong>Atomic File Swap</strong>: temp 파일 작성 후 <c>File.Move</c>로 원자적 교체하여 쓰기 중단 시에도 데이터 무결성을 보장합니다.</description></item>
-/// <item><description><strong>XxHash128 파일명</strong>: SHA256 대비 133배 빠르고 파일명이 43% 짧아 Long Path 호환성이 뛰어납니다.</description></item>
-/// <item><description><strong>Striped Mutex</strong>: 1024개의 Mutex Stripe를 사용하여 인스턴스별 경합을 최소화합니다.</description></item>
+/// <item><description><strong>XxHash128 파일명</strong>: 고속 해시로 파일명 길이를 최적화하여 Long Path 호환성이 뛰어납니다.</description></item>
+/// <item><description><strong>Striped Mutex</strong>: 128개의 Mutex Stripe를 사용하여 인스턴스별 경합을 최소화합니다.</description></item>
 /// </list>
 /// </remarks>
 public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : IDisposable
 {
     private readonly string _basePath = basePath ?? throw new ArgumentNullException(nameof(basePath));
-    // 1024개 뮤텍스의 지연 초기화 (Lazy Initialization)
-    private readonly Lazy<Mutex[]> _mutexStripes = new(() => 
-        Enumerable.Range(0, 1024)
+    // 128개 뮤텍스의 지연 초기화 (Lazy Initialization)
+    private readonly Lazy<Mutex[]> _mutexStripes = new(() =>
+        Enumerable.Range(0, 128)
             .Select(i => CreateFallbackMutex($"Lib.Db.Epoch.Stripe{i}", logger))
             .ToArray());
 
@@ -147,33 +157,35 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
     /// </summary>
     public long IncrementEpoch(string instanceHash)
     {
-        if (string.IsNullOrWhiteSpace(instanceHash)) throw new ArgumentException("해시값은 필수입니다.", nameof(instanceHash));
+        if (string.IsNullOrWhiteSpace(instanceHash))
+            throw new ArgumentException("해시값은 필수입니다.", nameof(instanceHash));
 
-        var sw = Stopwatch.StartNew();
-        var filePath = GetEpochFilePath(instanceHash);
-        var tempPath = filePath + ".tmp";
-        var mutex = GetMutex(instanceHash);
+        Stopwatch sw = Stopwatch.StartNew();
+        string filePath = GetEpochFilePath(instanceHash);
+        string tempPath = filePath + ".tmp";
+        Mutex mutex = GetMutex(instanceHash);
         bool acquired = false;
 
         try
         {
-            try 
-            { 
-                acquired = mutex.WaitOne(TimeSpan.FromSeconds(2)); 
+            try
+            {
+                acquired = mutex.WaitOne(TimeSpan.FromSeconds(2));
             }
-            catch (AbandonedMutexException) 
-            { 
-                acquired = true; 
+            catch (AbandonedMutexException)
+            {
+                acquired = true;
                 logger.LogWarning("[Epoch] Abandoned Mutex Recovered: {Hash}", instanceHash);
             }
 
-            if (!acquired) throw new TimeoutException($"Epoch 잠금 타임아웃 발생: {instanceHash}");
+            if (!acquired)
+                throw new TimeoutException($"Epoch 잠금 타임아웃 발생: {instanceHash}");
 
             long current = ReadEpochSafe(filePath);
             long newEpoch = current + 1;
 
             // 1단계: 임시 파일에 쓰기 (Zero-Allocation)
-            using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (FileStream fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
             {
                 Span<byte> buffer = stackalloc byte[8];
                 BitConverter.TryWriteBytes(buffer, newEpoch);
@@ -189,7 +201,8 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
         }
         finally
         {
-            if (acquired) mutex.ReleaseMutex();
+            if (acquired)
+                mutex.ReleaseMutex();
         }
     }
 
@@ -198,18 +211,21 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
     /// </summary>
     public long GetEpoch(string instanceHash)
     {
-        if (string.IsNullOrWhiteSpace(instanceHash)) throw new ArgumentException("해시값은 필수입니다.", nameof(instanceHash));
-        return ReadEpochWithFallback(instanceHash);
+        if (string.IsNullOrWhiteSpace(instanceHash))
+            throw new ArgumentException("해시값은 필수입니다.", nameof(instanceHash));
+        return ReadEpochDirect(instanceHash);
     }
 
     private long ReadEpochSafe(string filePath)
     {
-        if (!File.Exists(filePath)) return 0;
+        if (!File.Exists(filePath))
+            return 0;
 
         try
         {
-            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            if (fs.Length < 8) return 0;
+            using FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (fs.Length < 8)
+                return 0;
 
             Span<byte> buffer = stackalloc byte[8];
 #if NET7_0_OR_GREATER
@@ -228,62 +244,37 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
 
     private Mutex GetMutex(string key)
     {
-        var maxBytes = Encoding.UTF8.GetMaxByteCount(key.Length);
+        int maxBytes = Encoding.UTF8.GetMaxByteCount(key.Length);
         if (maxBytes <= 256)
         {
             Span<byte> buffer = stackalloc byte[maxBytes];
             int written = Encoding.UTF8.GetBytes(key.AsSpan(), buffer);
             uint hash = Crc32.HashToUInt32(buffer[..written]);
-            return _mutexStripes.Value[hash % 1024];
+            return _mutexStripes.Value[hash % 128];
         }
         else
         {
-            var leased = ArrayPool<byte>.Shared.Rent(maxBytes);
+            byte[] leased = ArrayPool<byte>.Shared.Rent(maxBytes);
             try
             {
                 int written = Encoding.UTF8.GetBytes(key.AsSpan(), leased.AsSpan());
                 uint hash = Crc32.HashToUInt32(leased.AsSpan(0, written));
-                return _mutexStripes.Value[hash % 1024];
+                return _mutexStripes.Value[hash % 128];
             }
             finally { ArrayPool<byte>.Shared.Return(leased); }
         }
     }
 
-    private long ReadEpochWithFallback(string instanceHash)
+    private long ReadEpochDirect(string instanceHash)
     {
-        var newPath = GetEpochFilePath(instanceHash);
-        if (File.Exists(newPath)) return ReadEpochSafe(newPath);
-
-        // 레거시 폴백 (호환성 유지)
-        var legacyPath = GetLegacyFilePath(instanceHash);
-        if (File.Exists(legacyPath))
-        {
-            long val = ReadEpochSafe(legacyPath);
-            try
-            {
-                // 자동 마이그레이션
-                var temp = newPath + ".tmp";
-                File.WriteAllBytes(temp, BitConverter.GetBytes(val));
-                File.Move(temp, newPath, true);
-                File.Delete(legacyPath);
-            }
-            catch { /* 마이그레이션 실패 무시 */ }
-            return val;
-        }
-        return 0;
+        string filePath = GetEpochFilePath(instanceHash);
+        return ReadEpochSafe(filePath);
     }
 
     private string GetEpochFilePath(string instanceHash)
     {
-        var hashBytes = XxHash128.Hash(Encoding.UTF8.GetBytes(instanceHash));
-        var hexHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-        return Path.GetFullPath(Path.Combine(_basePath, $"epoch_{hexHash}.bin"));
-    }
-
-    private string GetLegacyFilePath(string instanceHash)
-    {
-        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(instanceHash));
-        var hexHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
+        byte[] hashBytes = XxHash128.Hash(Encoding.UTF8.GetBytes(instanceHash));
+        string hexHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
         return Path.GetFullPath(Path.Combine(_basePath, $"epoch_{hexHash}.bin"));
     }
 
@@ -291,7 +282,8 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
     {
         if (_mutexStripes.IsValueCreated)
         {
-            foreach (var m in _mutexStripes.Value) m.Dispose();
+            foreach (Mutex m in _mutexStripes.Value)
+                m.Dispose();
         }
     }
 }

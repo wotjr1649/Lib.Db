@@ -14,6 +14,7 @@ using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
 using Lib.Db.Execution;
 using Lib.Db.Execution.Executors;
+using Lib.Db.Hosting;
 using Lib.Db.Infrastructure;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
@@ -37,29 +38,20 @@ internal static class ServiceRegistrationHelpers
     /// </summary>
     internal static void RegisterExecutor(IServiceCollection services)
     {
-        // Memory Pressure Monitor
-        services.TryAddSingleton<IMemoryPressureMonitor, SystemMemoryMonitor>();
-
-        // Chaos Injector
-        services.TryAddSingleton<IChaosInjector, ConfigurableChaosInjector>();
-
-        // Resumable State Store (No-Op 구현)
-        services.TryAddSingleton<IResumableStateStore, NoOpResumableStateStore>();
-
         // Interceptor Chain
         services.TryAddSingleton<InterceptorChain>(sp =>
         {
-            var interceptors = sp.GetServices<IDbCommandInterceptor>();
+            IEnumerable<IDbCommandInterceptor> interceptors = sp.GetServices<IDbCommandInterceptor>();
             return new InterceptorChain(interceptors);
         });
 
         // Execution Strategy (Resilient)
         services.TryAddSingleton<IDbExecutionStrategy>(sp =>
         {
-            var connFactory = sp.GetRequiredService<IDbConnectionFactory>();
-            var pipelineProvider = sp.GetRequiredService<IResiliencePipelineProvider>();
-            var schemaService = sp.GetRequiredService<ISchemaService>();
-            var logger = sp.GetRequiredService<ILogger<ResilientStrategy>>();
+            IDbConnectionFactory connFactory = sp.GetRequiredService<IDbConnectionFactory>();
+            IResiliencePipelineProvider pipelineProvider = sp.GetRequiredService<IResiliencePipelineProvider>();
+            ISchemaService schemaService = sp.GetRequiredService<ISchemaService>();
+            ILogger<ResilientStrategy> logger = sp.GetRequiredService<ILogger<ResilientStrategy>>();
 
             return new ResilientStrategy(
                 connFactory,
@@ -125,8 +117,8 @@ internal static class ServiceRegistrationHelpers
         // 2. Resilience Pipeline Provider (Conditional)
         services.TryAddSingleton<IResiliencePipelineProvider>(sp =>
         {
-            var options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
-            
+            LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
+
             if (options.EnableResilience)
             {
                 return ActivatorUtilities.CreateInstance<Lib.Db.Infrastructure.Resilience.DefaultResiliencePipelineProvider>(sp);
@@ -189,9 +181,9 @@ internal static class ServiceRegistrationHelpers
         // ====================================================================
         services.TryAddSingleton<IProcessSlotAllocator>(sp =>
         {
-            var options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
-            var logger = sp.GetRequiredService<ILogger<Lib.Db.Hosting.ProcessSlotAllocator>>();
-            var keyGenerator = sp.GetRequiredService<Lib.Db.Contracts.Cache.IIsolationKeyGenerator>();
+            LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
+            ILogger<ProcessSlotAllocator> logger = sp.GetRequiredService<ILogger<Lib.Db.Hosting.ProcessSlotAllocator>>();
+            IIsolationKeyGenerator keyGenerator = sp.GetRequiredService<Lib.Db.Contracts.Cache.IIsolationKeyGenerator>();
 
             // 플랫폼별 기본값 결정
             bool enableSharedMemory = options.EnableSharedMemoryCache
@@ -204,8 +196,8 @@ internal static class ServiceRegistrationHelpers
             }
 
             // IsolationKey 생성 (DI를 통한 서비스 사용)
-            var targetName = options.ConnectionStringName ?? "Default";
-            var connectionString = options.ConnectionStrings?.TryGetValue(targetName, out var cs) == true
+            string targetName = options.ConnectionStringNames.Count > 0 ? options.ConnectionStringNames[0] : "Default";
+            string? connectionString = options.ConnectionStrings?.TryGetValue(targetName, out string? cs) == true
                 ? cs
                 : GetFirstConnectionStringOrThrow(options, "ProcessSlotAllocator");
 
@@ -219,9 +211,9 @@ internal static class ServiceRegistrationHelpers
         // ====================================================================
         services.TryAddSingleton<IDistributedCache>(sp =>
         {
-            var options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
-            var logger = sp.GetRequiredService<ILogger<SharedMemoryCache>>();
-            var keyGenerator = sp.GetRequiredService<Lib.Db.Contracts.Cache.IIsolationKeyGenerator>();
+            LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
+            ILogger<SharedMemoryCache> logger = sp.GetRequiredService<ILogger<SharedMemoryCache>>();
+            IIsolationKeyGenerator keyGenerator = sp.GetRequiredService<Lib.Db.Contracts.Cache.IIsolationKeyGenerator>();
 
             bool enableSharedMemory = options.EnableSharedMemoryCache
                 ?? RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
@@ -238,20 +230,20 @@ internal static class ServiceRegistrationHelpers
             }
 
             // 공유 메모리 활성화 - IsolationKey 생성 (DI 사용)
-            var targetName = options.ConnectionStringName ?? "Default";
-            var connectionString = options.ConnectionStrings?.TryGetValue(targetName, out var cs) == true
+            string targetName = options.ConnectionStringNames.Count > 0 ? options.ConnectionStringNames[0] : "Default";
+            string? connectionString = options.ConnectionStrings?.TryGetValue(targetName, out string? cs) == true
                 ? cs
                 : GetFirstConnectionStringOrThrow(options, "SharedMemoryCache");
 
             string? isolationKey = keyGenerator.Generate(connectionString);
-            var basePath = Path.Combine(Path.GetTempPath(), "LibDbCache");
+            string basePath = Path.Combine(Path.GetTempPath(), "LibDbCache");
 
             logger.LogInformation(
                 "[공유메모리캐시] 활성화 - SharedMemoryCache 사용 (플랫폼: {OS}, 격리키: {Key})",
                 RuntimeInformation.OSDescription,
                 isolationKey ?? "None");
 
-            var cacheOptions = new SharedMemoryCacheOptions
+            SharedMemoryCacheOptions cacheOptions = new SharedMemoryCacheOptions
             {
                 BasePath = basePath,
                 IsolationKey = isolationKey ?? "Shared"
@@ -261,56 +253,7 @@ internal static class ServiceRegistrationHelpers
         });
 
         // ====================================================================
-        // 3. ICacheLeaderElection 등록
-        // ====================================================================
-        services.TryAddSingleton<ICacheLeaderElection>(sp =>
-        {
-            var options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
-            var logger = sp.GetRequiredService<ILogger<CacheLeaderElection>>();
-
-            bool enableSharedMemory = options.EnableSharedMemoryCache
-                ?? RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-
-            if (!enableSharedMemory)
-            {
-                return new NoOpCacheLeaderElection();
-            }
-            
-            // 공유 메모리 옵션 (SharedMemoryCache와 동일한 설정 사용)
-            var cacheService = sp.GetRequiredService<IDistributedCache>();
-            if (cacheService is not SharedMemoryCache)
-            {
-                // Edge Case: 옵션은 켜졌는데 캐시 등록이 꼬인 경우
-                return new NoOpCacheLeaderElection();
-            }
-
-            // SharedMemoryCache를 위해 생성된 IsolationKey를 재사용하기 위해
-            // 여기서는 독립적으로 CacheInternalHelpers를 통해 옵션을 다시 구성하거나,
-            // 별도의 SharedMemoryCacheOptions를 등록해서 공유해야 함.
-            // 하지만 현재 구조상 ServiceRegistrationHelpers 내부에서 직접 생성하므로,
-            // 여기서도 동일한 로직으로 IsolationKey를 생성해야 함.
-
-            var keyGenerator = sp.GetRequiredService<Lib.Db.Contracts.Cache.IIsolationKeyGenerator>();
-            
-            var targetName = options.ConnectionStringName ?? "Default";
-            var connectionString = options.ConnectionStrings?.TryGetValue(targetName, out var cs) == true
-                ? cs
-                : GetFirstConnectionStringOrThrow(options, "CacheLeaderElection");
-
-            string? isolationKey = keyGenerator.Generate(connectionString);
-            var basePath = Path.Combine(Path.GetTempPath(), "LibDbCache");
-
-            var sharedOptions = new SharedMemoryCacheOptions
-            {
-                BasePath = basePath,
-                IsolationKey = isolationKey ?? "Shared"
-            };
-
-            return new CacheLeaderElection(Microsoft.Extensions.Options.Options.Create(sharedOptions), logger);
-        });
-
-        // ====================================================================
-        // 4. CacheMaintenanceService 등록 (Hosted Service)
+        // 3. CacheMaintenanceService 등록 (Hosted Service)
         // ====================================================================
         services.AddHostedService<CacheMaintenanceService>();
     }
@@ -376,7 +319,7 @@ internal static class ServiceRegistrationHelpers
         // ====================================================================
         // Step 1: "Default" 키로 Connection String 가져오기
         // ====================================================================
-        var defaultConnString = options.ConnectionStrings.TryGetValue("Default", out var cs)
+        string defaultConnString = options.ConnectionStrings.TryGetValue("Default", out string? cs)
             ? cs
             : GetFirstConnectionStringOrThrow(options, "IsolationKey");
 
@@ -385,16 +328,16 @@ internal static class ServiceRegistrationHelpers
             // ================================================================
             // Step 2: Connection String 정규화 (대소문자/공백 차이 제거)
             // ================================================================
-            var builder = new SqlConnectionStringBuilder(defaultConnString);
-            var canonical = builder.ConnectionString;
+            SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder(defaultConnString);
+            string canonical = builder.ConnectionString;
 
             // ================================================================
             // Step 3: XxHash128로 해싱 (32자, EpochStore와 동일)
             // ================================================================
-            var hash = System.IO.Hashing.XxHash128.Hash(
+            byte[] hash = System.IO.Hashing.XxHash128.Hash(
                 Encoding.UTF8.GetBytes(canonical));
 
-            var key = Convert.ToHexString(hash).ToLowerInvariant();
+            string key = Convert.ToHexString(hash).ToLowerInvariant();
 
             logger.LogInformation("[IsolationKey] 생성 완료: {Key} (정규화됨)", key);
             return key;
@@ -409,10 +352,10 @@ internal static class ServiceRegistrationHelpers
                 "원본 문자열 해싱으로 폴백합니다.");
 
             // 폴백: 원본 문자열 그대로 해싱 (정규화 없이)
-            var hash = System.IO.Hashing.XxHash128.Hash(
+            byte[] hash = System.IO.Hashing.XxHash128.Hash(
                 Encoding.UTF8.GetBytes(defaultConnString));
 
-            var key = Convert.ToHexString(hash).ToLowerInvariant();
+            string key = Convert.ToHexString(hash).ToLowerInvariant();
 
             logger.LogInformation("[IsolationKey] 생성 완료: {Key} (비정규화)", key);
             return key;
@@ -437,8 +380,8 @@ internal static class ServiceRegistrationHelpers
     {
         if (options.ConnectionStrings == null || options.ConnectionStrings.Count == 0)
             throw new InvalidOperationException($"{context}: LibDbOptions.ConnectionStrings에 연결 문자열이 등록되지 않았습니다.");
-        
-        using var enumerator = options.ConnectionStrings.Values.GetEnumerator();
+
+        using Dictionary<string, string>.ValueCollection.Enumerator enumerator = options.ConnectionStrings.Values.GetEnumerator();
         enumerator.MoveNext();
         return enumerator.Current;
     }

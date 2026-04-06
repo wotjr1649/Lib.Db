@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일: Lib.Db/Extensions/AdvancedSnapshotExtensions.cs
 // 설명: 고급/특수 목적용 Snapshot 제어 확장 메서드
 // 타겟: .NET 10 / C# 14
@@ -6,9 +6,9 @@
 
 #nullable enable
 
+using System.ComponentModel;
 using Lib.Db.Contracts.Entry;
 using Lib.Db.Contracts.Execution;
-using System.ComponentModel;
 using Lib.Db.Fluent;
 
 namespace Lib.Db.Extensions;

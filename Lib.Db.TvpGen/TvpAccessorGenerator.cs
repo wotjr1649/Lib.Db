@@ -679,9 +679,10 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
             var p = props[i];
 
             // NOTE:
-            // - 기존 코드가 사용하던 string.GetHashCode(StringComparison.OrdinalIgnoreCase) 정책 유지
-            // - Hash 알고리즘이 바뀌면 런타임 계약이 바뀔 수 있으므로 보수적으로 “그대로 유지”합니다.
-            var nameHash = string.GetHashCode(p.Name, StringComparison.OrdinalIgnoreCase);
+            // - 기존 string.GetHashCode(OrdinalIgnoreCase)는 프로세스마다 달라질 수 있으므로
+            //   결정론적 FNV-1a 해시로 교체합니다 (SharedHashUtils 사용).
+            // - 런타임 검증 시에도 동일한 FNV-1a 해시가 적용되어야 합니다.
+            var nameHash = (int)SharedHashUtils.HashAsciiIgnoreCaseFnv1a(p.Name);
 
             var expectedSqlType = GetSqlTypeFromSymbol(p.Type, useDatetime2);  // ✅ useDatetime2 전달
 
@@ -858,26 +859,10 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
     /// <summary>
     /// ASCII IgnoreCase FNV-1a 해시를 계산합니다.
     /// <para>해시 경로의 switch-case 키로 사용합니다(결정론적).</para>
+    /// <para>✅ SharedHashUtils로 위임</para>
     /// </summary>
     private static uint HashAsciiIgnoreCaseFnv1a(string s)
-    {
-        unchecked
-        {
-            const uint offset = 2166136261u;
-            const uint prime = 16777619u;
-            uint h = offset;
-
-            for (int i = 0; i < s.Length; i++)
-            {
-                char c = s[i];
-                if ((uint)(c - 'A') <= 25u) c = (char)(c | 0x20);
-                h ^= c;
-                h *= prime;
-            }
-
-            return h;
-        }
-    }
+        => SharedHashUtils.HashAsciiIgnoreCaseFnv1a(s);
 
     #endregion
 }

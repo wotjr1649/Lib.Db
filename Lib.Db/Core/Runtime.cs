@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일: Lib.Db/Core/Runtime.cs
 // 설명: 실행 컨텍스트(AsyncLocal) + 런타임 브리지 + AOT(Json) 컨텍스트
 // 대상: .NET 10 / C# 14
@@ -82,7 +82,7 @@ internal static class DbExecutionContextScope
     {
         get
         {
-            var stack = s_contextStack.Value;
+            Stack<DbExecutionContext>? stack = s_contextStack.Value;
             return stack is { Count: > 0 } ? stack.Peek() : null;
         }
     }
@@ -95,7 +95,7 @@ internal static class DbExecutionContextScope
     /// </summary>
     public static Scope Enter(DbExecutionContext context)
     {
-        var stack = s_contextStack.Value;
+        Stack<DbExecutionContext>? stack = s_contextStack.Value;
         if (stack is null)
         {
             // 일반적으로 Nested 깊이 < 4
@@ -312,7 +312,7 @@ internal static class StringPreprocessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string RemoveBrackets(string input)
     {
-        if (string.IsNullOrEmpty(input)) 
+        if (string.IsNullOrEmpty(input))
             return input;
 
         // Fast Path: 대괄호가 없으면 원본 반환 (할당 0)
@@ -324,12 +324,12 @@ internal static class StringPreprocessor
         int removeCount = 0;
         foreach (char c in input)
         {
-            if (c == '[' || c == ']') 
+            if (c == '[' || c == ']')
                 removeCount++;
         }
-        
+
         int newLength = input.Length - removeCount;
-        if (newLength == 0) 
+        if (newLength == 0)
             return string.Empty;
 
         // 2. string.Create로 단일 할당 생성
@@ -353,11 +353,13 @@ internal static class StringPreprocessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ReadOnlySpan<char> Sanitize(ReadOnlySpan<char> span)
     {
-        if (span.IsEmpty) return ReadOnlySpan<char>.Empty;
+        if (span.IsEmpty)
+            return ReadOnlySpan<char>.Empty;
 
         // 1. 앞뒤 공백 제거
         span = TrimAllWhitespace(span);
-        if (span.IsEmpty) return ReadOnlySpan<char>.Empty;
+        if (span.IsEmpty)
+            return ReadOnlySpan<char>.Empty;
 
         // 2. NULL 문자(\0) 이후 절삭 (C++ 연동 데이터 등에서 발생 가능)
         int nullIndex = span.IndexOf('\0');
@@ -374,7 +376,8 @@ internal static class StringPreprocessor
     private static ReadOnlySpan<char> TrimAllWhitespace(ReadOnlySpan<char> span)
     {
         int start = span.IndexOfAnyExcept(s_whitespace);
-        if (start < 0) return ReadOnlySpan<char>.Empty;
+        if (start < 0)
+            return ReadOnlySpan<char>.Empty;
 
         int end = span.LastIndexOfAnyExcept(s_whitespace);
         return span.Slice(start, end - start + 1);

@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // File: Lib.Db/Contracts/Models/TvpModels.cs
 // Role: TVP(Table-Valued Parameter) 모델, 접근자, 메타데이터 특성 정의
 // Env : .NET 10 / C# 14
@@ -123,7 +123,7 @@ public record TvpAccessors
     /// <returns>TVP 바인딩에 사용할 스키마 테이블</returns>
     public static DataTable BuildSchemaTable(PropertyInfo[] props)
     {
-        var schemaTable = new DataTable();
+        DataTable schemaTable = new DataTable();
 
         // --------------------------------------------------------------------
         // 1) 기본 식별 정보: 컬럼명/순서/타입/NULL 허용 여부
@@ -156,10 +156,10 @@ public record TvpAccessors
         // --------------------------------------------------------------------
         for (int i = 0; i < props.Length; i++)
         {
-            var prop = props[i];
+            PropertyInfo prop = props[i];
 
             // Nullable<T>이면 실제 타입(T)로, 아니면 원 타입 그대로 사용
-            var underlyingType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+            Type underlyingType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
 
             // ----------------------------------------------------------------
             // [Hotfix] .NET 10 Half 타입 지원
@@ -174,7 +174,7 @@ public record TvpAccessors
             }
 
             // 참조형은 기본적으로 Nullable, 값형은 Nullable<T>인 경우만 Nullable로 판단
-            var isNullable = !prop.PropertyType.IsValueType ||
+            bool isNullable = !prop.PropertyType.IsValueType ||
                              Nullable.GetUnderlyingType(prop.PropertyType) is not null;
 
             // 기본값: 미지정(-1), 정밀도/스케일(0)
@@ -183,8 +183,8 @@ public record TvpAccessors
             int size = -1;
 
             // 선택적 메타데이터(특성) 읽기
-            var precAttr = prop.GetCustomAttribute<TvpPrecisionAttribute>();
-            var lengthAttr = prop.GetCustomAttribute<TvpLengthAttribute>();
+            TvpPrecisionAttribute? precAttr = prop.GetCustomAttribute<TvpPrecisionAttribute>();
+            TvpLengthAttribute? lengthAttr = prop.GetCustomAttribute<TvpLengthAttribute>();
 
             // ----------------------------------------------------------------
             // (A) Decimal / Money 계열: Precision/Scale 설정

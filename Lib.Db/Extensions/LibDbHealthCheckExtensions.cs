@@ -33,7 +33,7 @@ public static class LibDbHealthCheckExtensions
     {
         return builder.AddCheck<ThrottledDbHealthCheck>(
             name,
-            tags: tags.Length > 0 ? tags: new[] { "db", "ready" });
+            tags: tags.Length > 0 ? tags : new[] { "db", "ready" });
     }
 
     /// <summary>
@@ -52,7 +52,7 @@ public static class LibDbHealthCheckExtensions
 
         private readonly IDbConnectionFactory _connFactory;
         private readonly LibDbOptions _options;
-        private readonly object _lock = new();
+        private readonly Lock _lock = new();
 
         public ThrottledDbHealthCheck(
             IDbConnectionFactory connFactory,
@@ -75,8 +75,8 @@ public static class LibDbHealthCheckExtensions
                 return s_lastResult;
             }
 
-            // 2. 실제 DB 검사 (락을 통해 중복 실행 방지)
-            if (Monitor.TryEnter(_lock))
+            // 2. 실제 DB 검사 (Lock을 통해 중복 실행 방지)
+            if (_lock.TryEnter())
             {
                 try
                 {
@@ -85,11 +85,11 @@ public static class LibDbHealthCheckExtensions
                         return s_lastResult;
 
                     // 첫 번째 연결 문자열 사용
-                    var firstInstance = _options.ConnectionStrings.Keys.FirstOrDefault()
+                    string? firstInstance = _options.ConnectionStrings.Keys.FirstOrDefault()
                         ?? throw new InvalidOperationException("HealthCheck: 설정된 DB 인스턴스가 없습니다.");
 
-                    await using var conn = await _connFactory.CreateConnectionAsync(firstInstance, ct).ConfigureAwait(false);
-                    await using var cmd = conn.CreateCommand();
+                    await using SqlConnection conn = await _connFactory.CreateConnectionAsync(firstInstance, ct).ConfigureAwait(false);
+                    await using SqlCommand cmd = conn.CreateCommand();
                     cmd.CommandText = "SELECT 1";
                     cmd.CommandTimeout = 2; // 2초 초과 시 실패 간주
                     await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
@@ -104,7 +104,7 @@ public static class LibDbHealthCheckExtensions
                 }
                 finally
                 {
-                    Monitor.Exit(_lock);
+                    _lock.Exit();
                 }
             }
 

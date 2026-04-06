@@ -1,3 +1,9 @@
+// ============================================================================
+// 파일: Lib.Db/Infrastructure/Resilience/AdaptivePolicyFactory.cs
+// 설명: 적응형 복원력 정책 팩토리 — Polly 기반 재시도/서킷브레이커 정책 생성
+// 대상: .NET 10 / C# 14
+// ============================================================================
+
 using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
@@ -12,7 +18,7 @@ namespace Lib.Db.Infrastructure.Resilience;
 /// - 일시적 오류(Transient Error) 패턴을 학습하여 Retry 간격(Exponential Backoff)을 조절합니다.
 /// </para>
 /// </summary>
-public class AdaptivePolicyFactory
+public sealed class AdaptivePolicyFactory
 {
     private readonly ILogger<AdaptivePolicyFactory> _logger;
     private readonly LibDbOptions _options;
@@ -31,10 +37,10 @@ public class AdaptivePolicyFactory
     /// </summary>
     public ResiliencePipeline CreateResiliencePipeline(string key)
     {
-        var builder = new ResiliencePipelineBuilder();
+        ResiliencePipelineBuilder builder = new ResiliencePipelineBuilder();
 
         // 1. 적응형 Retry 전략
-        var retryStrategy = new RetryStrategyOptions
+        RetryStrategyOptions retryStrategy = new RetryStrategyOptions
         {
             ShouldHandle = new PredicateBuilder().Handle<Exception>(), // 모든 예외 핸들링 (데모용)
             MaxRetryAttempts = _options.EnableResilience ? 3 : 1,
@@ -43,7 +49,7 @@ public class AdaptivePolicyFactory
             OnRetry = args =>
             {
                 Interlocked.Increment(ref s_failureCount);
-                _logger.LogWarning("재시도(Adaptive) 발생. 현재 실패 카운트: {Count}. 대기: {Delay}", 
+                _logger.LogWarning("재시도(Adaptive) 발생. 현재 실패 카운트: {Count}. 대기: {Delay}",
                     s_failureCount, args.RetryDelay);
                 return ValueTask.CompletedTask;
             }

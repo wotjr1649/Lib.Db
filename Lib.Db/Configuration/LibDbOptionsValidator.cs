@@ -21,16 +21,65 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
 {
     public ValidateOptionsResult Validate(string? name, LibDbOptions options)
     {
-        var errors = new List<string>(capacity: 10);
+        List<string> errors = new List<string>(capacity: 10);
 
-        // [1] 연결 문자열 필수 검증
-        if (options.ConnectionStrings == null || options.ConnectionStrings.Count == 0)
-            errors.Add("최소 1개 이상의 연결 문자열이 등록되어야 합니다. appsettings.json의 'LibDb:ConnectionStrings' 섹션을 확인하세요.");
+        // [1] ConnectionStringNames 검증
+        if (options.ConnectionStringNames is not { Count: > 0 })
+        {
+            errors.Add("최소 1개 이상의 연결 문자열 이름이 필요합니다.");
+        }
+        else
+        {
+            HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < options.ConnectionStringNames.Count; i++)
+            {
+                string csName = options.ConnectionStringNames[i];
+
+                // 공백/빈 문자열 검증
+                if (string.IsNullOrWhiteSpace(csName))
+                {
+                    errors.Add($"ConnectionStringNames[{i}]가 비어있거나 공백입니다.");
+                    continue;
+                }
+
+                // 중복 검증
+                if (!seen.Add(csName))
+                {
+                    errors.Add($"ConnectionStringNames에 중복 키 '{csName}'이(가) 있습니다.");
+                    continue;
+                }
+
+                // ConnectionStrings에 키 존재 검증
+                if (!options.ConnectionStrings.TryGetValue(csName, out string? connStr))
+                {
+                    string registeredKeys = string.Join(", ", options.ConnectionStrings.Keys);
+                    errors.Add($"ConnectionStringNames의 '{csName}'이(가) ConnectionStrings에 없습니다. 등록된 키: [{registeredKeys}]");
+                    continue;
+                }
+
+                // 빈 연결 문자열 검증
+                if (string.IsNullOrWhiteSpace(connStr))
+                {
+                    errors.Add($"'{csName}'의 연결 문자열이 비어있습니다.");
+                    continue;
+                }
+
+                // 연결 문자열 형식 검증
+                try
+                {
+                    Microsoft.Data.SqlClient.SqlConnectionStringBuilder builder = new(connStr);
+                }
+                catch (ArgumentException ex)
+                {
+                    errors.Add($"'{csName}'의 연결 문자열 형식이 잘못되었습니다: {ex.Message}");
+                }
+            }
+        }
 
         // [2] Resilience 설정 검증
         if (options.EnableResilience)
         {
-            var r = options.Resilience;
+            LibDbOptions.ResilienceOptions r = options.Resilience;
 
             if (r.MaxRetryCount < 0)
                 errors.Add("Resilience.MaxRetryCount는 0 이상이어야 합니다.");
@@ -54,7 +103,7 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
         // [3] Chaos 설정 검증
         if (options.Chaos.Enabled)
         {
-            var c = options.Chaos;
+            ChaosOptions c = options.Chaos;
 
             if (c.MinLatencyMs > c.MaxLatencyMs)
                 errors.Add($"Chaos.MinLatencyMs({c.MinLatencyMs})는 MaxLatencyMs({c.MaxLatencyMs}) 이하여야 합니다.");

@@ -44,22 +44,24 @@ public sealed class DbFirstTvpGenerator : IIncrementalGenerator
 
     private static void Execute(SourceProductionContext spc, (ImmutableArray<INamedTypeSymbol> Classes, string? SchemaJson) input)
     {
-        var (classes, json) = input;
+        (ImmutableArray<INamedTypeSymbol> classes, string? json) = input;
         if (classes.IsDefaultOrEmpty) return;
         if (string.IsNullOrEmpty(json)) return;
 
         // JSON 파싱 (MiniParser)
-        var schema = MiniJsonParser.Parse(json!);
+        SchemaRoot? schema = MiniJsonParser.Parse(json!);
         if (schema == null) return;
 
-        foreach (var classSymbol in classes)
+        foreach (INamedTypeSymbol classSymbol in classes)
         {
-            var options = GetAttributeOptions(classSymbol);
-            if (options.TvpName is null) continue;
+            spc.CancellationToken.ThrowIfCancellationRequested();
 
-            if (schema.Tvps.TryGetValue(options.TvpName, out var columns))
+            (string? tvpName, bool usePascalCase) = GetAttributeOptions(classSymbol);
+            if (tvpName is null) continue;
+
+            if (schema.Tvps.TryGetValue(tvpName, out List<ColumnDef>? columns))
             {
-                var code = GenerateClass(classSymbol, columns, options.UsePascalCase);
+                string code = GenerateClass(classSymbol, columns, usePascalCase);
                 spc.AddSource($"{classSymbol.Name}.Generated.cs", SourceText.From(code, Encoding.UTF8));
             }
             else
@@ -116,7 +118,7 @@ public sealed class DbFirstTvpGenerator : IIncrementalGenerator
         foreach (var col in columns)
         {
             var propName = usePascal ? ToPascalCase(col.Name) : col.Name;
-            var typeName = MapSqlTypeToCSharp(col.Type);
+            string typeName = TypeMappingRegistry.MapSqlTypeToCSharp(col.Type);
             
             sb.AppendLine("        /// <summary>");
             sb.AppendLine($"        /// {col.Name} ({col.Type})");
@@ -136,26 +138,7 @@ public sealed class DbFirstTvpGenerator : IIncrementalGenerator
         return char.ToUpperInvariant(name[0]) + name.Substring(1);
     }
 
-    private static string MapSqlTypeToCSharp(string sqlType)
-    {
-        return sqlType.ToLowerInvariant() switch
-        {
-            "bigint" => "long",
-            "int" => "int",
-            "smallint" => "short",
-            "tinyint" => "byte",
-            "bit" => "bool",
-            "decimal" or "numeric" or "money" => "decimal",
-            "float" => "double",
-            "real" => "float",
-            "datetime" or "datetime2" or "date" => "DateTime",
-            "datetimeoffset" => "DateTimeOffset",
-            "varchar" or "nvarchar" or "char" or "nchar" or "text" or "ntext" => "string",
-            "uniqueidentifier" => "Guid",
-            "binary" or "varbinary" or "image" => "byte[]",
-            _ => "object"
-        };
-    }
+    // ✅ MapSqlTypeToCSharp → TypeMappingRegistry.MapSqlTypeToCSharp로 통합 (단일 진실 원천)
 }
 
 // --- 별도 파일로 분리해도 되지만 편의상 내부에 포함 (Private Helpers) ---

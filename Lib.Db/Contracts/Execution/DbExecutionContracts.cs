@@ -1,20 +1,17 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일명: Lib.Db/Contracts/Execution/DbExecutionContracts.cs
 // 설명  : 데이터베이스 실행기 핵심 계약 + 실행 모델 통합 정의
 // 대상  : .NET 10 / C# 14
 // 역할  :
 //   - 표준 쿼리/명령 실행의 단일 진입점(IDbExecutor)
-//   - 대량(Bulk) 처리 및 파이프라인 기반 처리
-//   - 장애 발생 시 자동 복구(Resumable) 스트림 제공
 //   - 실행 파이프라인 공용 모델(SchemaResolutionMode, DbExecutionOptions, DbRequest)
 // ============================================================================
 
 #nullable enable
 
-using Lib;
 using System.Data;
 using System.Runtime.CompilerServices;
-using System.Threading.Channels;
+using Lib;
 
 namespace Lib.Db.Contracts.Execution;
 
@@ -34,7 +31,7 @@ namespace Lib.Db.Contracts.Execution;
 /// 실제 DB 작업을 수행합니다.
 /// </para>
 /// </summary>
-public interface IDbExecutor
+internal interface IDbExecutor
 {
     #region 표준 쿼리 메서드
 
@@ -107,116 +104,6 @@ public interface IDbExecutor
         CommandType commandType,
         DbExecutionOptions options,
         CancellationToken ct);
-
-    #endregion
-
-    #region 대량 처리 메서드
-
-    /// <summary>
-    /// <see cref="Microsoft.Data.SqlClient.SqlBulkCopy"/>를 사용하여
-    /// 지정된 테이블에 데이터를 고속 삽입합니다.
-    /// <para>
-    /// 대량 적재(ETL, 인터페이스 수신 등)에 최적화된 경로입니다.
-    /// </para>
-    /// </summary>
-    Task BulkInsertAsync<T>(
-        string destinationTableName,
-        IEnumerable<T> data,
-        string instanceHash,
-        CancellationToken ct);
-
-    /// <summary>
-    /// 임시 테이블 + MERGE 패턴을 사용하여
-    /// 대량 업데이트를 수행합니다.
-    /// </summary>
-    Task BulkUpdateAsync<T>(
-        string targetTableName,
-        IEnumerable<T> data,
-        string[] keyColumns,
-        string[] updateColumns,
-        string instanceHash,
-        CancellationToken ct);
-
-    /// <summary>
-    /// 임시 테이블을 사용하여
-    /// 대량 삭제를 수행합니다.
-    /// </summary>
-    Task BulkDeleteAsync<T>(
-        string targetTableName,
-        IEnumerable<T> data,
-        string[] keyColumns,
-        string instanceHash,
-        CancellationToken ct);
-
-    #endregion
-
-    #region 파이프라인 및 복구형 처리 메서드
-
-    /// <summary>
-    /// [복구형 스트림]
-    /// 네트워크 단절 또는 일시 오류 발생 시,
-    /// 마지막 커서(Cursor) 위치부터 쿼리를 자동으로 재개하는
-    /// 복원형(Resumable) 비동기 스트림을 생성합니다.
-    /// <para>
-    /// <b>TOP 기반 배치 페이징 완전 지원</b>
-    /// <list type="bullet">
-    /// <item>각 배치에서 1건 이상 조회되면 마지막 커서로 다음 배치 요청</item>
-    /// <item>특정 배치에서 0건 조회 시 전체 스트림 종료</item>
-    /// </list>
-    /// </para>
-    /// </summary>
-    /// <typeparam name="TCursor">커서 타입(ID, Timestamp 등)</typeparam>
-    /// <typeparam name="TResult">결과 타입</typeparam>
-    /// <param name="queryBuilder">커서 기반 쿼리 생성 함수</param>
-    /// <param name="cursorSelector">결과에서 다음 커서를 추출하는 함수</param>
-    /// <param name="instanceHash">DB 인스턴스 식별자</param>
-    /// <param name="initialCursor">초기 커서 값</param>
-    /// <param name="ct">취소 토큰</param>
-    IAsyncEnumerable<TResult> QueryResumableAsync<TCursor, TResult>(
-        Func<TCursor, string> queryBuilder,
-        Func<TResult, TCursor> cursorSelector,
-        string instanceHash,
-        TCursor initialCursor = default!,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// [파이프라인]
-    /// <see cref="ChannelReader{T}"/>를 통해 실시간으로 유입되는 데이터를
-    /// 내부 버퍼에 모아 Batch 단위로 Bulk Insert를 수행합니다.
-    /// </summary>
-    Task BulkInsertPipelineAsync<T>(
-        string tableName,
-        ChannelReader<T> reader,
-        string instanceHash,
-        int batchSize = 5000,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// [파이프라인]
-    /// Channel 기반 입력 데이터를 Batch 단위로 묶어
-    /// Bulk Update를 수행합니다.
-    /// </summary>
-    Task BulkUpdatePipelineAsync<T>(
-        string tableName,
-        ChannelReader<T> reader,
-        string[] keyColumns,
-        string[] updateColumns,
-        string instanceHash,
-        int batchSize = 5000,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// [파이프라인]
-    /// Channel 기반 입력 데이터를 Batch 단위로 묶어
-    /// Bulk Delete를 수행합니다.
-    /// </summary>
-    Task BulkDeletePipelineAsync<T>(
-        string tableName,
-        ChannelReader<T> reader,
-        string[] keyColumns,
-        string instanceHash,
-        int batchSize = 5000,
-        CancellationToken ct = default);
 
     #endregion
 }

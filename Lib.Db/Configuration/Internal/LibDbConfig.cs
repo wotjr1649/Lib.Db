@@ -18,19 +18,12 @@ namespace Lib.Db.Configuration.Internal;
 /// </summary>
 internal sealed class LibDbConfig
 {
-    // [1] 연결 및 인프라
-    public Dictionary<string, string> ConnectionStrings
-    {
-        get;
-        set => field = value ?? throw new ArgumentNullException(nameof(value));
-    } = [];
-
-    // [2] 연결 별칭 (Smart Pointer)
-    public string ConnectionStringName { get; set; } = "Default";
+    // [1] 연결 문자열 이름 목록 (Bind() 시 Add로 추가되므로 빈 리스트 초기화)
+    public List<string> ConnectionStringNames { get; set; } = [];
 
     // [3] 스키마 캐싱
     public bool EnableSchemaCaching { get; set; } = true;
-    
+
     public int SchemaRefreshIntervalSeconds
     {
         get;
@@ -117,7 +110,8 @@ internal sealed class LibDbConfig
         get;
         set
         {
-            if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), "0ms 이상이어야 합니다.");
+            if (value < 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "0ms 이상이어야 합니다.");
             field = value;
         }
     } = 100;
@@ -127,7 +121,8 @@ internal sealed class LibDbConfig
         get;
         set
         {
-            if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), "0ms 이상이어야 합니다.");
+            if (value < 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "0ms 이상이어야 합니다.");
             field = value;
         }
     } = 5000;
@@ -153,7 +148,8 @@ internal sealed class LibDbConfig
         get;
         set
         {
-            if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value), "0보다 커야 합니다.");
+            if (value <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "0보다 커야 합니다.");
             field = value;
         }
     } = 5_000;
@@ -173,7 +169,8 @@ internal sealed class LibDbConfig
         get;
         set
         {
-            if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value), "0초보다 커야 합니다.");
+            if (value <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "0초보다 커야 합니다.");
             field = value;
         }
     } = 1;
@@ -183,7 +180,8 @@ internal sealed class LibDbConfig
         get;
         set
         {
-            if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value), "0초보다 커야 합니다.");
+            if (value <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "0초보다 커야 합니다.");
             field = value;
         }
     } = 2;
@@ -198,7 +196,8 @@ internal sealed class LibDbConfig
         get;
         set
         {
-            if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value), "0보다 커야 합니다.");
+            if (value <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "0보다 커야 합니다.");
             field = value;
         }
     } = 1000;
@@ -208,20 +207,21 @@ internal sealed class LibDbConfig
         get;
         set
         {
-            if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value), "0ms보다 커야 합니다.");
+            if (value <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "0ms보다 커야 합니다.");
             field = value;
         }
     } = 60000;
 
-    public int PrewarmMaxConcurrency 
-    { 
-        get; 
-        set 
+    public int PrewarmMaxConcurrency
+    {
+        get;
+        set
         {
             if (value is < 0 or > 1024)
                 throw new ArgumentOutOfRangeException(nameof(value), value, "0 ~ 1024 사이여야 합니다.");
             field = value;
-        } 
+        }
     } = 0;
 
     /// <summary>
@@ -229,12 +229,11 @@ internal sealed class LibDbConfig
     /// </summary>
     public void ApplyTo(LibDbOptions options)
     {
-        // ... (이전과 동일한 매핑 로직) ...
-        // [1]
-        options.ConnectionStrings = this.ConnectionStrings;
-        
-        // [2]
-        options.ConnectionStringName = this.ConnectionStringName;
+        // [1] 연결 문자열 이름 목록 (Bind()로 비어있으면 기본값 유지)
+        if (this.ConnectionStringNames is { Count: > 0 })
+        {
+            options.ConnectionStringNames = this.ConnectionStringNames;
+        }
 
         // [3]
         options.EnableSchemaCaching = this.EnableSchemaCaching;
@@ -300,24 +299,25 @@ internal sealed class LibDbConfig
 
 internal sealed class SharedMemoryCacheConfig
 {
-    public string BasePath 
-    { 
-        get; 
-        set => field = string.IsNullOrWhiteSpace(value) 
-            ? throw new ArgumentException("Null/Empty 불가", nameof(value)) 
-            : value; 
+    public string BasePath
+    {
+        get;
+        set => field = string.IsNullOrWhiteSpace(value)
+            ? throw new ArgumentException("Null/Empty 불가", nameof(value))
+            : value;
     } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Lib.Db.Cache");
 
     public Lib.Db.Caching.CacheScope Scope { get; set; } = Lib.Db.Caching.CacheScope.User;
 
-    public long MaxCacheSizeBytes 
-    { 
-        get; 
-        set 
+    public long MaxCacheSizeBytes
+    {
+        get;
+        set
         {
-            if (value < 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(value), "1MB 이상이어야 합니다.");
+            if (value < 1024 * 1024)
+                throw new ArgumentOutOfRangeException(nameof(value), "1MB 이상이어야 합니다.");
             field = value;
-        } 
+        }
     } = 1024L * 1024L * 1024L;
 
     public string? IsolationKey { get; set; }

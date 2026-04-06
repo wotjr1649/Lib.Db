@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // File: Lib.Db.Execution/Tvp/TvpMetadata.cs
 // Role: TVP 접근자(Accessor)의 런타임 관리, 캐싱, 레지스트리
 // Env : .NET 10 / C# 14
@@ -9,12 +9,12 @@
 
 #nullable enable
 
-using Lib.Db.Contracts.Models;
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Lib.Db.Contracts.Models;
 
 namespace Lib.Db.Execution.Tvp;
 
@@ -52,7 +52,7 @@ public static class TvpAccessorRegistry
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryGet<T>(out TvpAccessors<T>? accessors)
     {
-        if (s_registry.TryGetValue(typeof(T), out var baseAccessors))
+        if (s_registry.TryGetValue(typeof(T), out object? baseAccessors))
         {
             accessors = (TvpAccessors<T>)baseAccessors;
             return true;
@@ -67,7 +67,7 @@ public static class TvpAccessorRegistry
     /// </summary>
     private static void ValidateAgainstFallback<T>(TvpAccessors<T> sgAccessors)
     {
-        var fallbackAccessors = TvpAccessorCache.CompileAccessors<T>();
+        TvpAccessors<T> fallbackAccessors = TvpAccessorCache.CompileAccessors<T>();
 
         // 1. 프로퍼티 개수 검증
         if (sgAccessors.Properties.Length != fallbackAccessors.Properties.Length)
@@ -81,12 +81,12 @@ public static class TvpAccessorRegistry
         // 2. 프로퍼티 이름 및 순서 검증
         for (int i = 0; i < sgAccessors.Properties.Length; i++)
         {
-            var sgProp = sgAccessors.Properties[i];
-            var fbProp = fallbackAccessors.Properties[i];
+            PropertyInfo sgProp = sgAccessors.Properties[i];
+            PropertyInfo fbProp = fallbackAccessors.Properties[i];
 
             if (sgProp.Name != fbProp.Name)
             {
-                var sb = new System.Text.StringBuilder();
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
                 sb.AppendLine($"[TVP 무결성 실패] {typeof(T).Name}");
                 sb.AppendLine($"인덱스 [{i}]에서 프로퍼티 불일치 발생");
                 sb.AppendLine($" - SG (SourceGen) : {sgProp.Name}");
@@ -141,7 +141,8 @@ public static class TvpAccessorCache
     public static TvpAccessors<T> GetTypedAccessors<T>()
     {
         // 1. Registry 확인 (Source Generator로 등록된 것이 있으면 최우선 사용)
-        if (TvpAccessorRegistry.TryGet<T>(out var gen)) return gen!;
+        if (TvpAccessorRegistry.TryGet<T>(out TvpAccessors<T>? gen))
+            return gen!;
 
         // 2. Fallback (런타임 생성 및 캐싱)
         return (TvpAccessors<T>)GetOrAddFallback<T>();
@@ -155,11 +156,13 @@ public static class TvpAccessorCache
 
     private static object GetOrAddFallback<T>()
     {
-        var type = typeof(T);
-        if (s_fallbackCache.TryGetValue(type, out var accessors)) return accessors;
+        Type type = typeof(T);
+        if (s_fallbackCache.TryGetValue(type, out object? accessors))
+            return accessors;
 
         // Bounded Cache: 용량 초과 시 전체 초기화 (LRU보다 저비용)
-        if (s_fallbackCache.Count >= s_maxCacheSize) s_fallbackCache.Clear();
+        if (s_fallbackCache.Count >= s_maxCacheSize)
+            s_fallbackCache.Clear();
 
         return s_fallbackCache.GetOrAdd(type, static _ => CompileAccessors<T>());
     }
@@ -175,21 +178,21 @@ public static class TvpAccessorCache
     internal static TvpAccessors<T> CompileAccessors<T>()
     {
         // 1. 프로퍼티 추출 및 정렬 (MetadataToken 순서 준수)
-        var props = GetAllPublicReadablePropsRuntime(typeof(T)).ToArray();
+        PropertyInfo[] props = GetAllPublicReadablePropsRuntime(typeof(T)).ToArray();
         int count = props.Length;
 
-        var typedAccessors = new Func<T, object?>[count];
-        var objAccessors = new Func<object, object?>[count];
-        var ordinalBuilder = new Dictionary<string, int>(count, StringComparer.OrdinalIgnoreCase);
+        Func<T, object?>[] typedAccessors = new Func<T, object?>[count];
+        Func<object, object?>[] objAccessors = new Func<object, object?>[count];
+        Dictionary<string, int> ordinalBuilder = new Dictionary<string, int>(count, StringComparer.OrdinalIgnoreCase);
 
         // 2. 스키마 테이블 생성 (TvpModels.cs의 공통 로직 사용)
         //    [중요] 여기서 Half -> Float 변환 등 메타데이터 보정이 수행됩니다.
-        var schemaTable = TvpAccessors.BuildSchemaTable(props);
+        DataTable schemaTable = TvpAccessors.BuildSchemaTable(props);
 
         // 3. 접근자 델리게이트 생성
         for (int i = 0; i < count; i++)
         {
-            var prop = props[i];
+            PropertyInfo prop = props[i];
             typedAccessors[i] = CreateTypedGetterDelegate<T>(prop);
             objAccessors[i] = CreateObjectGetterDelegate<T>(prop);
 
@@ -198,7 +201,7 @@ public static class TvpAccessorCache
         }
 
         // 4. 명시적 SQL 타입명 확인 ([TvpRow(TypeName = "...")]])
-        var attr = typeof(T).GetCustomAttribute<TvpRowAttribute>();
+        TvpRowAttribute? attr = typeof(T).GetCustomAttribute<TvpRowAttribute>();
         string? sqlTypeName = attr?.TypeName;
 
         return new TvpAccessors<T>
@@ -219,13 +222,13 @@ public static class TvpAccessorCache
     /// </summary>
     private static List<PropertyInfo> GetAllPublicReadablePropsRuntime(Type t)
     {
-        var list = new List<PropertyInfo>();
-        var current = t;
+        List<PropertyInfo> list = new List<PropertyInfo>();
+        Type? current = t;
 
         // 상속 계층 순회
         while (current is not null && current != typeof(object))
         {
-            var props = current.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            IEnumerable<PropertyInfo> props = current.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                                .Where(p => p.CanRead && p.GetIndexParameters().Length == 0);
             list.AddRange(props);
             current = current.BaseType;
@@ -239,29 +242,31 @@ public static class TvpAccessorCache
     // Expression Tree를 사용하여 Typed Getter 생성 (T -> object)
     private static Func<T, object?> CreateTypedGetterDelegate<T>(PropertyInfo prop)
     {
-        var p = Expression.Parameter(typeof(T), "x");
-        var propAccess = Expression.Property(p, prop);
-        var convert = Expression.Convert(propAccess, typeof(object));
+        ParameterExpression p = Expression.Parameter(typeof(T), "x");
+        MemberExpression propAccess = Expression.Property(p, prop);
+        UnaryExpression convert = Expression.Convert(propAccess, typeof(object));
 
-        if (typeof(T).IsValueType) return Expression.Lambda<Func<T, object?>>(convert, p).Compile();
+        if (typeof(T).IsValueType)
+            return Expression.Lambda<Func<T, object?>>(convert, p).Compile();
 
-        var nullCheck = Expression.Equal(p, Expression.Constant(null, typeof(T)));
-        var body = Expression.Condition(nullCheck, Expression.Constant(null, typeof(object)), convert);
+        BinaryExpression nullCheck = Expression.Equal(p, Expression.Constant(null, typeof(T)));
+        ConditionalExpression body = Expression.Condition(nullCheck, Expression.Constant(null, typeof(object)), convert);
         return Expression.Lambda<Func<T, object?>>(body, p).Compile();
     }
 
     // Expression Tree를 사용하여 Object Getter 생성 (object -> object)
     private static Func<object, object?> CreateObjectGetterDelegate<T>(PropertyInfo prop)
     {
-        var p = Expression.Parameter(typeof(object), "o");
-        var cast = Expression.Convert(p, typeof(T));
-        var propAccess = Expression.Property(cast, prop);
-        var convert = Expression.Convert(propAccess, typeof(object));
+        ParameterExpression p = Expression.Parameter(typeof(object), "o");
+        UnaryExpression cast = Expression.Convert(p, typeof(T));
+        MemberExpression propAccess = Expression.Property(cast, prop);
+        UnaryExpression convert = Expression.Convert(propAccess, typeof(object));
 
-        if (typeof(T).IsValueType) return Expression.Lambda<Func<object, object?>>(convert, p).Compile();
+        if (typeof(T).IsValueType)
+            return Expression.Lambda<Func<object, object?>>(convert, p).Compile();
 
-        var nullCheck = Expression.Equal(p, Expression.Constant(null));
-        var body = Expression.Condition(nullCheck, Expression.Constant(null, typeof(object)), convert);
+        BinaryExpression nullCheck = Expression.Equal(p, Expression.Constant(null));
+        ConditionalExpression body = Expression.Condition(nullCheck, Expression.Constant(null, typeof(object)), convert);
         return Expression.Lambda<Func<object, object?>>(body, p).Compile();
     }
 

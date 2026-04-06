@@ -34,11 +34,11 @@ internal static class NegativeCache
     // Key: "DB해시:타입:객체명" 복합 키
     // Value: 재사용 가능한 사전 생성된 예외 객체
     private static readonly ConcurrentDictionary<string, InvalidOperationException> s_missingObjects = new();
-    
+
     // [설정 가능] 캐시가 보유할 수 있는 최대 항목 수 (기본값: 1000)
     // 메모리 누수를 방지하기 위한 안전장치입니다.
     private static int s_maxSize = 1000;
-    
+
     /// <summary>
     /// Negative Cache가 저장할 수 있는 최대 항목 수를 설정합니다.
     /// <para>
@@ -47,7 +47,7 @@ internal static class NegativeCache
     /// </summary>
     /// <param name="maxSize">최대 캐시 크기 (0보다 커야 함)</param>
     public static void Configure(int maxSize) => s_maxSize = maxSize > 0 ? maxSize : 1000;
-    
+
     /// <summary>
     /// 저장된 모든 Negative Cache 항목을 제거합니다.
     /// <para>
@@ -59,7 +59,7 @@ internal static class NegativeCache
     /// </para>
     /// </summary>
     public static void Clear() => s_missingObjects.Clear();
-    
+
     /// <summary>
     /// 특정 객체가 DB에 존재하지 않음을 캐시에 기록합니다.
     /// <para>
@@ -80,17 +80,17 @@ internal static class NegativeCache
         {
             s_missingObjects.Clear();
         }
-        
+
         string key = BuildKey(dbHash, objectName, objectType);
-        
+
         // [최적화] 예외 객체를 미리 생성하여 값으로 저장 (Flyweight)
         // 나중에 조회 시 새로 생성하지 않고 이 인스턴스를 즉시 던집니다.
-        var ex = new InvalidOperationException(
+        InvalidOperationException ex = new InvalidOperationException(
             $"[Negative Cache] {objectType} '{objectName}'이(가) DB '{dbHash}'에 존재하지 않습니다. (이전에 확인됨)");
-        
+
         s_missingObjects[key] = ex;
     }
-    
+
     /// <summary>
     /// 지정된 객체가 '존재하지 않음'으로 캐시되어 있는지 확인하고, 그렇다면 즉시 예외를 던집니다.
     /// <para>
@@ -111,18 +111,18 @@ internal static class NegativeCache
     public static bool ThrowIfCached(string dbHash, string objectName, string objectType)
     {
         string key = BuildKey(dbHash, objectName, objectType);
-        
-        if (s_missingObjects.TryGetValue(key, out var cachedException))
+
+        if (s_missingObjects.TryGetValue(key, out InvalidOperationException? cachedException))
         {
             // [Fail-Fast] 캐시된 예외를 즉시 던짐
             // 스택 트레이스는 이 지점에서 생성된 것이 아니라 RecordMissing 시점의 문맥을 가질 수 있으나,
             // '존재하지 않음'이라는 사실 자체는 변하지 않으므로 문제없음.
             throw cachedException;
         }
-        
+
         return false; // 캐시에 없으므로 DB 조회 시도 허용
     }
-    
+
     /// <summary>
     /// [내부 헬퍼] 검색을 위한 복합 키 문자열을 생성합니다.
     /// <para>형식: <c>{dbHash}:{objectType}:{objectName}</c></para>

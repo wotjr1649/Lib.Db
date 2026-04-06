@@ -1,3 +1,9 @@
+// ============================================================================
+// 파일: Lib.Db/Contracts/Models/GenerateTvpFromDbAttribute.cs
+// 설명: DB 스키마 기반 TVP 소스 생성 속성 — 컴파일 타임 TVP 코드 자동 생성 트리거
+// 대상: .NET 10 / C# 14
+// ============================================================================
+
 using System;
 
 namespace Lib.Db.Contracts.Models;

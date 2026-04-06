@@ -39,7 +39,7 @@ internal sealed class DefaultTransientSqlErrorDetector : ITransientSqlErrorDetec
             // 컴렉션의 오류 중 일시적 오류가 있는지 확인
             foreach (SqlError error in sqlEx.Errors)
             {
-                if (IsTransientError(error.Number)) 
+                if (IsTransientError(error.Number))
                     return true;
             }
             return false;

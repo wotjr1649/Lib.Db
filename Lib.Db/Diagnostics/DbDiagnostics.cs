@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일: Lib.Db/Diagnostics/DbDiagnostics.cs
 // 설명: 무할당(Zero-Allocation) 분산 추적 및 고성능 로깅 + 메트릭 허브
 // 대상: .NET 10 / C# 14
@@ -62,10 +62,10 @@ public readonly record struct DbRequestInfo(
             );
         }
 
-        var value = context.Value;
+        DbExecutionContext value = context.Value;
 
         // 1) Operation: 명시값 우선, 없으면 CommandType 기준으로 유추
-        var op = !string.IsNullOrWhiteSpace(operation)
+        string op = !string.IsNullOrWhiteSpace(operation)
             ? operation
             : value.CommandType switch
             {
@@ -76,12 +76,12 @@ public readonly record struct DbRequestInfo(
             };
 
         // 2) Target: 명시값 없으면 CommandText 사용
-        var tgt = !string.IsNullOrWhiteSpace(target)
+        string tgt = !string.IsNullOrWhiteSpace(target)
             ? target
             : value.CommandText;
 
         // 3) CommandKind: CommandType 자체를 의미 있게 구분
-        var cmdKind = value.CommandType switch
+        string cmdKind = value.CommandType switch
         {
             CommandType.StoredProcedure => "StoredProcedure",
             CommandType.Text => "Text",
@@ -163,12 +163,14 @@ public ref struct FastDebugLogHandler
 
     public void AppendLiteral(string s)
     {
-        if (IsEnabled) _inner.AppendLiteral(s);
+        if (IsEnabled)
+            _inner.AppendLiteral(s);
     }
 
     public void AppendFormatted<T>(T value)
     {
-        if (IsEnabled) _inner.AppendFormatted(value);
+        if (IsEnabled)
+            _inner.AppendFormatted(value);
     }
 
     public string GetFormattedText()
@@ -190,12 +192,14 @@ public ref struct FastInfoLogHandler
 
     public void AppendLiteral(string s)
     {
-        if (IsEnabled) _inner.AppendLiteral(s);
+        if (IsEnabled)
+            _inner.AppendLiteral(s);
     }
 
     public void AppendFormatted<T>(T value)
     {
-        if (IsEnabled) _inner.AppendFormatted(value);
+        if (IsEnabled)
+            _inner.AppendFormatted(value);
     }
 
     public string GetFormattedText()
@@ -217,12 +221,14 @@ public ref struct FastWarnLogHandler
 
     public void AppendLiteral(string s)
     {
-        if (IsEnabled) _inner.AppendLiteral(s);
+        if (IsEnabled)
+            _inner.AppendLiteral(s);
     }
 
     public void AppendFormatted<T>(T value)
     {
-        if (IsEnabled) _inner.AppendFormatted(value);
+        if (IsEnabled)
+            _inner.AppendFormatted(value);
     }
 
     public string GetFormattedText()
@@ -359,24 +365,33 @@ public static class DbMetrics
     private static void FillTags(ref TagList tags, in DbRequestInfo info)
     {
         // 1. 필수 식별자
-        if (info.InstanceId is { Length: > 0 }) tags.Add(AttrInstanceId, info.InstanceId);
-        if (info.Operation is { Length: > 0 }) tags.Add(AttrDbOperation, info.Operation);
+        if (info.InstanceId is { Length: > 0 })
+            tags.Add(AttrInstanceId, info.InstanceId);
+        if (info.Operation is { Length: > 0 })
+            tags.Add(AttrDbOperation, info.Operation);
 
         // 2. OTel 표준 속성 (Rich Context)
-        if (info.DbSystem is { Length: > 0 }) tags.Add(AttrDbSystem, info.DbSystem);
-        if (info.DbName is { Length: > 0 }) tags.Add(AttrDbName, info.DbName);
-        if (info.DbUser is { Length: > 0 }) tags.Add(AttrDbUser, info.DbUser);
-        if (info.ServerAddress is { Length: > 0 }) tags.Add(AttrServerAddr, info.ServerAddress);
-        if (info.ServerPort.HasValue) tags.Add(AttrServerPort, info.ServerPort.Value);
+        if (info.DbSystem is { Length: > 0 })
+            tags.Add(AttrDbSystem, info.DbSystem);
+        if (info.DbName is { Length: > 0 })
+            tags.Add(AttrDbName, info.DbName);
+        if (info.DbUser is { Length: > 0 })
+            tags.Add(AttrDbUser, info.DbUser);
+        if (info.ServerAddress is { Length: > 0 })
+            tags.Add(AttrServerAddr, info.ServerAddress);
+        if (info.ServerPort.HasValue)
+            tags.Add(AttrServerPort, info.ServerPort.Value);
 
         // 3. 커스텀 속성 (CommandKind / Transaction / Correlation)
-        if (info.CommandKind is { Length: > 0 }) tags.Add(AttrCommandKind, info.CommandKind);
+        if (info.CommandKind is { Length: > 0 })
+            tags.Add(AttrCommandKind, info.CommandKind);
         tags.Add(AttrTransactional, info.IsTransactional);
         if (!string.IsNullOrWhiteSpace(info.CorrelationId))
             tags.Add(AttrCorrelationId, info.CorrelationId);
 
         // 4. 대상 객체 (테이블/뷰/TVP/프로시저 등)
-        if (info.Target is { Length: > 0 }) tags.Add(AttrDbTable, info.Target);
+        if (info.Target is { Length: > 0 })
+            tags.Add(AttrDbTable, info.Target);
     }
 
     // =========================================================================
@@ -388,7 +403,7 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionOpen()
     {
-        var info = DbRequestInfo.FromCurrentScope();
+        DbRequestInfo info = DbRequestInfo.FromCurrentScope();
         TrackConnectionOpen(in info);
     }
 
@@ -399,7 +414,7 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionClose()
     {
-        var info = DbRequestInfo.FromCurrentScope();
+        DbRequestInfo info = DbRequestInfo.FromCurrentScope();
         TrackConnectionClose(in info);
     }
 
@@ -414,7 +429,7 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackDuration(TimeSpan elapsed)
     {
-        var info = DbRequestInfo.FromCurrentScope();
+        DbRequestInfo info = DbRequestInfo.FromCurrentScope();
         TrackDuration(elapsed, in info);
     }
 
@@ -429,7 +444,7 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackRetry(string reason)
     {
-        var info = DbRequestInfo.FromCurrentScope();
+        DbRequestInfo info = DbRequestInfo.FromCurrentScope();
         TrackRetry(reason, in info);
     }
 
@@ -440,7 +455,7 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackBulkRows(long rows, string tableName)
     {
-        var info = DbRequestInfo.FromCurrentScope(operation: "BULK", target: tableName);
+        DbRequestInfo info = DbRequestInfo.FromCurrentScope(operation: "BULK", target: tableName);
         TrackBulkRows(rows, tableName, in info);
     }
 
@@ -451,7 +466,7 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackSchemaRefresh(bool success, string kind)
     {
-        var info = DbRequestInfo.FromCurrentScope(operation: "SCHEMA_REFRESH", target: kind);
+        DbRequestInfo info = DbRequestInfo.FromCurrentScope(operation: "SCHEMA_REFRESH", target: kind);
         TrackSchemaRefresh(success, kind, in info);
     }
 
@@ -462,7 +477,7 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackCacheHit(string kind)
     {
-        var info = DbRequestInfo.FromCurrentScope(operation: "SCHEMA_CACHE", target: kind);
+        DbRequestInfo info = DbRequestInfo.FromCurrentScope(operation: "SCHEMA_CACHE", target: kind);
         TrackCacheHit(kind, in info);
     }
 
@@ -473,7 +488,7 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackTvpUsage(long bytes, string tvpName)
     {
-        var info = DbRequestInfo.FromCurrentScope(operation: "TVP", target: tvpName);
+        DbRequestInfo info = DbRequestInfo.FromCurrentScope(operation: "TVP", target: tvpName);
         TrackTvpUsage(bytes, tvpName, in info);
     }
 
@@ -490,9 +505,10 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionOpen(in DbRequestInfo info)
     {
-        if (!s_enabled) return;
+        if (!s_enabled)
+            return;
 
-        var tags = new TagList();
+        TagList tags = new TagList();
         FillTags(ref tags, info);
         s_connActive.Add(1, tags);
     }
@@ -500,9 +516,10 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionClose(in DbRequestInfo info)
     {
-        if (!s_enabled) return;
+        if (!s_enabled)
+            return;
 
-        var tags = new TagList();
+        TagList tags = new TagList();
         FillTags(ref tags, info);
         s_connActive.Add(-1, tags);
     }
@@ -510,9 +527,10 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackDuration(TimeSpan elapsed, in DbRequestInfo info)
     {
-        if (!s_enabled) return;
+        if (!s_enabled)
+            return;
 
-        var tags = new TagList();
+        TagList tags = new TagList();
         FillTags(ref tags, info);
         s_queryDuration.Record(elapsed.TotalMilliseconds, tags);
     }
@@ -520,9 +538,10 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackRetry(string reason, in DbRequestInfo info)
     {
-        if (!s_enabled) return;
+        if (!s_enabled)
+            return;
 
-        var tags = new TagList { { AttrRetryReason, reason } };
+        TagList tags = new TagList { { AttrRetryReason, reason } };
         FillTags(ref tags, info);
         s_retries.Add(1, tags);
     }
@@ -530,9 +549,10 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackBulkRows(long rows, string tableName, in DbRequestInfo info)
     {
-        if (!s_enabled) return;
+        if (!s_enabled)
+            return;
 
-        var tags = new TagList();
+        TagList tags = new TagList();
         FillTags(ref tags, info);
 
         // 테이블명이 DbRequestInfo.Target에 없거나 다를 수 있으므로 명시적으로 덮어쓰기
@@ -544,9 +564,10 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackSchemaRefresh(bool success, string kind, in DbRequestInfo info)
     {
-        if (!s_enabled) return;
+        if (!s_enabled)
+            return;
 
-        var tags = new TagList
+        TagList tags = new TagList
         {
             { AttrSchemaKind, kind },
             { "success",      success }
@@ -559,9 +580,10 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackCacheHit(string kind, in DbRequestInfo info)
     {
-        if (!s_enabled) return;
+        if (!s_enabled)
+            return;
 
-        var tags = new TagList
+        TagList tags = new TagList
         {
             { AttrSchemaKind, kind },
             { AttrCacheHit,   true }
@@ -574,9 +596,10 @@ public static class DbMetrics
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackTvpUsage(long bytes, string tvpName, in DbRequestInfo info)
     {
-        if (!s_enabled) return;
+        if (!s_enabled)
+            return;
 
-        var tags = new TagList { { AttrTvpName, tvpName } };
+        TagList tags = new TagList { { AttrTvpName, tvpName } };
         FillTags(ref tags, info);
         s_tvpBytes.Add(bytes, tags);
     }
@@ -622,7 +645,8 @@ internal sealed class MonitoredSqlDataReader : DbDataReader
     /// </summary>
     public override async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
         _disposed = true;
 
         try
@@ -641,7 +665,8 @@ internal sealed class MonitoredSqlDataReader : DbDataReader
     /// </summary>
     protected override void Dispose(bool disposing)
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
         _disposed = true;
 
         try

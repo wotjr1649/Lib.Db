@@ -241,6 +241,44 @@ internal static class TypeMappingRegistry
     }
 
     #endregion
+
+    #region [SQL Server → C# 타입 매핑] 문자열 기반 (DbFirst 생성용)
+
+    /// <summary>
+    /// SQL Server 타입 이름(문자열)을 C# 타입 키워드로 매핑합니다.
+    /// <para>
+    /// <b>[설계 의도]</b>
+    /// DbFirstTvpGenerator가 스키마 JSON에서 읽은 SQL 타입 문자열을
+    /// C# 타입으로 변환할 때 사용합니다.
+    /// 기존 DbFirstTvpGenerator.MapSqlTypeToCSharp 로직을 통합하여
+    /// 타입 매핑의 단일 진실 원천(Single Source of Truth)을 유지합니다.
+    /// </para>
+    /// </summary>
+    /// <param name="sqlType">SQL Server 타입 이름 (예: "int", "nvarchar", "datetime2")</param>
+    /// <returns>C# 타입 키워드 (예: "int", "string", "DateTime")</returns>
+    public static string MapSqlTypeToCSharp(string sqlType)
+    {
+        return sqlType.ToLowerInvariant() switch
+        {
+            "bigint" => "long",
+            "int" => "int",
+            "smallint" => "short",
+            "tinyint" => "byte",
+            "bit" => "bool",
+            "decimal" or "numeric" or "money" => "decimal",
+            "float" => "double",
+            "real" => "float",
+            "datetime" or "datetime2" or "date" => "DateTime",
+            "datetimeoffset" => "DateTimeOffset",
+            "varchar" or "nvarchar" or "char" or "nchar" or "text" or "ntext" => "string",
+            "uniqueidentifier" => "Guid",
+            "binary" or "varbinary" or "image" => "byte[]",
+            "time" => "TimeSpan",
+            _ => "object"
+        };
+    }
+
+    #endregion
 }
 
 #endregion

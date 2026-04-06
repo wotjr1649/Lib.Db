@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // File : Lib.Db/Repository/Lib.Db.Infrastructure.cs
 // Role : 인프라스트럭처 구현체 모음(연결 팩토리 + 스키마 리포지토리)
 // Env  : .NET 10 / C# 14 (예정) + SqlClient
@@ -9,7 +9,9 @@
 
 #nullable enable
 
+using System.Diagnostics;
 using Lib.Db.Contracts.Infrastructure;
+using Lib.Db.Diagnostics;
 
 namespace Lib.Db.Repository;
 
@@ -58,6 +60,16 @@ namespace Lib.Db.Repository;
 /// </remarks>
 internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionFactory
 {
+    #region [상수] 연결 풀 메트릭 임계값
+
+    /// <summary>
+    /// 연결 풀 대기로 간주하는 임계값(밀리초)입니다.
+    /// 이 값을 초과하면 풀 대기 카운터가 증가합니다.
+    /// </summary>
+    private const int PoolWaitThresholdMs = 100;
+
+    #endregion
+
     #region [필드] Ad-hoc 연결 문자열 저장소(스레드 안전)
 
     /// <summary>
@@ -127,33 +139,60 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
         else
         {
             // [Smart Pointer Fallback]
-            // 요청한 키가 "Default"인데 설정에 없고, ConnectionStringName(별칭)이 유효하다면 대체 사용
+            // 요청한 키가 "Default"인데 설정에 없고, ConnectionStringNames에 항목이 있다면 첫 번째를 대체 사용
             string targetKey = instanceHash;
-            if (instanceHash == "Default" 
+            if (instanceHash == "Default"
                 && !options.ConnectionStrings.ContainsKey("Default")
-                && options.ConnectionStrings.ContainsKey(options.ConnectionStringName))
+                && options.ConnectionStringNames.Count > 0)
             {
-                targetKey = options.ConnectionStringName;
+                targetKey = options.ConnectionStringNames[0];
             }
 
             if (!options.ConnectionStrings.TryGetValue(targetKey, out connStr!))
             {
-                throw new ArgumentException($"인스턴스 '{instanceHash}' (Resolved: '{targetKey}')에 대한 연결 문자열을 찾을 수 없습니다.");
+                throw new ArgumentException(
+                    $"인스턴스 '{instanceHash}'에 대한 연결 문자열을 찾을 수 없습니다. " +
+                    $"등록된 인스턴스: [{string.Join(", ", options.ConnectionStringNames)}]");
             }
         }
 
         #endregion
 
-        #region [2] SqlConnection 생성 및 Open(실패 시 즉시 Dispose)
+        #region [2] SqlConnection 생성 및 Open(실패 시 즉시 Dispose) + 연결 풀 메트릭
 
-        var conn = new SqlConnection(connStr);
+        SqlConnection conn = new SqlConnection(connStr);
+        Stopwatch sw = Stopwatch.StartNew();
 
         try
         {
             await conn.OpenAsync(ct).ConfigureAwait(false);
+            sw.Stop();
+
+            // [메트릭] 연결 획득 소요 시간 기록
+            LibDbTelemetry.ConnectionAcquireDuration.Record(
+                sw.Elapsed.TotalMilliseconds,
+                new KeyValuePair<string, object?>("instance", instanceHash));
+
+            // [메트릭] PoolWaitThresholdMs 이상이면 풀 대기로 간주
+            if (sw.ElapsedMilliseconds > PoolWaitThresholdMs)
+            {
+                LibDbTelemetry.ConnectionPoolWaits.Add(1,
+                    new KeyValuePair<string, object?>("instance", instanceHash));
+            }
         }
-        catch
+        catch (Exception ex)
         {
+            sw.Stop();
+
+            // [메트릭] 예외 유형에 따라 분류(reason 태그)하여 기록
+            string reason = ex is Microsoft.Data.SqlClient.SqlException sqlEx
+                ? (sqlEx.Number == -2 ? "timeout" : "sql_error")
+                : "other";
+
+            LibDbTelemetry.ConnectionPoolTimeouts.Add(1,
+                new KeyValuePair<string, object?>("instance", instanceHash),
+                new KeyValuePair<string, object?>("reason", reason));
+
             // Open 실패 시 커넥션 핸들/소켓 등 리소스 누수를 막기 위해 즉시 해제합니다.
             await conn.DisposeAsync().ConfigureAwait(false);
             throw; // 원본 예외(스택 트레이스) 보존
@@ -280,11 +319,11 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
     /// </remarks>
     public async Task<long> GetObjectVersionAsync(string name, string instanceHash, CancellationToken ct)
     {
-        await using var conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
-        await using var cmd = new SqlCommand(SqlGetVersion, conn);
+        await using SqlConnection conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
+        await using SqlCommand cmd = new SqlCommand(SqlGetVersion, conn);
         cmd.Parameters.AddWithValue("@Name", name);
 
-        var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         return result is long val ? val : 0;
     }
 
@@ -297,11 +336,11 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
     /// <returns>버전 값(epoch 마이크로초). 대상이 없으면 0을 반환합니다.</returns>
     public async Task<long> GetTvpVersionAsync(string name, string instanceHash, CancellationToken ct)
     {
-        await using var conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
-        await using var cmd = new SqlCommand(SqlGetTvpVersion, conn);
+        await using SqlConnection conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
+        await using SqlCommand cmd = new SqlCommand(SqlGetTvpVersion, conn);
         cmd.Parameters.AddWithValue("@Name", name);
 
-        var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        object? result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         return result is long val ? val : 0;
     }
 
@@ -354,11 +393,11 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             ORDER BY p.parameter_id;
             """;
 
-        await using var conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
-        await using var cmd = new SqlCommand(sql, conn);
+        await using SqlConnection conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
+        await using SqlCommand cmd = new SqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@Name", name);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await using SqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         #region [1] Version ResultSet
 
@@ -374,7 +413,7 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
 
         #region [2] Parameters ResultSet
 
-        var parameters = new List<SpParameterInfo>();
+        List<SpParameterInfo> parameters = new List<SpParameterInfo>();
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             parameters.Add(new SpParameterInfo(
@@ -432,11 +471,11 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             ORDER BY c.column_id;
             """;
 
-        await using var conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
-        await using var cmd = new SqlCommand(sql, conn);
+        await using SqlConnection conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
+        await using SqlCommand cmd = new SqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@Name", name);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await using SqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         #region [1] Version ResultSet
 
@@ -450,7 +489,7 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
 
         #region [2] Columns ResultSet
 
-        var columns = new List<TvpColumnInfo>();
+        List<TvpColumnInfo> columns = new List<TvpColumnInfo>();
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             columns.Add(new TvpColumnInfo(
@@ -519,40 +558,48 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
 
         static string BuildFilterClause(List<string> patterns, string objectAlias)
         {
-            if (patterns == null || patterns.Count == 0) return string.Empty;
-            var conditions = new List<string>(patterns.Count);
-            for (int i = 0; i < patterns.Count; i++) conditions.Add($"{objectAlias}.name LIKE @p{i}");
+            if (patterns == null || patterns.Count == 0)
+                return string.Empty;
+            List<string> conditions = new List<string>(patterns.Count);
+            for (int i = 0; i < patterns.Count; i++)
+                conditions.Add($"{objectAlias}.name LIKE @p{i}");
             return $"AND ({string.Join(" OR ", conditions)})";
         }
 
         static void BindPatternParameters(SqlCommand cmd, List<string> patterns)
         {
-            for (int i = 0; i < patterns.Count; i++) cmd.Parameters.AddWithValue($"@p{i}", ConvertToSqlPattern(patterns[i]));
+            for (int i = 0; i < patterns.Count; i++)
+                cmd.Parameters.AddWithValue($"@p{i}", ConvertToSqlPattern(patterns[i]));
         }
 
         static string BuildExcludeClause(List<string> patterns, string objectAlias)
         {
-            if (patterns == null || patterns.Count == 0) return string.Empty;
-            var conditions = new List<string>(patterns.Count);
-            for (int i = 0; i < patterns.Count; i++) conditions.Add($"{objectAlias}.name LIKE @e{i}");
+            if (patterns == null || patterns.Count == 0)
+                return string.Empty;
+            List<string> conditions = new List<string>(patterns.Count);
+            for (int i = 0; i < patterns.Count; i++)
+                conditions.Add($"{objectAlias}.name LIKE @e{i}");
             return $"AND NOT ({string.Join(" OR ", conditions)})";
         }
 
         static void BindExcludeParameters(SqlCommand cmd, List<string> patterns)
         {
-            for (int i = 0; i < patterns.Count; i++) cmd.Parameters.AddWithValue($"@e{i}", ConvertToSqlPattern(patterns[i]));
+            for (int i = 0; i < patterns.Count; i++)
+                cmd.Parameters.AddWithValue($"@e{i}", ConvertToSqlPattern(patterns[i]));
         }
 
         #endregion
 
         #region [1] 동적 WHERE 절 구성 (Schema IN Clause + Patterns)
 
-        var schemas = schemaNames.ToList();
-        if (schemas.Count == 0) return new SchemaBulkData(); // 대상 없으면 빈 결과
+        List<string> schemas = schemaNames.ToList();
+        if (schemas.Count == 0)
+            return new SchemaBulkData(); // 대상 없으면 빈 결과
 
         // 스키마 IN 절 동적 생성 (@s0, @s1 ...)
-        var schemaParams = new List<string>(schemas.Count);
-        for (int i = 0; i < schemas.Count; i++) schemaParams.Add($"@s{i}");
+        List<string> schemaParams = new List<string>(schemas.Count);
+        for (int i = 0; i < schemas.Count; i++)
+            schemaParams.Add($"@s{i}");
         string schemaInClause = $"s.name IN ({string.Join(", ", schemaParams)})";
 
         string spInclude = BuildFilterClause(includePatterns, "o");
@@ -611,8 +658,8 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
 
         #region [3] 실행 및 파라미터 바인딩
 
-        await using var conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
-        await using var cmd = new SqlCommand(sql, conn);
+        await using SqlConnection conn = await connFactory.CreateConnectionAsync(instanceHash, ct).ConfigureAwait(false);
+        await using SqlCommand cmd = new SqlCommand(sql, conn);
 
         // 스키마 파라미터 바인딩
         for (int i = 0; i < schemas.Count; i++)
@@ -626,13 +673,13 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
         if (excludePatterns != null && excludePatterns.Count > 0)
             BindExcludeParameters(cmd, excludePatterns);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await using SqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         #endregion
 
         #region [4] ResultSets 적재(버전/파라미터/컬럼)
 
-        var result = new SchemaBulkData();
+        SchemaBulkData result = new SchemaBulkData();
 
         // 1) SP Versions
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -651,7 +698,7 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
         {
             string spName = reader.GetString(0);
 
-            if (!result.SpParameters.TryGetValue(spName, out var list))
+            if (!result.SpParameters.TryGetValue(spName, out List<SpParameterInfo>? list))
             {
                 list = []; // C# 12 컬렉션 식
                 result.SpParameters[spName] = list;
@@ -677,7 +724,7 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
         {
             string tvpName = reader.GetString(0);
 
-            if (!result.TvpColumns.TryGetValue(tvpName, out var list))
+            if (!result.TvpColumns.TryGetValue(tvpName, out List<TvpColumnInfo>? list))
             {
                 list = [];
                 result.TvpColumns[tvpName] = list;

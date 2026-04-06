@@ -55,31 +55,24 @@ public static class LibDbServiceCollectionExtensions
     {
         return services.AddHighPerformanceDb(options =>
         {
-            // [AOT Safe Strategy & Dual-Layer Binding]
-            // 1. Shadow DTO 생성
-            var config = new Lib.Db.Configuration.Internal.LibDbConfig();
+            // 1. LibDb 섹션 바인딩 (ConnectionStringNames 등 설정만)
+            Lib.Db.Configuration.Internal.LibDbConfig config = new();
+            configuration.GetSection("LibDb").Bind(config);
+            config.ApplyTo(options);
 
-            // 2. [Global Scope] 최상위 'ConnectionStrings' 섹션 바인딩 (Standard)
-            //    - ASP.NET Core 표준 위치의 연결 문자열을 먼저 로드합니다.
-            var rootConnectionStrings = configuration.GetSection("ConnectionStrings");
-            if (rootConnectionStrings.Exists())
+            // 2. 최상위 ConnectionStrings에서 ConnectionStringNames에 지정된 키만 선택적 로드
+            IConfigurationSection rootCs = configuration.GetSection("ConnectionStrings");
+            if (rootCs.Exists())
             {
-                foreach (var child in rootConnectionStrings.GetChildren())
+                HashSet<string> allowed = new(options.ConnectionStringNames, StringComparer.OrdinalIgnoreCase);
+                foreach (IConfigurationSection child in rootCs.GetChildren())
                 {
-                    if (child.Value is not null)
+                    if (child.Value is not null && allowed.Contains(child.Key))
                     {
-                        config.ConnectionStrings[child.Key] = child.Value;
+                        options.ConnectionStrings[child.Key] = child.Value;
                     }
                 }
             }
-
-            // 3. [Local Scope] 'LibDb' 섹션 바인딩 (Legacy & Specific)
-            //    - LibDb 전용 설정 및 로컬 연결 문자열Overrides를 로드합니다.
-            //    - Dictionary.Bind는 기존 키를 덮어쓰거나 새 키를 추가하는 방식으로 병합(Merge)됩니다.
-            configuration.GetSection("LibDb").Bind(config); 
-
-            // 4. 최종 옵션 적용
-            config.ApplyTo(options);
         });
     }
 
@@ -134,7 +127,7 @@ public static class LibDbServiceCollectionExtensions
         // Session (Scoped)
         services.TryAddScoped<DbSession>();
         services.TryAddScoped<IDbSession>(sp => sp.GetRequiredService<DbSession>());
-        services.TryAddScoped<IDbContext>(sp => sp.GetRequiredService<DbSession>());
+        // IDbContext 제거됨 — IDbSession이 유일한 진입점
 
         // Mapper
         services.TryAddSingleton<IMapperFactory, MapperFactory>();
@@ -182,8 +175,8 @@ public static class LibDbServiceCollectionExtensions
         this IServiceCollection services)
     {
         // ServiceProvider를 임시로 빌드하여 Options 확인
-        using var sp = services.BuildServiceProvider();
-        var options = sp.GetService<LibDbOptions>();
+        using ServiceProvider sp = services.BuildServiceProvider();
+        LibDbOptions? options = sp.GetService<LibDbOptions>();
 
         if (options?.EnableSchemaCaching == true && options.PrewarmSchemas.Count > 0)
         {
@@ -223,42 +216,42 @@ public static class LibDbServiceCollectionExtensions
         string? epochBasePath = null)
     {
         // ServiceProvider 임시 빌드로 옵션 확인
-        using var sp = services.BuildServiceProvider();
-        var options = sp.GetService<LibDbOptions>();
-        
+        using ServiceProvider sp = services.BuildServiceProvider();
+        LibDbOptions? options = sp.GetService<LibDbOptions>();
+
         // 플랫폼 자동 감지
         bool enableSharedMemory = options?.EnableSharedMemoryCache
             ?? System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
                 System.Runtime.InteropServices.OSPlatform.Windows);
-        
+
         bool enableEpoch = options?.EnableEpochCoordination ?? enableSharedMemory;
-        
+
         // Epoch 비활성화 시 조기 리턴
         if (!enableEpoch)
         {
-            var logger = sp.GetService<ILogger<SchemaFlushService>>();
+            ILogger<SchemaFlushService>? logger = sp.GetService<ILogger<SchemaFlushService>>();
             logger?.LogInformation(
                 "[Epoch] 비활성화됨 - EpochStore 및 SchemaFlushService 등록 건너뛀 (명시적 설정: {ExplicitSetting})",
                 options?.EnableEpochCoordination?.ToString() ?? "null (auto-detect)");
             return services;
         }
-        
+
         // 경고: 공유 메모리 없이 Epoch만 사용
         if (!enableSharedMemory && enableEpoch)
         {
-            var logger = sp.GetService<ILogger<EpochStore>>();
+            ILogger<EpochStore>? logger = sp.GetService<ILogger<EpochStore>>();
             logger?.LogWarning(
                 "[Epoch] 경고: 공유 메모리 비활성화 상태에서 Epoch 사용 - " +
                 "프로세스 간 스키마 동기화 불가. " +
                 "권장: EnableSharedMemoryCache=true 또는 EnableEpochCoordination=false");
         }
-        
+
         // 1. EpochStore 등록 (Singleton)
         services.TryAddSingleton(sp =>
         {
-            var basePath = epochBasePath ?? Path.Combine(
+            string basePath = epochBasePath ?? Path.Combine(
                 Path.GetTempPath(), "Lib.Db.Epochs");
-            var logger = sp.GetRequiredService<ILogger<EpochStore>>();
+            ILogger<EpochStore> logger = sp.GetRequiredService<ILogger<EpochStore>>();
             return new EpochStore(basePath, logger);
         });
 
@@ -270,6 +263,31 @@ public static class LibDbServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, EpochWatcherService>());
 
+        return services;
+    }
+
+    #endregion
+
+    #region [확장 메서드] 쿼리 인터셉터 등록
+
+    /// <summary>
+    /// Lib.Db 사용자 수준 쿼리 인터셉터를 등록합니다.
+    /// <para>
+    /// <b>[사용법]</b><br/>
+    /// <code>services.AddLibDbInterceptor&lt;MyLoggingInterceptor&gt;();</code>
+    /// </para>
+    /// <para>
+    /// 다중 인터셉터를 등록하면 DI 등록 순서대로 체인이 실행됩니다.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="TInterceptor">인터셉터 구현 타입</typeparam>
+    /// <param name="services">서비스 컬렉션</param>
+    /// <returns>체이닝을 위한 IServiceCollection</returns>
+    public static IServiceCollection AddLibDbInterceptor<TInterceptor>(
+        this IServiceCollection services)
+        where TInterceptor : class, Lib.Db.Contracts.Infrastructure.IDbInterceptor
+    {
+        services.AddSingleton<Lib.Db.Contracts.Infrastructure.IDbInterceptor, TInterceptor>();
         return services;
     }
 

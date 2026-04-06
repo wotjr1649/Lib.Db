@@ -1,3 +1,9 @@
+// ============================================================================
+// 파일: Lib.Db/Configuration/AotHybridCacheSerializer.cs
+// 설명: AOT 호환 HybridCache JSON 직렬화기 — System.Text.Json 소스 생성기 기반
+// 대상: .NET 10 / C# 14
+// ============================================================================
+
 using System;
 using System.Buffers;
 using System.Text.Json;
@@ -64,7 +70,7 @@ internal sealed class AotHybridCacheSerializer<T> : IHybridCacheSerializer<T>
     {
         // Utf8JsonReader는 ReadOnlySequence를 생성자에서 직접 지원하므로,
         // 별도의 Span 변환이나 배열 복사 없이 고성능 파싱이 가능합니다.
-        var reader = new Utf8JsonReader(source);
+        Utf8JsonReader reader = new Utf8JsonReader(source);
 
         // ! 연산자 사용: JSON이 "null" 토큰일 경우 null이 반환될 수 있으나,
         // 일반적인 캐시 히트 시나리오에서는 유효한 객체를 가정합니다.
@@ -85,7 +91,7 @@ internal sealed class AotHybridCacheSerializer<T> : IHybridCacheSerializer<T>
     {
         // IBufferWriter<byte>를 직접 사용하는 Utf8JsonWriter를 생성하여
         // 파이프라인(PipeWriter) 등에 직접 쓰기를 수행합니다.
-        using var writer = new Utf8JsonWriter(target);
+        using Utf8JsonWriter writer = new Utf8JsonWriter(target);
 
         JsonSerializer.Serialize(writer, value, _typeInfo);
 

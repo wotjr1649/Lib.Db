@@ -1,9 +1,15 @@
+// ============================================================================
+// 파일: Lib.Db/Execution/Binding/TvpFactoryRegistry.cs
+// 설명: TVP 팩토리 레지스트리 — 소스 생성기 기반 TVP 팩토리 등록/조회 관리
+// 대상: .NET 10 / C# 14
+// ============================================================================
+
 using System;
+using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
-using System.Collections;
-using System.Collections.Concurrent;
 
 namespace Lib.Db.Execution.Binding;
 
@@ -53,7 +59,7 @@ public static class TvpFactoryRegistry
     internal static bool TryGet(Type concreteType, out Func<object, IDataReader>? factory, out string? typeName)
     {
         // 1. Fast Cache Lookup
-        if (s_cache.TryGetValue(concreteType, out var entry))
+        if (s_cache.TryGetValue(concreteType, out (Func<object, IDataReader>? Factory, string? TypeName) entry))
         {
             factory = entry.Factory;
             typeName = entry.TypeName;
@@ -73,7 +79,7 @@ public static class TvpFactoryRegistry
         // Check direct registry match (rare for List<T>)
         lock (s_registry)
         {
-            if (s_registry.TryGetValue(concreteType, out var regEntry))
+            if (s_registry.TryGetValue(concreteType, out (Func<object, IDataReader> Factory, string TypeName) regEntry))
             {
                 factory = regEntry.Factory;
                 typeName = regEntry.TypeName;
@@ -83,13 +89,13 @@ public static class TvpFactoryRegistry
         }
 
         // Interface Scan (IEnumerable<T>)
-        foreach (var iface in concreteType.GetInterfaces())
+        foreach (Type iface in concreteType.GetInterfaces())
         {
             if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IEnumerable<>))
             {
                 lock (s_registry)
                 {
-                    if (s_registry.TryGetValue(iface, out var regEntry))
+                    if (s_registry.TryGetValue(iface, out (Func<object, IDataReader> Factory, string TypeName) regEntry))
                     {
                         factory = regEntry.Factory;
                         typeName = regEntry.TypeName;

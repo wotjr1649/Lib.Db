@@ -58,10 +58,10 @@ internal sealed class DefaultResiliencePipelineProvider(
         ITransientSqlErrorDetector detector,
         ILogger logger)
     {
-        var builder = new ResiliencePipelineBuilder();
+        ResiliencePipelineBuilder builder = new ResiliencePipelineBuilder();
 
         // 1. Circuit Breaker (회로 차단기)
-        var cbOptions = options.Resilience;
+        LibDbOptions.ResilienceOptions cbOptions = options.Resilience;
         if (cbOptions.CircuitBreakerThreshold > 0)
         {
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
@@ -93,7 +93,7 @@ internal sealed class DefaultResiliencePipelineProvider(
         if (cbOptions.MaxRetryCount > 0)
         {
             // 사용자 정의 RetryBackoffType을 Polly의 DelayBackoffType으로 매핑
-            var backoffType = cbOptions.RetryBackoffType switch
+            DelayBackoffType backoffType = cbOptions.RetryBackoffType switch
             {
                 LibDbOptions.RetryBackoffType.Exponential => DelayBackoffType.Exponential,
                 LibDbOptions.RetryBackoffType.Linear => DelayBackoffType.Linear,
@@ -127,9 +127,9 @@ internal sealed class DefaultResiliencePipelineProvider(
         int timeoutSeconds = options.DefaultCommandTimeoutSeconds;
         if (timeoutSeconds > 0)
         {
-             // 표준 timeout이 먼저 발동하도록 버퍼를 추가하거나, 여기서 엄격한 timeout을 사용합니다.
-             // 일반적으로 Polly timeout은 재시도를 포함한 전체 작업에 대한 것입니다.
-             builder.AddTimeout(TimeSpan.FromSeconds(timeoutSeconds + 5)); 
+            // 표준 timeout이 먼저 발동하도록 버퍼를 추가하거나, 여기서 엄격한 timeout을 사용합니다.
+            // 일반적으로 Polly timeout은 재시도를 포함한 전체 작업에 대한 것입니다.
+            builder.AddTimeout(TimeSpan.FromSeconds(timeoutSeconds + 5));
         }
 
         return builder.Build();

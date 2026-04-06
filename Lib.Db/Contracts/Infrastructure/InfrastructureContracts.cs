@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일명: Lib.Db/Contracts/Infrastructure/InfrastructureContracts.cs
 // 역할  : DB 연결, 스키마 메타데이터 조회를 위한 인프라 계약 및 DTO 정의
 // 설명  :
@@ -163,7 +163,7 @@ public sealed class SchemaBulkData
 /// 일관된 방식으로 관리하기 위해 사용됩니다.
 /// </para>
 /// </summary>
-public interface IDbConnectionFactory
+internal interface IDbConnectionFactory
 {
     /// <summary>
     /// 인스턴스 해시 또는 Raw ConnectionString을 사용하여

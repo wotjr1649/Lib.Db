@@ -113,7 +113,7 @@ public readonly record struct DbObjectName<TTrait>(string Schema, string Name)
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DbObjectName<TTrait> Parse(ReadOnlySpan<char> s, IFormatProvider? provider = null)
     {
-        if (!TryParse(s, provider, out var result))
+        if (!TryParse(s, provider, out DbObjectName<TTrait> result))
         {
             ThrowHelper_InvalidFormat(s.ToString());
         }
@@ -139,7 +139,7 @@ public readonly record struct DbObjectName<TTrait>(string Schema, string Name)
     public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out DbObjectName<TTrait> result)
     {
         // 1. 공백 제거
-        var span = s.Trim();
+        ReadOnlySpan<char> span = s.Trim();
         if (span.IsEmpty)
         {
             result = default;
@@ -147,7 +147,7 @@ public readonly record struct DbObjectName<TTrait>(string Schema, string Name)
         }
 
         // 2. 점(.) 위치 탐색
-        var dotIndex = span.IndexOf('.');
+        int dotIndex = span.IndexOf('.');
 
         string schema;
         string name;
@@ -239,6 +239,55 @@ public readonly record struct DbInstanceId(string Value)
     public static implicit operator string(DbInstanceId id) => id.Value;
     public static implicit operator DbInstanceId(string value) => new(value);
 }
+
+#endregion
+
+#region BulkInsert 옵션 정의
+
+/// <summary>
+/// SqlBulkCopy 기반 대량 INSERT 옵션입니다.
+/// <para>
+/// <b>[설계 의도]</b><br/>
+/// - <b>불변 초기화</b>: <c>init</c> 속성으로 생성 후 변경을 방지합니다.<br/>
+/// - <b>안전한 기본값</b>: 일반적인 벌크 작업에 적합한 기본값을 제공합니다.<br/>
+/// - <b>AOT 비호환 공지</b>: BulkInsertAsync는 Reflection 기반이므로 AOT 빌드에서는 사용할 수 없습니다.
+/// </para>
+/// </summary>
+public sealed class BulkInsertOptions
+{
+    /// <summary>배치당 행 수 (기본: 5,000)</summary>
+    public int BatchSize { get; init; } = 5_000;
+
+    /// <summary>명령 타임아웃 (초, 기본: 600)</summary>
+    public int TimeoutSeconds { get; init; } = 600;
+
+    /// <summary>스트리밍 활성화 (기본: true)</summary>
+    public bool EnableStreaming { get; init; } = true;
+
+    /// <summary>INSERT 트리거 실행 여부</summary>
+    public bool FireTriggers { get; init; }
+
+    /// <summary>제약 조건 검사 여부</summary>
+    public bool CheckConstraints { get; init; }
+
+    /// <summary>IDENTITY 값 유지 여부</summary>
+    public bool KeepIdentity { get; init; }
+}
+
+#endregion
+
+#region JSON 컬럼 어트리뷰트 정의
+
+/// <summary>
+/// JSON 컬럼을 C# 타입으로 자동 역직렬화하는 어트리뷰트입니다.
+/// <para>
+/// <b>[설계 의도]</b><br/>
+/// DB에서 조회한 JSON 문자열 컬럼에 이 어트리뷰트를 지정하면,
+/// 확장 메서드를 통해 자동으로 역직렬화할 수 있습니다.
+/// </para>
+/// </summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class JsonColumnAttribute : Attribute;
 
 #endregion
 

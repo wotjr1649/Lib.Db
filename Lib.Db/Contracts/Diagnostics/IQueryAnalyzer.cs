@@ -1,3 +1,9 @@
+// ============================================================================
+// 파일: Lib.Db/Contracts/Diagnostics/IQueryAnalyzer.cs
+// 설명: 쿼리 분석기 인터페이스 — 실행 계획 및 성능 분석 계약 정의
+// 대상: .NET 10 / C# 14
+// ============================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Threading;

@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일명: Lib.Db/Contracts/Execution/StrategyAndInterceptionContracts.cs
 // 설명  : 실행 전략 / 실행기 팩터리 / 인터셉터 / 인프라(회복 탄력성) 공용 계약 통합
 // 대상  : .NET 10 / C# 14
@@ -6,7 +6,7 @@
 //   - 실행 전략(IDbExecutionStrategy): 연결/재시도/트랜잭션 정책 추상화
 //   - 실행기 팩터리(IDbExecutorFactory): 전략별 실행기 조립 책임 분리
 //   - 인터셉터(IDbCommandInterceptor): 실행 수명 주기 개입 및 진단/Mocking
-//   - 인프라(IChaosInjector/IMemoryPressureMonitor/IResumableStateStore): 회복 탄력성 보조 계약
+//   - 인프라(IMemoryPressureMonitor): 회복 탄력성 보조 계약
 // ============================================================================
 
 #nullable enable
@@ -29,7 +29,7 @@ namespace Lib.Db.Contracts.Execution;
 /// 이 전략은 <b>어떻게 실행할 것인가</b>에 대한 정책만을 담당합니다.
 /// </para>
 /// </summary>
-public interface IDbExecutionStrategy
+internal interface IDbExecutionStrategy
 {
     /// <summary>
     /// 현재 전략이 트랜잭션을 사용하는지 여부입니다.
@@ -106,7 +106,7 @@ public interface IDbExecutionStrategy
 /// 서로 다른 실행기를 생성하는 책임을 가집니다.
 /// </para>
 /// </summary>
-public interface IDbExecutorFactory
+internal interface IDbExecutorFactory
 {
     /// <summary>
     /// 재시도/회복 탄력성(Resilience)을 적용한 일반 실행기를 생성합니다.
@@ -319,33 +319,6 @@ public readonly record struct DbCommandFailedEventData(
 #region 인프라 및 회복 탄력성 계약
 
 /// <summary>
-/// 카오스 엔지니어링(Chaos Engineering) 주입기 계약입니다.
-/// <para>
-/// 개발/테스트 환경에서 인위적인 지연, 예외, 타임아웃 등을 주입하여
-/// 시스템의 회복 탄력성(Resilience)과 오류 처리 경로를 검증하는 데 사용됩니다.
-/// </para>
-/// <para>
-/// 운영 환경에서는 비활성화되거나 매우 제한적으로만 사용되는 것이 일반적입니다.
-/// </para>
-/// </summary>
-public interface IChaosInjector
-{
-    #region [카오스 주입] 지연/오류 인위적 삽입
-
-    /// <summary>
-    /// 설정된 정책에 따라 카오스(지연 또는 오류)를 주입합니다.
-    /// <para>
-    /// 구현체는 확률 기반(Random), 시나리오 기반, 환경 변수 기반 등
-    /// 다양한 방식으로 동작할 수 있습니다.
-    /// </para>
-    /// </summary>
-    /// <param name="ct">취소 토큰</param>
-    Task InjectAsync(CancellationToken ct);
-
-    #endregion
-}
-
-/// <summary>
 /// 메모리 배압(Backpressure) 모니터 계약입니다.
 /// <para>
 /// 현재 프로세스 및 시스템의 메모리 상태를 감시하여,
@@ -373,68 +346,6 @@ public interface IMemoryPressureMonitor
     /// </para>
     /// </summary>
     double LoadFactor { get; }
-
-    #endregion
-}
-
-/// <summary>
-/// 상태 보존형 복구(Resumable) 저장소 계약입니다.
-/// <para>
-/// 대용량 배치 작업이나 스트리밍 처리 중
-/// 작업이 중단되더라도 이전 진행 지점(Cursor)부터
-/// 다시 이어서 처리할 수 있도록 상태를 외부 저장소에 기록합니다.
-/// </para>
-/// <para>
-/// 외부 저장소 예:
-/// <list type="bullet">
-/// <item>Redis</item>
-/// <item>Key-Value DB</item>
-/// <item>파일 시스템</item>
-/// </list>
-/// </para>
-/// </summary>
-public interface IResumableStateStore
-{
-    #region [상태 저장] 처리 커서 기록
-
-    /// <summary>
-    /// 쿼리 또는 배치 작업의 마지막 처리 커서(Cursor)를 저장합니다.
-    /// <para>
-    /// 커서 타입은 작업 특성에 따라 자유롭게 정의할 수 있습니다.
-    /// (예: ID, Timestamp, 복합 키 등)
-    /// </para>
-    /// </summary>
-    /// <typeparam name="TCursor">커서 타입</typeparam>
-    /// <param name="instanceKey">DB 인스턴스 또는 실행 컨텍스트 식별자</param>
-    /// <param name="queryKey">쿼리/작업 식별자</param>
-    /// <param name="cursor">저장할 커서 값</param>
-    /// <param name="ct">취소 토큰</param>
-    Task SaveCursorAsync<TCursor>(
-        string instanceKey,
-        string queryKey,
-        TCursor cursor,
-        CancellationToken ct);
-
-    #endregion
-
-    #region [상태 복원] 마지막 처리 지점 조회
-
-    /// <summary>
-    /// 저장된 마지막 처리 커서(Cursor)를 조회합니다.
-    /// <para>
-    /// 저장된 값이 없으면 <c>null</c>을 반환하여
-    /// 처음부터 작업을 시작하도록 유도할 수 있습니다.
-    /// </para>
-    /// </summary>
-    /// <typeparam name="TCursor">커서 타입</typeparam>
-    /// <param name="instanceKey">DB 인스턴스 또는 실행 컨텍스트 식별자</param>
-    /// <param name="queryKey">쿼리/작업 식별자</param>
-    /// <param name="ct">취소 토큰</param>
-    /// <returns>저장된 커서 값 또는 null</returns>
-    Task<TCursor?> GetLastCursorAsync<TCursor>(
-        string instanceKey,
-        string queryKey,
-        CancellationToken ct);
 
     #endregion
 }

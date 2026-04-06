@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // File : Lib.Db/Execution/Executors/Strategies.cs
 // Role : 실행 전략(Resilient/Transactional), 인터셉터 체인, 성능 최적화 구조체 모음
 // Env  : .NET 10 / C# 14
@@ -65,7 +65,6 @@ namespace Lib.Db.Execution.Executors;
 ///   <item><strong>InterceptorChain</strong>: 인터셉터 리스트를 델리게이트로 컴파일(실행 시 상수 비용)</item>
 ///   <item><strong>ResilientStrategy</strong>: Polly + Deadlock 승자 + Self-Healing Schema + Fast-Fail</item>
 ///   <item><strong>TransactionalStrategy</strong>: 외부 트랜잭션 컨텍스트 공유(스냅샷 스키마 우선)</item>
-///   <item><strong>NoOpResumableStateStore</strong>: Resumable 미사용 시 Null Object</item>
 /// </list>
 /// </remarks>
 file static class StrategiesDoc { }
@@ -127,7 +126,7 @@ internal struct AdaptiveBatchSizer(
 {
     private double _avgRowsPerSec = 0;
     private readonly double _targetDurationSec = targetSec;
-    
+
     // ⚠️ [CRITICAL FIX] Race Condition 수정
     // - 기존: public int Current { get; private set; } = ...;
     // - 문제: 다중 스레드에서 Current 업데이트 시 Race Condition 발생 가능
@@ -190,7 +189,7 @@ internal struct AdaptiveBatchSizer(
             (int)(currentSnapshot * 1.2));
 
         int finalValue = Math.Clamp(next, min, MaxSize);
-        
+
         // 6) 원자적 업데이트 (Thread-safe)
         Interlocked.Exchange(ref _current, finalValue);
     }
@@ -338,10 +337,10 @@ internal sealed class InterceptorChain(IEnumerable<IDbCommandInterceptor> interc
             = static (_, _) => ValueTask.CompletedTask;
 
         // 역순으로 감싸야 “등록 순서대로” 실행되는 체인이 됩니다.
-        foreach (var interceptor in list.Reverse())
+        foreach (IDbCommandInterceptor? interceptor in list.Reverse())
         {
-            var current = next;
-            var i = interceptor;
+            Func<DbCommand, DbCommandInterceptionContext, ValueTask> current = next;
+            IDbCommandInterceptor i = interceptor;
 
             next = async (cmd, ctx) =>
             {
@@ -362,10 +361,10 @@ internal sealed class InterceptorChain(IEnumerable<IDbCommandInterceptor> interc
         Func<DbCommand, DbCommandExecutedEventData, ValueTask> next
             = static (_, _) => ValueTask.CompletedTask;
 
-        foreach (var interceptor in list.Reverse())
+        foreach (IDbCommandInterceptor? interceptor in list.Reverse())
         {
-            var current = next;
-            var i = interceptor;
+            Func<DbCommand, DbCommandExecutedEventData, ValueTask> current = next;
+            IDbCommandInterceptor i = interceptor;
 
             next = async (cmd, data) =>
             {
@@ -486,13 +485,13 @@ internal sealed class ResilientStrategy(
         Func<SqlConnection, CancellationToken, Task<TResult>> operation,
         CancellationToken token)
     {
-        var info = new DbRequestInfo(
+        DbRequestInfo info = new DbRequestInfo(
             InstanceId: request.InstanceHash,
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
             Target: request.CommandText);
 
-        await using var conn = await _connFactory
+        await using SqlConnection conn = await _connFactory
             .CreateConnectionAsync(request.InstanceHash, token)
             .ConfigureAwait(false);
 
@@ -536,14 +535,14 @@ internal sealed class ResilientStrategy(
         Func<SqlConnection, CancellationToken, Task<SqlDataReader>> operation,
         CancellationToken token)
     {
-        var info = new DbRequestInfo(
+        DbRequestInfo info = new DbRequestInfo(
             InstanceId: request.InstanceHash,
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
             Target: request.CommandText);
 
         // 스트리밍은 “연결 수명”이 Reader 수명과 묶이므로 await using을 쓰지 않습니다.
-        var conn = await _connFactory
+        SqlConnection conn = await _connFactory
             .CreateConnectionAsync(request.InstanceHash, token)
             .ConfigureAwait(false);
 
@@ -553,7 +552,7 @@ internal sealed class ResilientStrategy(
 
         try
         {
-            var reader = await operation(conn, token).ConfigureAwait(false);
+            SqlDataReader? reader = await operation(conn, token).ConfigureAwait(false);
 
             if (reader is null)
             {
@@ -602,7 +601,7 @@ internal sealed class ResilientStrategy(
 
         _logger.LogInformation("[데드락 승자 전략] 현재 세션 DEADLOCK_PRIORITY 를 HIGH로 올립니다.");
 
-        await using var cmd = new SqlCommand("SET DEADLOCK_PRIORITY HIGH", conn);
+        await using SqlCommand cmd = new SqlCommand("SET DEADLOCK_PRIORITY HIGH", conn);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
         _elevatePriorityOnNextRetry = false;
@@ -627,7 +626,7 @@ internal sealed class ResilientStrategy(
         DbRequest<TParams> request,
         CancellationToken ct)
     {
-        var info = new DbRequestInfo(
+        DbRequestInfo info = new DbRequestInfo(
             InstanceId: request.InstanceHash,
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
@@ -775,7 +774,7 @@ internal sealed class TransactionalStrategy(
         catch (SqlException ex) when (IsSchemaMismatchError(ex.Number)
                                       && request.CommandType == CommandType.StoredProcedure)
         {
-            var info = new DbRequestInfo(
+            DbRequestInfo info = new DbRequestInfo(
                 InstanceId: request.InstanceHash,
                 DbSystem: "mssql",
                 Operation: request.CommandType.ToString(),
@@ -813,34 +812,3 @@ internal sealed class TransactionalStrategy(
 
 #endregion
 
-// ============================================================================
-// 5. 재개(Resumable) 상태 저장소: No-Op(널 오브젝트)
-// ============================================================================
-
-#region [5. 재개(Resumable) 상태 저장소 (No-Op / Null Object)]
-
-/// <summary>
-/// 아무 작업도 수행하지 않는 Resumable State Store(Null Object)입니다.
-/// </summary>
-/// <remarks>
-/// <para>
-/// Resumable 기능(커서 저장/복원)을 사용하지 않을 때 DI에 등록하여 의존성을 만족시키기 위한 구현입니다.
-/// </para>
-/// <para><strong>장점</strong></para>
-/// <list type="bullet">
-///   <item>호출부에서 “기능 사용 여부”를 조건 분기하지 않아도 되어 코드가 단순해집니다.</item>
-///   <item>테스트/개발 환경에서 Resumable 기능을 쉽게 비활성화할 수 있습니다.</item>
-/// </list>
-/// </remarks>
-internal sealed class NoOpResumableStateStore : IResumableStateStore
-{
-    /// <inheritdoc />
-    public Task SaveCursorAsync<TCursor>(string instanceKey, string queryKey, TCursor cursor, CancellationToken ct)
-        => Task.CompletedTask;
-
-    /// <inheritdoc />
-    public Task<TCursor?> GetLastCursorAsync<TCursor>(string instanceKey, string queryKey, CancellationToken ct)
-        => Task.FromResult<TCursor?>(default);
-}
-
-#endregion

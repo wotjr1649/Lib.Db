@@ -65,9 +65,9 @@ public sealed class IsolationKeyGenerator() : Lib.Db.Contracts.Cache.IIsolationK
 
         // 연결 문자열 정규화 (소문자, 공백 제거 등은 하지 않음 - 민감할 수 있음)
         // SHA256 -> Hex String (32 chars)
-        var bytes = Encoding.UTF8.GetBytes(connectionString);
-        var hash = SHA256.HashData(bytes);
-        
+        byte[] bytes = Encoding.UTF8.GetBytes(connectionString);
+        byte[] hash = SHA256.HashData(bytes);
+
         // 너무 길지 않게 앞 16자리만 사용 (충돌 확률 극히 낮음 for Isolation purpose)
         return Convert.ToHexString(hash).Substring(0, 16);
     }
@@ -97,9 +97,9 @@ internal static class CacheInternalHelpers
             {
                 // [Performance] WindowsIdentity.GetCurrent()는 비용이 있으므로 실제로는 캐싱이 권장되나,
                 // 이 메서드 호출 빈도가 낮으므로(초기화 시) 직접 호출합니다.
-                using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-                var sid = identity.User?.Value ?? "NoUser";
-                
+                using System.Security.Principal.WindowsIdentity identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+                string sid = identity.User?.Value ?? "NoUser";
+
                 // [Deterministic] 프로세스 간 합의를 위해 결정론적 해시 사용
                 return GetDeterministicShortHash(sid);
             }
@@ -133,10 +133,10 @@ internal static class CacheInternalHelpers
         }
         else
         {
-            var userHash = GetUserSidHash();
-            var basePath = ResolveBasePath(options);
-            var pathHash = GetDeterministicShortHash(basePath);
-            var isoKey = options.IsolationKey ?? "Default";
+            string userHash = GetUserSidHash();
+            string basePath = ResolveBasePath(options);
+            string pathHash = GetDeterministicShortHash(basePath);
+            string isoKey = options.IsolationKey ?? "Default";
             return $"Local\\Lib.Db.{subsystem}_{userHash}_{pathHash}_{isoKey}_";
         }
     }
@@ -146,10 +146,10 @@ internal static class CacheInternalHelpers
     /// </summary>
     public static string ResolveBasePath(SharedMemoryCacheOptions options)
     {
-        var raw = options.BasePath;
-        
+        string raw = options.BasePath;
+
         // 환경 변수 확장 (%TEMP% 등)
-        var expanded = Environment.ExpandEnvironmentVariables(raw);
+        string expanded = Environment.ExpandEnvironmentVariables(raw);
 
         if (Path.IsPathRooted(expanded))
             return expanded;
@@ -163,16 +163,18 @@ internal static class CacheInternalHelpers
     /// </summary>
     private static string GetDeterministicShortHash(string input)
     {
-        if (string.IsNullOrWhiteSpace(input)) return "NoPath";
-        
+        if (string.IsNullOrWhiteSpace(input))
+            return "NoPath";
+
         // 정규화: 경로 구분자 통일
-        var normalized = input.Trim().ToLowerInvariant().Replace('\\', '/');
-        if (normalized.EndsWith("/")) normalized = normalized[..^1];
+        string normalized = input.Trim().ToLowerInvariant().Replace('\\', '/');
+        if (normalized.EndsWith("/"))
+            normalized = normalized[..^1];
 
         // SHA256 사용
-        var bytes = Encoding.UTF8.GetBytes(normalized);
-        var hash = SHA256.HashData(bytes);
-        
+        byte[] bytes = Encoding.UTF8.GetBytes(normalized);
+        byte[] hash = SHA256.HashData(bytes);
+
         // 8글자만 (충돌 가능성 감수, 경로 식별용)
         return Convert.ToHexString(hash).Substring(0, 8);
     }

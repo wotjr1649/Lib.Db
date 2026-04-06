@@ -56,20 +56,20 @@ public ref struct SqlInterpolatedStringHandler
     /// <param name="formattedCount">보간된 값의 개수</param>
     /// <param name="handlerIsValid">핸들러가 유효한지 여부 (out)</param>
     public SqlInterpolatedStringHandler(
-        int literalLength, 
+        int literalLength,
         int formattedCount,
         out bool handlerIsValid)
     {
         // 예상 크기 계산: 리터럴 + (파라미터 이름 4자 * 개수)
         int estimatedSize = literalLength + (formattedCount * 4); // "@p0 " = 4 chars
-        
+
         // ArrayPool에서 버퍼 대여 (Zero-Allocation 전략)
         _buffer = ArrayPool<char>.Shared.Rent(Math.Max(estimatedSize, 256));
         _position = 0;
         _parameters = new List<KeyValuePair<string, object?>>(formattedCount);
         _parameterIndex = 0;
         _isValid = true;
-        
+
         handlerIsValid = _isValid;
     }
 
@@ -88,7 +88,7 @@ public ref struct SqlInterpolatedStringHandler
 
         // 버퍼 크기 부족 시 재할당
         EnsureCapacity(literal.Length);
-        
+
         // Span으로 고속 복사 (Zero-Allocation)
         literal.AsSpan().CopyTo(_buffer.AsSpan(_position));
         _position += literal.Length;
@@ -106,12 +106,12 @@ public ref struct SqlInterpolatedStringHandler
 
         // 파라미터 이름 생성 (@p0, @p1, @p2, ...)
         string paramName = $"@p{_parameterIndex++}";
-        
+
         // SQL에 파라미터 이름 추가
         EnsureCapacity(paramName.Length);
         paramName.AsSpan().CopyTo(_buffer.AsSpan(_position));
         _position += paramName.Length;
-        
+
         // 파라미터 값 저장
         _parameters.Add(new KeyValuePair<string, object?>(paramName, value));
     }
@@ -128,7 +128,7 @@ public ref struct SqlInterpolatedStringHandler
         EnsureCapacity(paramName.Length);
         paramName.AsSpan().CopyTo(_buffer.AsSpan(_position));
         _position += paramName.Length;
-        
+
         _parameters.Add(new KeyValuePair<string, object?>(paramName, value));
     }
 
@@ -147,14 +147,14 @@ public ref struct SqlInterpolatedStringHandler
 
         // SQL 문자열 생성
         string sql = new string(_buffer, 0, _position);
-        
+
         // 파라미터 딕셔너리 생성
-        var dict = new Dictionary<string, object?>(_parameters.Count);
-        foreach (var pair in _parameters)
+        Dictionary<string, object?> dict = new Dictionary<string, object?>(_parameters.Count);
+        foreach (KeyValuePair<string, object?> pair in _parameters)
         {
             dict[pair.Key] = pair.Value;
         }
-        
+
         return (sql, dict);
     }
 
@@ -176,13 +176,13 @@ public ref struct SqlInterpolatedStringHandler
             // 버퍼 확장 (기존 크기의 2배 또는 필요한 크기 중 큰 값)
             int newSize = Math.Max(_buffer.Length * 2, _position + additionalLength);
             char[] newBuffer = ArrayPool<char>.Shared.Rent(newSize);
-            
+
             // 기존 데이터 복사
             _buffer.AsSpan(0, _position).CopyTo(newBuffer);
-            
+
             // 기존 버퍼 반환
             ArrayPool<char>.Shared.Return(_buffer);
-            
+
             _buffer = newBuffer;
         }
     }

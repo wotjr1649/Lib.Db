@@ -1,7 +1,8 @@
-﻿// File: Lib.Db.Execution/Tvp/TvpPrimitives.cs
-// Role: TVP(Table-Valued Parameter)를 위한 컬럼 기반 인메모리 저장소 및 최적화된 리더
-// Target: .NET 10 / C# 14
-// Note: Nullable<T> 언박싱 문제 해결 및 Half 타입 지원 적용됨
+// ============================================================================
+// 파일: Lib.Db/Execution/Tvp/TvpPrimitives.cs
+// 설명: TVP 컬럼 기반 인메모리 저장소 및 최적화된 리더 — Nullable<T> 언박싱 해결, Half 지원
+// 대상: .NET 10 / C# 14
+// ============================================================================
 
 #nullable enable
 
@@ -77,9 +78,10 @@ internal sealed class TypedColumnBuffer<T> : ColumnBuffer, ITvpColumn<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Add(T value)
     {
-        var buffer = _buffer;
+        T[]? buffer = _buffer;
         // [Safety] 이미 Dispose된 버퍼 접근 방지
-        if (buffer == null) ThrowObjectDisposed();
+        if (buffer == null)
+            ThrowObjectDisposed();
 
         // [Performance] Unsigned cast를 통한 범위 검사 최적화 (JIT 힌트)
         if ((uint)_count >= (uint)buffer!.Length)
@@ -104,8 +106,8 @@ internal sealed class TypedColumnBuffer<T> : ColumnBuffer, ITvpColumn<T>
     /// <inheritdoc/>
     public override object GetValue(int index)
     {
-        var value = _buffer![index]!;
-        
+        T value = _buffer![index]!;
+
         // .NET 10 타입을 SQL Client가 이해할 수 있는 타입으로 변환
         // SqlClient의 ValueUtilsSmi는 GetValue()를 호출하여 객체를 받고,
         // TVP 전송 시 다음과 같은 변환을 기대합니다:
@@ -131,11 +133,12 @@ internal sealed class TypedColumnBuffer<T> : ColumnBuffer, ITvpColumn<T>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void Resize()
     {
-        if (_buffer == null) ThrowObjectDisposed();
+        if (_buffer == null)
+            ThrowObjectDisposed();
 
-        var oldBuffer = _buffer;
-        var newSize = oldBuffer!.Length * 2;
-        var newBuffer = ArrayPool<T>.Shared.Rent(newSize);
+        T[]? oldBuffer = _buffer;
+        int newSize = oldBuffer!.Length * 2;
+        T[] newBuffer = ArrayPool<T>.Shared.Rent(newSize);
 
         oldBuffer.AsSpan(0, _count).CopyTo(newBuffer);
 
@@ -146,7 +149,7 @@ internal sealed class TypedColumnBuffer<T> : ColumnBuffer, ITvpColumn<T>
     /// <inheritdoc/>
     public override void Dispose()
     {
-        var buffer = _buffer;
+        T[]? buffer = _buffer;
         if (buffer != null)
         {
             // [Safety] UAF(Use-After-Free) 방지를 위해 참조를 먼저 끊습니다.
@@ -216,7 +219,8 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     public override int GetOrdinal(string name)
     {
         // [Performance] Dictionary 조회를 통해 루프 없이 즉시 반환
-        if (_ordinalMap.TryGetValue(name, out int ordinal)) return ordinal;
+        if (_ordinalMap.TryGetValue(name, out int ordinal))
+            return ordinal;
         throw new IndexOutOfRangeException($"Column '{name}' not found in TVP data.");
     }
 
@@ -233,8 +237,10 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetInt32(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<int> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<int?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<int> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<int?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Int32.");
     }
 
@@ -248,32 +254,40 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override long GetInt64(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<long> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<long?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<long> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<long?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Int64.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override bool GetBoolean(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<bool> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<bool?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<bool> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<bool?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Boolean.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override decimal GetDecimal(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<decimal> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<decimal?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<decimal> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<decimal?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Decimal.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override double GetDouble(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<double> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<double?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<double> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<double?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Double.");
     }
 
@@ -281,27 +295,29 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     public override DateTime GetDateTime(int i)
     {
         // 1. DateTime 버퍼 (기존 동작)
-        if (_columns[i] is TypedColumnBuffer<DateTime> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<DateTime?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
-        
+        if (_columns[i] is TypedColumnBuffer<DateTime> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<DateTime?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
+
         // 2. .NET 10 DateOnly 버퍼 지원 (DATE → DateTime 변환)
-        if (_columns[i] is TypedColumnBuffer<DateOnly> d1) 
+        if (_columns[i] is TypedColumnBuffer<DateOnly> d1)
             return d1.GetTypedValue(_currentIndex).ToDateTime(TimeOnly.MinValue);
         if (_columns[i] is TypedColumnBuffer<DateOnly?> d2)
         {
-            var dateOnly = d2.GetTypedValue(_currentIndex);
+            DateOnly? dateOnly = d2.GetTypedValue(_currentIndex);
             return dateOnly!.Value.ToDateTime(TimeOnly.MinValue);
         }
-        
+
         // 3. .NET 10 TimeOnly 버퍼 지원 (TIME → DateTime 변환: 오늘 날짜 + 시간)
         if (_columns[i] is TypedColumnBuffer<TimeOnly> t1)
             return DateTime.Today.Add(t1.GetTypedValue(_currentIndex).ToTimeSpan());
         if (_columns[i] is TypedColumnBuffer<TimeOnly?> t2)
         {
-            var timeOnly = t2.GetTypedValue(_currentIndex);
+            TimeOnly? timeOnly = t2.GetTypedValue(_currentIndex);
             return DateTime.Today.Add(timeOnly!.Value.ToTimeSpan());
         }
-        
+
         throw new InvalidCastException($"Column {i} is not DateTime, DateOnly, or TimeOnly.");
     }
 
@@ -336,17 +352,20 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     // [Strict Compliance] 기존 동작 100% 유지 (예외 발생)
     public override string GetName(int ordinal)
     {
-        if (_schemaTable is null) throw new NotSupportedException("SchemaTable is not available.");
+        if (_schemaTable is null)
+            throw new NotSupportedException("SchemaTable is not available.");
         return (string)_schemaTable.Rows[ordinal][SchemaTableColumn.ColumnName];
     }
     public override Type GetFieldType(int ordinal)
     {
-        if (_schemaTable is null) throw new NotSupportedException("SchemaTable is not available.");
+        if (_schemaTable is null)
+            throw new NotSupportedException("SchemaTable is not available.");
         return (Type)_schemaTable.Rows[ordinal][SchemaTableColumn.DataType];
     }
     public override string GetDataTypeName(int ordinal)
     {
-        if (_schemaTable is null) throw new NotSupportedException("SchemaTable is not available.");
+        if (_schemaTable is null)
+            throw new NotSupportedException("SchemaTable is not available.");
         return GetFieldType(ordinal).Name;
     }
 
@@ -359,16 +378,20 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override byte GetByte(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<byte> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<byte?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<byte> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<byte?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Byte.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override char GetChar(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<char> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<char?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<char> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<char?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Char.");
     }
 
@@ -376,12 +399,16 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     public override float GetFloat(int i)
     {
         // 1. float (System.Single) 버퍼
-        if (_columns[i] is TypedColumnBuffer<float> f1) return f1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<float?> f2) return f2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<float> f1)
+            return f1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<float?> f2)
+            return f2.GetTypedValue(_currentIndex)!.Value;
 
         // 2. .NET 10 Half 타입 버퍼 지원 (float으로 변환하여 반환)
-        if (_columns[i] is TypedColumnBuffer<Half> h1) return (float)h1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<Half?> h2) return (float)h2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<Half> h1)
+            return (float)h1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<Half?> h2)
+            return (float)h2.GetTypedValue(_currentIndex)!.Value;
 
         throw new InvalidCastException($"Column {i} is not Float/Half.");
     }
@@ -389,16 +416,20 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override Guid GetGuid(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<Guid> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<Guid?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<Guid> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<Guid?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Guid.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override short GetInt16(int i)
     {
-        if (_columns[i] is TypedColumnBuffer<short> b1) return b1.GetTypedValue(_currentIndex);
-        if (_columns[i] is TypedColumnBuffer<short?> b2) return b2.GetTypedValue(_currentIndex)!.Value;
+        if (_columns[i] is TypedColumnBuffer<short> b1)
+            return b1.GetTypedValue(_currentIndex);
+        if (_columns[i] is TypedColumnBuffer<short?> b2)
+            return b2.GetTypedValue(_currentIndex)!.Value;
         throw new InvalidCastException($"Column {i} is not Int16.");
     }
 
@@ -417,12 +448,16 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     /// </summary>
     public override long GetBytes(int i, long fieldOffset, byte[]? buffer, int bufferoffset, int length)
     {
-        var value = ((TypedColumnBuffer<byte[]>)_columns[i]).GetTypedValue(_currentIndex);
-        if (value is null) return 0;
+        byte[]? value = ((TypedColumnBuffer<byte[]>)_columns[i]).GetTypedValue(_currentIndex);
+        if (value is null)
+            return 0;
 
-        if (buffer is null) return value.Length;
-        if (fieldOffset < 0 || fieldOffset >= value.Length) return 0;
-        if (length < 0) throw new IndexOutOfRangeException("length cannot be negative.");
+        if (buffer is null)
+            return value.Length;
+        if (fieldOffset < 0 || fieldOffset >= value.Length)
+            return 0;
+        if (length < 0)
+            throw new IndexOutOfRangeException("length cannot be negative.");
 
         long available = value.Length - fieldOffset;
         int count = Math.Min(length, (int)available);
@@ -436,12 +471,16 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     /// </summary>
     public override long GetChars(int i, long fieldOffset, char[]? buffer, int bufferoffset, int length)
     {
-        var value = GetString(i); // String buffer uses GetString
-        if (value is null) return 0;
+        string? value = GetString(i); // String buffer uses GetString
+        if (value is null)
+            return 0;
 
-        if (buffer is null) return value.Length;
-        if (fieldOffset < 0 || fieldOffset >= value.Length) return 0;
-        if (length < 0) throw new IndexOutOfRangeException("length cannot be negative.");
+        if (buffer is null)
+            return value.Length;
+        if (fieldOffset < 0 || fieldOffset >= value.Length)
+            return 0;
+        if (length < 0)
+            throw new IndexOutOfRangeException("length cannot be negative.");
 
         long available = value.Length - fieldOffset;
         int count = Math.Min(length, (int)available);
@@ -453,12 +492,14 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        if (_isClosed) return;
+        if (_isClosed)
+            return;
         _isClosed = true;
         if (disposing)
         {
             // 리더가 닫힐 때 내부의 모든 컬럼 버퍼도 함께 정리합니다.
-            foreach (var col in _columns) col.Dispose();
+            foreach (ColumnBuffer col in _columns)
+                col.Dispose();
         }
         base.Dispose(disposing);
     }

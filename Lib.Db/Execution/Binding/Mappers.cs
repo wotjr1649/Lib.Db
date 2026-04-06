@@ -79,12 +79,12 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         if (serviceProvider.GetService(typeof(ISqlMapper<T>)) is ISqlMapper<T> diMapper)
             return diMapper;
 
-        var type = typeof(T);
+        Type type = typeof(T);
 
         // ---------------------------------------------------------------------
         // 2) Gen1 캐시 조회 (가장 자주 사용되는 매퍼)
         // ---------------------------------------------------------------------
-        if (s_gen1Cache.TryGetValue(type, out var gen1Cached))
+        if (s_gen1Cache.TryGetValue(type, out object? gen1Cached))
         {
             return (ISqlMapper<T>)gen1Cached;
         }
@@ -92,10 +92,10 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // ---------------------------------------------------------------------
         // 3) Gen0 캐시 조회
         // ---------------------------------------------------------------------
-        if (s_gen0Cache.TryGetValue(type, out var gen0Entry))
+        if (s_gen0Cache.TryGetValue(type, out CacheEntry gen0Entry))
         {
             // 접근 횟수 증가
-            var newAccessCount = gen0Entry.AccessCount + 1;
+            int newAccessCount = gen0Entry.AccessCount + 1;
 
             // ✅ [승격 조건] 접근 횟수가 임계값 이상이면 Gen1로 승격
             if (newAccessCount >= PromotionThreshold)
@@ -105,8 +105,8 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
             else
             {
                 // 접근 횟수만 증가 (CAS 패턴)
-                s_gen0Cache.TryUpdate(type, 
-                    new CacheEntry(gen0Entry.Mapper, newAccessCount), 
+                s_gen0Cache.TryUpdate(type,
+                    new CacheEntry(gen0Entry.Mapper, newAccessCount),
                     gen0Entry);
             }
 
@@ -116,7 +116,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // ---------------------------------------------------------------------
         // 4) 캐시 미스 → 새로 생성
         // ---------------------------------------------------------------------
-        
+
         // ✅ [캐시 크기 관리] 임계값 초과 시 Gen0 정리
         int totalCacheSize = s_gen0Cache.Count + s_gen1Cache.Count;
         if (totalCacheSize >= _maxCache)
@@ -125,10 +125,10 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         }
 
         // 매퍼 생성
-        var mapper = CreateMapper<T>();
+        ISqlMapper<T> mapper = CreateMapper<T>();
 
         // Gen0에 추가 (초기 접근 횟수 = 0)
-        var entry = new CacheEntry(mapper, 0);
+        CacheEntry entry = new CacheEntry(mapper, 0);
         s_gen0Cache.TryAdd(type, entry);
 
         return mapper;
@@ -141,7 +141,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     {
         // Gen1에 추가
         s_gen1Cache.TryAdd(type, mapper);
-        
+
         // Gen0에서 제거
         s_gen0Cache.TryRemove(type, out _);
     }
@@ -171,11 +171,11 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // ✅ [O(N) 최적화] OrderBy 제거 - Random Sampling 전략
         // 접근 빈도와 무관하게 무작위로 50%를 선택하여 제거
         // 이는 LRU보다 구현이 단순하며 충분히 효과적임
-        
-        var toRemove = new List<Type>(s_gen0Cache.Count / 2);
-        
+
+        List<Type> toRemove = new List<Type>(s_gen0Cache.Count / 2);
+
         // Random.Shared는 .NET 6+에서 제공하는 Thread-safe 난수 생성기
-        foreach (var kv in s_gen0Cache)
+        foreach (KeyValuePair<Type, CacheEntry> kv in s_gen0Cache)
         {
             // 50% 확률로 제거 대상에 추가
             if (Random.Shared.Next(2) == 0)
@@ -188,9 +188,10 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         if (toRemove.Count < s_gen0Cache.Count / 4)
         {
             int needed = (s_gen0Cache.Count / 2) - toRemove.Count;
-            foreach (var kv in s_gen0Cache)
+            foreach (KeyValuePair<Type, CacheEntry> kv in s_gen0Cache)
             {
-                if (needed <= 0) break;
+                if (needed <= 0)
+                    break;
                 if (!toRemove.Contains(kv.Key))
                 {
                     toRemove.Add(kv.Key);
@@ -200,7 +201,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         }
 
         // 실제 제거
-        foreach (var key in toRemove)
+        foreach (Type key in toRemove)
         {
             s_gen0Cache.TryRemove(key, out _);
         }
@@ -214,7 +215,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// </summary>
     private ISqlMapper<T> CreateMapper<T>()
     {
-        var type = typeof(T);
+        Type type = typeof(T);
 
         // [특수 타입] Dictionary 및 DataRow
         if (type == typeof(Dictionary<string, object?>))
@@ -230,7 +231,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // [Generated] IMapableResult<T> (정적 Map(DbDataReader) 패턴)
         if (type.IsAssignableTo(typeof(IMapableResult<T>)))
         {
-            var mapperType = typeof(GeneratedResultMapper<>).MakeGenericType(type);
+            Type mapperType = typeof(GeneratedResultMapper<>).MakeGenericType(type);
 
             return (ISqlMapper<T>)(Activator.CreateInstance(mapperType, options)
                 ?? throw new InvalidOperationException($"'{type.Name}'에 대한 GeneratedResultMapper 생성에 실패했습니다."));
@@ -239,7 +240,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // =====================================================================
         // [1순위] Source Generator가 생성한 매퍼 Discovery
         // =====================================================================
-        var sgMapper = DiscoverGeneratedMapper<T>();
+        ISqlMapper<T>? sgMapper = DiscoverGeneratedMapper<T>();
         if (sgMapper is not null)
             return sgMapper;
 
@@ -278,7 +279,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         }
 
         // FrozenDictionary에서 조회
-        if (s_generatedMapperTypes?.TryGetValue(typeof(T), out var mapperType) == true)
+        if (s_generatedMapperTypes?.TryGetValue(typeof(T), out Type? mapperType) == true)
         {
             // Activator.CreateInstance는 기본 생성자 호출
             // Source Generator 매퍼는 매개변수 없는 생성자를 가져야 함
@@ -293,22 +294,22 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// </summary>
     private static void ScanGeneratedMappers()
     {
-        var assembly = typeof(MapperFactory).Assembly;
-        var generatedMappers = new Dictionary<Type, Type>();
+        Assembly assembly = typeof(MapperFactory).Assembly;
+        Dictionary<Type, Type> generatedMappers = new Dictionary<Type, Type>();
 
-        foreach (var type in assembly.GetTypes())
+        foreach (Type type in assembly.GetTypes())
         {
             // Lib.Db.Generated 네임스페이스 확인
             if (type.Namespace != "Lib.Db.Generated")
                 continue;
 
             // IGeneratedMapper<T> 구현 여부 확인
-            foreach (var iface in type.GetInterfaces())
+            foreach (Type iface in type.GetInterfaces())
             {
                 if (iface.IsGenericType &&
                     iface.GetGenericTypeDefinition() == typeof(IGeneratedMapper<>))
                 {
-                    var dtoType = iface.GetGenericArguments()[0];
+                    Type dtoType = iface.GetGenericArguments()[0];
                     generatedMappers[dtoType] = type;
                     break;
                 }
@@ -323,7 +324,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// </summary>
     private static bool IsScalar(Type t)
     {
-        var u = Nullable.GetUnderlyingType(t) ?? t;
+        Type u = Nullable.GetUnderlyingType(t) ?? t;
 
         return u.IsPrimitive
                || u == typeof(string)
@@ -335,6 +336,38 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
                || u == typeof(TimeSpan)
                || typeof(Stream).IsAssignableFrom(u);
     }
+}
+
+#endregion
+
+#region 리플렉션 캐시 (공유)
+
+/// <summary>
+/// 리플렉션 호출을 캐싱하여 반복 비용을 제거하는 정적 헬퍼입니다.
+/// <para><b>[설계 의도]</b> GetProperties/GetConstructors 호출은 내부적으로 배열 복사를 수행하므로,
+/// ConcurrentDictionary로 타입별 결과를 캐싱하여 GC 압력과 CPU 비용을 절감합니다.</para>
+/// </summary>
+internal static class ReflectionCache
+{
+    /// <summary>타입별 Public 인스턴스 프로퍼티 캐시</summary>
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> s_propertyCache = new();
+
+    /// <summary>타입별 Public 인스턴스 생성자 캐시</summary>
+    private static readonly ConcurrentDictionary<Type, ConstructorInfo[]> s_ctorCache = new();
+
+    /// <summary>
+    /// 지정 타입의 Public 인스턴스 프로퍼티를 캐시에서 반환합니다.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PropertyInfo[] GetPublicProperties(Type type)
+        => s_propertyCache.GetOrAdd(type, static t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance));
+
+    /// <summary>
+    /// 지정 타입의 Public 인스턴스 생성자를 캐시에서 반환합니다.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ConstructorInfo[] GetPublicConstructors(Type type)
+        => s_ctorCache.GetOrAdd(type, static t => t.GetConstructors(BindingFlags.Public | BindingFlags.Instance));
 }
 
 #endregion
@@ -378,8 +411,8 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
 
         static Meta()
         {
-            // 1) 모든 Public 인스턴스 프로퍼티를 PropMap에 올린다.
-            var allProps = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            // 1) 모든 Public 인스턴스 프로퍼티를 PropMap에 올린다. (ReflectionCache 경유)
+            PropertyInfo[] allProps = ReflectionCache.GetPublicProperties(typeof(T));
 
             PropMap = allProps.ToFrozenDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -414,12 +447,13 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
     /// <inheritdoc />
     public void MapParameters(SqlCommand cmd, T param, SpSchema? schema)
     {
-        if (param is null) return;
+        if (param is null)
+            return;
 
         // [Case A] SP 스키마 기반 바인딩 (DB 정의 우선)
         if (schema is not null)
         {
-            foreach (var meta in schema.Parameters)
+            foreach (SpParameterMetadata meta in schema.Parameters)
             {
                 // Output/ReturnValue는 값 없이 파라미터만 생성
                 if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
@@ -428,12 +462,12 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                     continue;
                 }
 
-                var name = meta.Name.TrimStart('@');
+                string name = meta.Name.TrimStart('@');
 
-                if (Meta.PropMap.TryGetValue(name, out var prop) && prop.CanRead)
+                if (Meta.PropMap.TryGetValue(name, out PropertyInfo? prop) && prop.CanRead)
                 {
-                    var getter = GetGetter(name, prop);
-                    var value = getter(param);
+                    Func<T, object?> getter = GetGetter(name, prop);
+                    object? value = getter(param);
                     DbBinder.BindParameter(cmd, meta, value, strict);
                 }
                 else
@@ -456,12 +490,12 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         }
 
         // [Case B] 스키마 없는 Raw SQL 바인딩 (Attribute 메타데이터 우선)
-        var props = Meta.AllProps;
+        PropertyMeta[] props = Meta.AllProps;
         for (int i = 0; i < props.Length; i++)
         {
-            ref readonly var meta = ref props[i];
-            var getter = GetGetter(meta.Info.Name, meta.Info);
-            var value = getter(param);
+            ref readonly PropertyMeta meta = ref props[i];
+            Func<T, object?> getter = GetGetter(meta.Info.Name, meta.Info);
+            object? value = getter(param);
             DbBinder.BindRawParameter(cmd, meta.Info.Name, value, meta.Attribute);
         }
     }
@@ -469,18 +503,19 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, T param)
     {
-        if (param is null) return;
+        if (param is null)
+            return;
 
         foreach (SqlParameter p in cmd.Parameters)
         {
             if (p.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
             {
-                var name = p.ParameterName.TrimStart('@');
+                string name = p.ParameterName.TrimStart('@');
 
-                if (Meta.PropMap.TryGetValue(name, out var prop) && prop.CanWrite)
+                if (Meta.PropMap.TryGetValue(name, out PropertyInfo? prop) && prop.CanWrite)
                 {
-                    var setter = GetSetter(name, prop);
-                    var value = p.Value == DBNull.Value ? null : p.Value;
+                    Action<T, object?> setter = GetSetter(name, prop);
+                    object? value = p.Value == DBNull.Value ? null : p.Value;
                     setter(param, value);
                 }
             }
@@ -495,7 +530,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
     public T MapResult(DbDataReader reader)
     {
         int sig = GetSignature(reader);
-        var func = _deserializers.GetOrAdd(sig, _ => BuildDeserializer(reader));
+        Func<DbDataReader, T> func = _deserializers.GetOrAdd(sig, _ => BuildDeserializer(reader));
         return func(reader);
     }
 
@@ -509,29 +544,29 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
     /// </summary>
     private Func<DbDataReader, T> BuildDeserializer(DbDataReader reader)
     {
-        var rParam = Expression.Parameter(typeof(DbDataReader), "reader");
-        var bindings = new List<MemberBinding>();
+        ParameterExpression rParam = Expression.Parameter(typeof(DbDataReader), "reader");
+        List<MemberBinding> bindings = new List<MemberBinding>();
 
         // 공통 메서드 캐시
-        var isDbNull = typeof(DbDataReader).GetMethod(nameof(DbDataReader.IsDBNull))!;
-        var getString = typeof(DbDataReader).GetMethod(nameof(DbDataReader.GetString))!;
-        var getValue = typeof(DbDataReader).GetMethod(nameof(DbDataReader.GetValue))!;
+        MethodInfo isDbNull = typeof(DbDataReader).GetMethod(nameof(DbDataReader.IsDBNull))!;
+        MethodInfo getString = typeof(DbDataReader).GetMethod(nameof(DbDataReader.GetString))!;
+        MethodInfo getValue = typeof(DbDataReader).GetMethod(nameof(DbDataReader.GetValue))!;
 
         // JSON 역직렬화 메서드
-        var jsonDeser = typeof(JsonSerializer).GetMethod(
+        MethodInfo jsonDeser = typeof(JsonSerializer).GetMethod(
             nameof(JsonSerializer.Deserialize),
             [typeof(string), typeof(JsonSerializerOptions)])!;
-        var jsonOptExp = Expression.Constant(jsonOptions, typeof(JsonSerializerOptions));
+        ConstantExpression jsonOptExp = Expression.Constant(jsonOptions, typeof(JsonSerializerOptions));
 
         for (int i = 0; i < reader.FieldCount; i++)
         {
-            var colName = reader.GetName(i);
+            string colName = reader.GetName(i);
 
-            if (!Meta.PropMap.TryGetValue(colName, out var prop) || !prop.CanWrite)
+            if (!Meta.PropMap.TryGetValue(colName, out PropertyInfo? prop) || !prop.CanWrite)
                 continue;
 
-            var idxExp = Expression.Constant(i);
-            var checkNull = Expression.Call(rParam, isDbNull, idxExp);
+            ConstantExpression idxExp = Expression.Constant(i);
+            MethodCallExpression checkNull = Expression.Call(rParam, isDbNull, idxExp);
 
             Type propType = prop.PropertyType;
             Type dbFieldType = reader.GetFieldType(i);
@@ -540,10 +575,10 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
             // [1] DB 컬럼 타입과 프로퍼티 타입이 동일하면 Typed Getter 우선 사용 (Boxing 제거)
             if (dbFieldType == propType)
             {
-                var typedMethodName = GetTypedMethodName(propType);
+                string? typedMethodName = GetTypedMethodName(propType);
                 if (typedMethodName is not null)
                 {
-                    var typedMethod = typeof(DbDataReader).GetMethod(typedMethodName, [typeof(int)]);
+                    MethodInfo? typedMethod = typeof(DbDataReader).GetMethod(typedMethodName, [typeof(int)]);
                     if (typedMethod is not null)
                     {
                         valueExp = Expression.Call(rParam, typedMethod, idxExp);
@@ -555,47 +590,47 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
             // [2] 문자열 컬럼 → 복합 객체 프로퍼티: JSON 역직렬화
             if (dbFieldType == typeof(string) && IsComplexType(propType))
             {
-                var strVal = Expression.Call(rParam, getString, idxExp);
-                var genericJson = jsonDeser.MakeGenericMethod(propType);
+                MethodCallExpression strVal = Expression.Call(rParam, getString, idxExp);
+                MethodInfo genericJson = jsonDeser.MakeGenericMethod(propType);
                 valueExp = Expression.Call(null, genericJson, strVal, jsonOptExp);
             }
             // [3] 일반 케이스: GetValue + Convert (+ .NET 10 타입 특수 처리)
             else
             {
-                var objVal = Expression.Call(rParam, getValue, idxExp);
-                var underlying = Nullable.GetUnderlyingType(propType) ?? propType;
-                
+                MethodCallExpression objVal = Expression.Call(rParam, getValue, idxExp);
+                Type underlying = Nullable.GetUnderlyingType(propType) ?? propType;
+
                 // ========== [추가] .NET 10 타입 변환 로직 ==========
                 Expression converted;
-                
+
                 // DateOnly: DB DATE (DateTime) → DateOnly
                 if (underlying == typeof(DateOnly))
                 {
                     // reader.GetDateTime(i)
-                    var getDateTime = typeof(DbDataReader).GetMethod(nameof(DbDataReader.GetDateTime), [typeof(int)])!;
-                    var dtExpr = Expression.Call(rParam, getDateTime, idxExp);
-                    
+                    MethodInfo getDateTime = typeof(DbDataReader).GetMethod(nameof(DbDataReader.GetDateTime), [typeof(int)])!;
+                    MethodCallExpression dtExpr = Expression.Call(rParam, getDateTime, idxExp);
+
                     // DateOnly.FromDateTime(dt)
-                    var fromDateTime = typeof(DateOnly).GetMethod(nameof(DateOnly.FromDateTime), [typeof(DateTime)])!;
+                    MethodInfo fromDateTime = typeof(DateOnly).GetMethod(nameof(DateOnly.FromDateTime), [typeof(DateTime)])!;
                     converted = Expression.Call(fromDateTime, dtExpr);
                 }
                 // TimeOnly: DB TIME (TimeSpan) → TimeOnly
                 else if (underlying == typeof(TimeOnly))
                 {
                     // (TimeSpan)reader.GetValue(i)
-                    var tsExpr = Expression.Convert(objVal, typeof(TimeSpan));
-                    
+                    UnaryExpression tsExpr = Expression.Convert(objVal, typeof(TimeSpan));
+
                     // TimeOnly.FromTimeSpan(ts)
-                    var fromTimeSpan = typeof(TimeOnly).GetMethod(nameof(TimeOnly.FromTimeSpan), [typeof(TimeSpan)])!;
+                    MethodInfo fromTimeSpan = typeof(TimeOnly).GetMethod(nameof(TimeOnly.FromTimeSpan), [typeof(TimeSpan)])!;
                     converted = Expression.Call(fromTimeSpan, tsExpr);
                 }
                 // Half: DB REAL (float) → Half
                 else if (underlying == typeof(Half))
                 {
                     // reader.GetFloat(i)
-                    var getFloat = typeof(DbDataReader).GetMethod(nameof(DbDataReader.GetFloat), [typeof(int)])!;
-                    var floatExpr = Expression.Call(rParam, getFloat, idxExp);
-                    
+                    MethodInfo getFloat = typeof(DbDataReader).GetMethod(nameof(DbDataReader.GetFloat), [typeof(int)])!;
+                    MethodCallExpression floatExpr = Expression.Call(rParam, getFloat, idxExp);
+
                     // (Half)f
                     converted = Expression.Convert(floatExpr, typeof(Half));
                 }
@@ -603,16 +638,16 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                 else if (dbFieldType == typeof(string) && underlying == typeof(Guid))
                 {
                     // getString is already defined in outer scope
-                    var strExpr = Expression.Call(rParam, getString, idxExp);
-                    var parseGuid = typeof(Guid).GetMethod(nameof(Guid.Parse), [typeof(string)])!;
-                    
+                    MethodCallExpression strExpr = Expression.Call(rParam, getString, idxExp);
+                    MethodInfo parseGuid = typeof(Guid).GetMethod(nameof(Guid.Parse), [typeof(string)])!;
+
                     converted = Expression.Call(parseGuid, strExpr);
                 }
                 // [Special 2] Safe Unboxing & Conversion (e.g. float(boxed) -> double)
                 else
                 {
                     // objVal is already defined in outer scope (line 564)
-                    
+
                     // 2. Unbox to actual DB type (if ValueType) or Cast (if RefType)
                     Expression unboxed = dbFieldType.IsValueType
                         ? Expression.Unbox(objVal, dbFieldType)
@@ -621,7 +656,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                     // 3. Convert to target type (e.g. float -> double)
                     converted = Expression.Convert(unboxed, underlying);
                 }
-                
+
                 valueExp = propType == underlying
                     ? converted
                     : Expression.Convert(converted, propType);
@@ -646,33 +681,33 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         }
 
         // ========== [수정] Record Primary Constructor 지원 ==========
-        
-        // 1. Public constructor 탐색 (가장 많은 파라미터를 가진 것 선택)
-        var ctors = typeof(T).GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-        var ctor = ctors.Length > 0
+
+        // 1. Public constructor 탐색 (가장 많은 파라미터를 가진 것 선택, ReflectionCache 경유)
+        ConstructorInfo[] ctors = ReflectionCache.GetPublicConstructors(typeof(T));
+        ConstructorInfo? ctor = ctors.Length > 0
             ? ctors.OrderByDescending(c => c.GetParameters().Length).First()
             : null;
 
         // 2. Parameterless constructor이거나 constructor가 없으면 기존 로직 사용
         if (ctor is null || ctor.GetParameters().Length == 0)
         {
-            var newExp = Expression.New(typeof(T));
-            var memberInit = Expression.MemberInit(newExp, bindings);
+            NewExpression newExp = Expression.New(typeof(T));
+            MemberInitExpression memberInit = Expression.MemberInit(newExp, bindings);
             return Expression.Lambda<Func<DbDataReader, T>>(memberInit, rParam).Compile();
         }
 
         // 3. Constructor parameter 매칭 (Record Primary Constructor 지원)
-        var ctorParams = ctor.GetParameters();
-        var ctorArgs = new Expression[ctorParams.Length];
-        var usedBindings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ParameterInfo[] ctorParams = ctor.GetParameters();
+        Expression[] ctorArgs = new Expression[ctorParams.Length];
+        HashSet<string> usedBindings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         for (int i = 0; i < ctorParams.Length; i++)
         {
-            var param = ctorParams[i];
-            var paramName = param.Name!;
+            ParameterInfo param = ctorParams[i];
+            string paramName = param.Name!;
 
             // bindings에서 매칭되는 프로퍼티 찾기 (case-insensitive)
-            var binding = bindings
+            MemberAssignment? binding = bindings
                 .OfType<MemberAssignment>()
                 .FirstOrDefault(b => string.Equals(b.Member.Name, paramName, StringComparison.OrdinalIgnoreCase));
 
@@ -689,16 +724,16 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         }
 
         // 4. Constructor에서 이미 초기화된 프로퍼티 제외
-        var remainingBindings = bindings
+        List<MemberBinding> remainingBindings = bindings
             .Where(b => !usedBindings.Contains(b.Member.Name))
             .ToList();
 
-        var newWithCtorExp = Expression.New(ctor, ctorArgs);
+        NewExpression newWithCtorExp = Expression.New(ctor, ctorArgs);
 
         // 5. Init-only 프로퍼티가 남아있으면 MemberInit 사용
         if (remainingBindings.Count > 0)
         {
-            var memberInitExp = Expression.MemberInit(newWithCtorExp, remainingBindings);
+            MemberInitExpression memberInitExp = Expression.MemberInit(newWithCtorExp, remainingBindings);
             return Expression.Lambda<Func<DbDataReader, T>>(memberInitExp, rParam).Compile();
         }
 
@@ -713,18 +748,18 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
     private static Func<T, object?> GetGetter(string name, PropertyInfo prop)
         => s_getters.GetOrAdd(name, _ =>
         {
-            var target = Expression.Parameter(typeof(T), "obj");
-            var access = Expression.Property(target, prop);
-            var box = Expression.Convert(access, typeof(object));
+            ParameterExpression target = Expression.Parameter(typeof(T), "obj");
+            MemberExpression access = Expression.Property(target, prop);
+            UnaryExpression box = Expression.Convert(access, typeof(object));
             return Expression.Lambda<Func<T, object?>>(box, target).Compile();
         });
 
     private static Action<T, object?> GetSetter(string name, PropertyInfo prop)
         => s_setters.GetOrAdd(name, _ =>
         {
-            var target = Expression.Parameter(typeof(T), "obj");
-            var val = Expression.Parameter(typeof(object), "val");
-            var assign = Expression.Assign(
+            ParameterExpression target = Expression.Parameter(typeof(T), "obj");
+            ParameterExpression val = Expression.Parameter(typeof(object), "val");
+            BinaryExpression assign = Expression.Assign(
                 Expression.Property(target, prop),
                 Expression.Convert(val, prop.PropertyType));
             return Expression.Lambda<Action<T, object?>>(assign, target, val).Compile();
@@ -735,7 +770,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
     /// </summary>
     private static int GetSignature(DbDataReader reader)
     {
-        var hash = new HashCode();
+        HashCode hash = new HashCode();
         hash.Add(reader.FieldCount);
         for (int i = 0; i < reader.FieldCount; i++)
             hash.Add(reader.GetName(i), StringComparer.Ordinal);
@@ -744,17 +779,28 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
 
     private static string? GetTypedMethodName(Type type)
     {
-        if (type == typeof(int)) return nameof(DbDataReader.GetInt32);
-        if (type == typeof(long)) return nameof(DbDataReader.GetInt64);
-        if (type == typeof(short)) return nameof(DbDataReader.GetInt16);
-        if (type == typeof(byte)) return nameof(DbDataReader.GetByte);
-        if (type == typeof(string)) return nameof(DbDataReader.GetString);
-        if (type == typeof(bool)) return nameof(DbDataReader.GetBoolean);
-        if (type == typeof(Guid)) return nameof(DbDataReader.GetGuid);
-        if (type == typeof(DateTime)) return nameof(DbDataReader.GetDateTime);
-        if (type == typeof(float)) return nameof(DbDataReader.GetFloat);
-        if (type == typeof(double)) return nameof(DbDataReader.GetDouble);
-        if (type == typeof(decimal)) return nameof(DbDataReader.GetDecimal);
+        if (type == typeof(int))
+            return nameof(DbDataReader.GetInt32);
+        if (type == typeof(long))
+            return nameof(DbDataReader.GetInt64);
+        if (type == typeof(short))
+            return nameof(DbDataReader.GetInt16);
+        if (type == typeof(byte))
+            return nameof(DbDataReader.GetByte);
+        if (type == typeof(string))
+            return nameof(DbDataReader.GetString);
+        if (type == typeof(bool))
+            return nameof(DbDataReader.GetBoolean);
+        if (type == typeof(Guid))
+            return nameof(DbDataReader.GetGuid);
+        if (type == typeof(DateTime))
+            return nameof(DbDataReader.GetDateTime);
+        if (type == typeof(float))
+            return nameof(DbDataReader.GetFloat);
+        if (type == typeof(double))
+            return nameof(DbDataReader.GetDouble);
+        if (type == typeof(decimal))
+            return nameof(DbDataReader.GetDecimal);
         return null;
     }
 
@@ -805,7 +851,7 @@ internal sealed class ScalarSqlMapper<T> : ISqlMapper<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T MapResult(DbDataReader reader)
     {
-        var val = reader.GetValue(0);
+        object val = reader.GetValue(0);
 
         if (val == DBNull.Value)
             return default!;
@@ -839,7 +885,8 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
     /// <inheritdoc />
     public void MapParameters(SqlCommand cmd, Dictionary<string, object?> parameters, SpSchema? schema)
     {
-        if (parameters is null) return;
+        if (parameters is null)
+            return;
 
         // ---------------------------------------------------------------------
         // [Case A] 스키마 없는 Raw SQL
@@ -848,9 +895,10 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
         // ---------------------------------------------------------------------
         if (schema is null)
         {
-            if (parameters.Count == 0) return;
+            if (parameters.Count == 0)
+                return;
 
-            foreach (var kv in parameters)
+            foreach (KeyValuePair<string, object?> kv in parameters)
                 DbBinder.BindRawParameter(cmd, kv.Key, kv.Value);
 
             return;
@@ -861,7 +909,7 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
         //   - parameters.Count == 0 이더라도 필수 파라미터 누락 검사를 수행해야 합니다.
         //   - Strict 모드에서 NOT NULL + DEFAULT 없음 + Key 없음이면 예외를 던집니다.
         // ---------------------------------------------------------------------
-        foreach (var meta in schema.Parameters)
+        foreach (SpParameterMetadata meta in schema.Parameters)
         {
             if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
             {
@@ -869,9 +917,9 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 continue;
             }
 
-            var key = meta.Name.TrimStart('@');
+            string key = meta.Name.TrimStart('@');
 
-            if (TryGet(parameters, key, out var value))
+            if (TryGet(parameters, key, out object? value))
             {
                 DbBinder.BindParameter(cmd, meta, value, strict);
             }
@@ -895,13 +943,14 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, Dictionary<string, object?> parameters)
     {
-        if (parameters is null) return;
+        if (parameters is null)
+            return;
 
         foreach (SqlParameter param in cmd.Parameters)
         {
             if (param.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
             {
-                var key = param.ParameterName.TrimStart('@');
+                string key = param.ParameterName.TrimStart('@');
                 parameters[key] = param.Value == DBNull.Value ? null : param.Value;
             }
         }
@@ -910,17 +959,17 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
     /// <inheritdoc />
     public Dictionary<string, object?> MapResult(DbDataReader reader)
     {
-        var row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
-        
+        Dictionary<string, object?> row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
+
         // ⚙️ [PERFORMANCE FIX] ObjectPool을 이용한 중복 컬럼 처리 (O(N) & Zero Allocation)
         // - 기존: 문자열 할당 + Dictionary 조회 반복 (O(N²))
         // - 개선: Pooled Dictionary<string, int>로 등장 횟수 추적 (O(N))
-        var tracker = s_trackerPool.Get();
+        Dictionary<string, int> tracker = s_trackerPool.Get();
         try
         {
             for (int i = 0; i < reader.FieldCount; i++)
             {
-                var name = reader.GetName(i);
+                string name = reader.GetName(i);
                 if (string.IsNullOrWhiteSpace(name))
                     name = $"Column{i}";
 
@@ -930,17 +979,17 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                     count++;
                     tracker[name] = count;
                     name = $"{name}_{count - 1}"; // C# index convention adjustment if needed, but original logic was _1, _2...
-                    // Wait, original logic:
-                    // Col -> Col (1st)
-                    // Col -> Col_1 (2nd)
-                    // So if count becomes 2, we want _1.
-                    // Let's refine:
-                    // default count is 0 if not found? No, TryGetValue returns true/false.
-                    // If found, it means we saw it at least once. 
-                    // 1st time: Add(name, 1). Key = name.
-                    // 2nd time: Get name -> 1. New name = name + "_" + 1. Update to 2.
-                    // 3rd time: Get name -> 2. New name = name + "_" + 2. Update to 3.
-                    
+                                                  // Wait, original logic:
+                                                  // Col -> Col (1st)
+                                                  // Col -> Col_1 (2nd)
+                                                  // So if count becomes 2, we want _1.
+                                                  // Let's refine:
+                                                  // default count is 0 if not found? No, TryGetValue returns true/false.
+                                                  // If found, it means we saw it at least once. 
+                                                  // 1st time: Add(name, 1). Key = name.
+                                                  // 2nd time: Get name -> 1. New name = name + "_" + 1. Update to 2.
+                                                  // 3rd time: Get name -> 2. New name = name + "_" + 2. Update to 3.
+
                     // Logic check:
                     // If I use the *modified* name for the row key? No, row key is unique.
                     // I need to track the *original* name's frequency.
@@ -949,7 +998,7 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 {
                     tracker[name] = 1;
                 }
-                
+
                 // But wait, what if "Col" and "Col_1" assume exist as columns?
                 // DB Columns: [Col, Col, Col_1]
                 // 1. "Col" -> Tracker["Col"]=1. Row["Col"] = val.
@@ -957,12 +1006,12 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 //    Row["Col_1"] = val.
                 // 3. "Col_1" -> Tracker["Col_1"] is empty. Tracker["Col_1"]=1. Row["Col_1"] = val.
                 //    COLLISION in Row! Row["Col_1"] already set by step 2!
-                
+
                 // The previous implementation checked `row.ContainsKey(name)`.
                 // My tracker optimization only tracks *original* names.
                 // To be robust against mixed scenarios (implicit duplicates vs explicit duplicates),
                 // we must check `row.ContainsKey` eventually OR track *generated* names too.
-                
+
                 // If I utilize `row.ContainsKey` *after* generation?
                 // The goal is to minimize simple duplicates.
                 // If I use the Tracker for the *base* name, I generate "Col_1".
@@ -973,22 +1022,22 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 // `row[name] = value` overwrites. The requirement is usually to preserve all data but with unique keys.
                 // Standard `Dapper` behavior: overwrite or rename? 
                 // The original code `while (row.ContainsKey(name))` handled ALL collisions, including generated ones.
-                
+
                 // To maintain full correctness (handling [Col, Col, Col_1]), I should combine Tracker with a fallback check
                 // OR ensure Tracker tracks *everything*.
-                
+
                 // Use `tracker` to guarantee uniqueness?
                 // We need to resolve the name to something unique.
                 // If "Col" comes, we want "Col".
                 // If "Col" comes again, we want "Col_1".
                 // If "Col_1" comes (originally), we want "Col_1".
                 //   If Row already has "Col_1" (from Step 2), we have a collision.
-                
+
                 // So checking `tracker` is not enough if we only track original names.
                 // We need to check if the *target* name is taken.
                 // But checking `row.ContainsKey` is fast *if it returns false*.
                 // The expensive part was the loop `while(row.ContainsKey)` doing allocations.
-                
+
                 // Hybrid approach:
                 // 1. Use Tracker to predict the next suffix for `originalName`.
                 //    Tracker["Col"] = 1. -> "Col".
@@ -997,17 +1046,17 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 //    If false, good.
                 //    If true (corner case: "Col_1" existed before "Col" appeared 2nd time? No, order matters.
                 //    OR "Col_1" was a real column that appeared *before* the 2nd "Col"?
-                
+
                 // Example: [Col_1, Col, Col]
                 // 1. "Col_1" -> Row["Col_1"].
                 // 2. "Col" -> Row["Col"].
                 // 3. "Col" -> Tracker says 2nd. Gen "Col_1". Check Row["Col_1"] -> True!
                 //    We need "Col_2".
-                
+
                 // So we DO need a loop if we want to be perfectly robust.
                 // BUT, in 99% of cases (just duplicates), the Tracker gives the correct next suffix immediately.
                 // So the loop will run 0 times.
-                
+
                 // Refined Algorithm:
                 // 1. Get original name.
                 // 2. If !row.ContainsKey(original), use it.
@@ -1015,10 +1064,10 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 //    Use Tracker to get hint. 
                 //    Start loop from Hint.
                 //    Update Tracker with new Hint.
-                
+
                 // Wait, if I simply use `row.ContainsKey` inside the loop, I'm back to allocations?
                 // No, I can avoid the *failed* allocations by using the tracker to jump ahead.
-                
+
                 // Actually, strict `DuplicateCase` benchmark just has [Col, Col, Col, Col, Col].
                 // 1. "Col". Row has it? No. Add. Tracker["Col"] = 1.
                 // 2. "Col". Row has it? Yes.
@@ -1027,7 +1076,7 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 // 3. "Col". Row has it? Yes.
                 //    Tracker["Col"] is 2. Next candidate: "Col_2".
                 //    Row has "Col_2"? No. Add. Tracker["Col"] = 3.
-                
+
                 // This covers the benchmark case perfectly with 0 failed lookups/allocations.
                 // Corner case [Col_1, Col, Col]:
                 // 1. "Col_1". Row no. Add. Tracker["Col_1"]=1.
@@ -1035,12 +1084,12 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 // 3. "Col". Row yes. Tracker["Col"]=1. Candidate "Col_1".
                 //    Row yes! Loop: Increment Tracker["Col"] to 2. Candidate "Col_2".
                 //    Row no. Add.
-                
+
                 // Implementation Details:
                 // - Tracker stores *only* counts for attempted names?
                 // - Let's verify `originalName` is what we track.
-                
-                var originalName = name;
+
+                string originalName = name;
                 if (!row.ContainsKey(originalName))
                 {
                     row[originalName] = reader.GetValue(i) == DBNull.Value ? null : reader.GetValue(i);
@@ -1050,25 +1099,25 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                     // But populating tracker for every unique column adds overhead (O(N) inserts).
                     // Can we avoid using tracker until we hit a collision?
                     // Yes. `if (row.ContainsKey)` -> then ensure tracker has a count.
-                    
-                    continue; 
+
+                    continue;
                 }
-                
+
                 // Collision!
                 if (!tracker.TryGetValue(originalName, out int suffix))
                 {
-                    suffix = 1; 
+                    suffix = 1;
                 }
-                
+
                 string newName;
                 do
                 {
                     newName = $"{originalName}_{suffix++}";
                 } while (row.ContainsKey(newName));
-                
+
                 tracker[originalName] = suffix; // Save for next time (Jump ahead)
-                
-                var value = reader.GetValue(i);
+
+                object value = reader.GetValue(i);
                 row[newName] = value == DBNull.Value ? null : value;
             }
         }
@@ -1079,12 +1128,12 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
 
         return row;
     }
-    
+
     // Pool Declaration
     private static readonly Microsoft.Extensions.ObjectPool.ObjectPool<Dictionary<string, int>> s_trackerPool =
         new Microsoft.Extensions.ObjectPool.DefaultObjectPool<Dictionary<string, int>>(new TrackerPolicy());
 
-    private class TrackerPolicy : Microsoft.Extensions.ObjectPool.IPooledObjectPolicy<Dictionary<string, int>>
+    private sealed class TrackerPolicy : Microsoft.Extensions.ObjectPool.IPooledObjectPolicy<Dictionary<string, int>>
     {
         public Dictionary<string, int> Create() => new(StringComparer.OrdinalIgnoreCase);
         public bool Return(Dictionary<string, int> obj)
@@ -1104,7 +1153,7 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
             return true;
 
         // Dictionary가 OrdinalIgnoreCase로 생성되지 않은 경우, 순회 검색
-        foreach (var kv in dict)
+        foreach (KeyValuePair<string, object?> kv in dict)
         {
             if (string.Equals(kv.Key, key, StringComparison.OrdinalIgnoreCase))
             {
@@ -1134,7 +1183,8 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
     /// <inheritdoc />
     public void MapParameters(SqlCommand cmd, DataRow row, SpSchema? schema)
     {
-        if (row is null) return;
+        if (row is null)
+            return;
 
         // [Case A] 스키마 없는 Raw SQL
         if (schema is null)
@@ -1145,7 +1195,7 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
         }
 
         // [Case B] SP 스키마 기반 바인딩
-        foreach (var meta in schema.Parameters)
+        foreach (SpParameterMetadata meta in schema.Parameters)
         {
             if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
             {
@@ -1153,7 +1203,7 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
                 continue;
             }
 
-            var name = meta.Name.TrimStart('@');
+            string name = meta.Name.TrimStart('@');
 
             if (row.Table.Columns.Contains(name))
             {
@@ -1218,7 +1268,7 @@ internal sealed class ReflectionParameterMapper<
 
         static TypeCache()
         {
-            var props = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            PropertyInfo[] props = ReflectionCache.GetPublicProperties(typeof(T));
             Properties = props
                 .ToFrozenDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -1233,12 +1283,13 @@ internal sealed class ReflectionParameterMapper<
     /// <inheritdoc />
     public void MapParameters(SqlCommand cmd, T parameters, SpSchema? schema)
     {
-        if (parameters is null) return;
+        if (parameters is null)
+            return;
 
         // [Case A] SP 스키마 기반 바인딩
         if (schema is not null)
         {
-            foreach (var meta in schema.Parameters)
+            foreach (SpParameterMetadata meta in schema.Parameters)
             {
                 if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
                 {
@@ -1246,11 +1297,11 @@ internal sealed class ReflectionParameterMapper<
                     continue;
                 }
 
-                var name = meta.Name.TrimStart('@');
+                string name = meta.Name.TrimStart('@');
 
-                if (TypeCache.Properties.TryGetValue(name, out var prop) && prop.CanRead)
+                if (TypeCache.Properties.TryGetValue(name, out PropertyInfo? prop) && prop.CanRead)
                 {
-                    var value = prop.GetValue(parameters);
+                    object? value = prop.GetValue(parameters);
                     DbBinder.BindParameter(cmd, meta, value, strict);
                 }
                 else
@@ -1274,11 +1325,11 @@ internal sealed class ReflectionParameterMapper<
         }
 
         // [Case B] 스키마 없는 Raw SQL 바인딩
-        var props = TypeCache.AllProperties;
+        PropertyMeta[] props = TypeCache.AllProperties;
         for (int i = 0; i < props.Length; i++)
         {
-            ref readonly var meta = ref props[i];
-            var value = meta.Info.GetValue(parameters);
+            ref readonly PropertyMeta meta = ref props[i];
+            object? value = meta.Info.GetValue(parameters);
             DbBinder.BindRawParameter(cmd, meta.Info.Name, value, meta.Attribute);
         }
     }
@@ -1286,17 +1337,18 @@ internal sealed class ReflectionParameterMapper<
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, T parameters)
     {
-        if (parameters is null) return;
+        if (parameters is null)
+            return;
 
         foreach (SqlParameter p in cmd.Parameters)
         {
             if (p.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
             {
-                var name = p.ParameterName.TrimStart('@');
+                string name = p.ParameterName.TrimStart('@');
 
-                if (TypeCache.Properties.TryGetValue(name, out var prop) && prop.CanWrite)
+                if (TypeCache.Properties.TryGetValue(name, out PropertyInfo? prop) && prop.CanWrite)
                 {
-                    var value = p.Value == DBNull.Value ? null : p.Value;
+                    object? value = p.Value == DBNull.Value ? null : p.Value;
                     prop.SetValue(parameters, value);
                 }
             }
@@ -1333,7 +1385,7 @@ internal sealed class GeneratedResultMapper<
     /// </summary>
     public GeneratedResultMapper(LibDbOptions options)
     {
-        var method = typeof(T).GetMethod(
+        MethodInfo method = typeof(T).GetMethod(
             "Map",
             BindingFlags.Public | BindingFlags.Static,
             [typeof(SqlDataReader)])

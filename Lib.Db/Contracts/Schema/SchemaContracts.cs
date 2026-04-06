@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일명: Lib.Db/Contracts/Schema/SchemaContracts.cs
 // 역할  : 스키마 서비스, TVP 검증, Flush Hook, 예외 정의 등 공용 계약 통합 정의
 // 환경  : .NET 10 / C# 14
@@ -332,14 +332,14 @@ public interface ISchemaFlushCoordinator
     /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
     /// <param name="ct">취소 토큰</param>
     Task FlushAsync(string instanceHash, CancellationToken ct = default);
-    
+
     /// <summary>
     /// 현재 Epoch 값을 가져옵니다.
     /// </summary>
     /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
     /// <returns>현재 Epoch 값</returns>
     long GetCurrentEpoch(string instanceHash);
-    
+
     /// <summary>
     /// Epoch가 변경되었는지 확인하고, 변경되었다면 로컬 캐시를 무효화합니다.
     /// </summary>

@@ -21,7 +21,7 @@ internal static class LibDbExceptionFactory
     [DoesNotReturn]
     public static void ThrowArgumentNull(string paramName, [CallerMemberName] string? caller = null)
     {
-        throw new ArgumentNullException(paramName, 
+        throw new ArgumentNullException(paramName,
             $"[{caller}] 필수 인자 '{paramName}'가 누락되었습니다. (값이 null일 수 없습니다)");
     }
 
@@ -86,10 +86,11 @@ internal static class LibDbExceptionFactory
             $"저장 프로시저 '{spName}'의 스키마 불일치(Error: {errorCode})가 감지되었습니다. " +
             "스키마 캐시가 만료되었거나 파라미터 정의가 DB와 다릅니다.");
     }
-    
+
     private static string Truncate(string s, int max)
     {
-        if (string.IsNullOrEmpty(s)) return "";
+        if (string.IsNullOrEmpty(s))
+            return "";
         return s.Length <= max ? s : s[..max] + "...";
     }
 

@@ -35,7 +35,7 @@ public static class HybridCacheExtensions
         // .NET 9+ HybridCache 등록
         // 참고: 이미 IDistributedCache가 등록되어 있어야 L2로 작동합니다.
         // Lib.Db.Caching.SharedMemoryCache가 그 역할을 수행할 수 있습니다.
-        
+
         services.AddHybridCache(options =>
         {
             // 기본값: 5분 만료

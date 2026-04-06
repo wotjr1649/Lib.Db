@@ -1,0 +1,191 @@
+# Lib.Db v2 운영 가이드
+
+트러블슈팅, 에러 코드 매핑, 프로덕션 체크리스트를 다루는 운영 가이드입니다.
+
+---
+
+## 1. DbResult 에러 분기 패턴
+
+### 1-1. Kind별 대응 전략
+
+```csharp
+DbResult<User?> result = await session.Default
+    .Procedure("dbo.usp_GetUser")
+    .With(new { Id = 1 })
+    .QuerySingleAsync<User>();
+
+if (!result.IsSuccess)
+{
+    DbError error = result.Error!.Value;
+
+    string action = error.Kind switch
+    {
+        // 재시도 가능 (IsTransient = true)
+        DbErrorKind.ConnectionLost   => "연결 복구 대기 후 재시도",
+        DbErrorKind.Timeout          => "타임아웃 증가 후 재시도",
+        DbErrorKind.Deadlock         => "자동 재시도됨 (Polly)",
+        DbErrorKind.CloudTransient   => "잠시 후 재시도",
+        DbErrorKind.ResourceExhausted => "리소스 확인 후 재시도",
+        DbErrorKind.TransactionAborted => "트랜잭션 재시작",
+
+        // 코드 수정 필요
+        DbErrorKind.SchemaNotFound      => $"SP 확인: {error.ObjectName}",
+        DbErrorKind.ParameterMismatch   => "파라미터 타입/이름 확인",
+        DbErrorKind.QuerySyntax         => "SQL 구문 수정",
+        DbErrorKind.DataConversion      => "데이터 타입 확인",
+        DbErrorKind.ConstraintViolation => "PK/FK/UNIQUE 제약 확인",
+
+        // 인프라 조치 필요
+        DbErrorKind.AuthenticationFailed => "연결 문자열/자격 증명 확인",
+        DbErrorKind.PermissionDenied     => "DB 권한 부여 필요",
+
+        // 사용자 정의
+        DbErrorKind.UserDefined => $"비즈니스 오류: {error.Message}",
+
+        _ => $"알 수 없는 오류: {error.Message}"
+    };
+}
+```
+
+### 1-2. Transient 판별
+
+```csharp
+if (result.Error is { IsTransient: true } transientError)
+{
+    // 재시도 가능한 오류 → Polly가 자동 처리 (EnableResilience = true 시)
+    // 수동 처리가 필요한 경우에만 이 분기 사용
+}
+```
+
+---
+
+## 2. SqlException → DbError 매핑 테이블
+
+주요 SQL Server 에러 코드와 DbErrorKind 매핑입니다.
+
+### 2-1. 연결 및 인증
+
+| SQL 에러코드 | 설명 | DbErrorKind | Transient |
+|---:|---|---|:---:|
+| 2 | 네트워크 경로 없음 | ConnectionLost | O |
+| 53 | 서버 연결 실패 | ConnectionLost | O |
+| 233 | 연결 끊김 | ConnectionLost | O |
+| 10054 | 기존 연결 강제 종료 | ConnectionLost | O |
+| 10060 | 연결 시도 시간 초과 | Timeout | O |
+| 18456 | 로그인 실패 | AuthenticationFailed | X |
+| 18452 | 신뢰할 수 없는 도메인 | AuthenticationFailed | X |
+
+### 2-2. 실행 및 구문
+
+| SQL 에러코드 | 설명 | DbErrorKind | Transient |
+|---:|---|---|:---:|
+| 102 | 구문 오류 | QuerySyntax | X |
+| 156 | FROM 키워드 근처 오류 | QuerySyntax | X |
+| 207 | 잘못된 열 이름 | SchemaNotFound | X |
+| 208 | 잘못된 개체 이름 | SchemaNotFound | X |
+| 2812 | SP를 찾을 수 없음 | SchemaNotFound | X |
+| 8144 | 프로시저 매개변수 과다 | ParameterMismatch | X |
+| 8145 | 프로시저 매개변수 미지정 | ParameterMismatch | X |
+
+### 2-3. 제약 조건 및 데이터
+
+| SQL 에러코드 | 설명 | DbErrorKind | Transient |
+|---:|---|---|:---:|
+| 245 | 데이터 형식 변환 오류 | DataConversion | X |
+| 544 | IDENTITY_INSERT OFF 위반 | ConstraintViolation | X |
+| 547 | FK 제약 조건 위반 | ConstraintViolation | X |
+| 2601 | UNIQUE INDEX 중복 | ConstraintViolation | X |
+| 2627 | PK/UNIQUE 제약 위반 | ConstraintViolation | X |
+| 8152 | 문자열 데이터 잘림 | DataConversion | X |
+
+### 2-4. 동시성 및 리소스
+
+| SQL 에러코드 | 설명 | DbErrorKind | Transient |
+|---:|---|---|:---:|
+| 1205 | Deadlock victim | Deadlock | O |
+| -2 | 타임아웃 (클라이언트) | Timeout | O |
+| 1222 | 잠금 요청 시간 초과 | Timeout | O |
+| 701 | 메모리 부족 | ResourceExhausted | O |
+| 1101 | 디스크 공간 부족 | ResourceExhausted | O |
+| 3960 | 스냅샷 격리 충돌 | TransactionAborted | O |
+
+### 2-5. 권한 및 사용자 정의
+
+| SQL 에러코드 | 설명 | DbErrorKind | Transient |
+|---:|---|---|:---:|
+| 229 | EXECUTE 권한 거부 | PermissionDenied | X |
+| 262 | CREATE 권한 거부 | PermissionDenied | X |
+| 50000+ | RAISERROR/THROW | UserDefined | X |
+
+---
+
+## 3. 연결 문자열 검증 (6단계 방어)
+
+Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니다.
+
+| 단계 | 검증 내용 | 실패 시 |
+|---|---|---|
+| 1 | `ConnectionStringNames` 비어있는지 확인 | `ArgumentException` |
+| 2 | 각 Name에 대응하는 ConnectionString 존재 여부 | 경고 로그 |
+| 3 | 연결 문자열 형식 유효성 (`SqlConnectionStringBuilder` 파싱) | 시작 실패 |
+| 4 | `Server` 속성 존재 여부 | 시작 실패 |
+| 5 | `Database` 속성 존재 여부 | 경고 로그 (master 폴백) |
+| 6 | 실제 연결 테스트 (`SELECT 1`) | 경고 로그 (지연 연결) |
+
+---
+
+## 4. 프로덕션 체크리스트
+
+### 4-1. 빌드 및 테스트
+
+- [ ] `dotnet build` 경고/에러 0건
+- [ ] `dotnet test` 전체 통과
+- [ ] AOT 빌드 시 IL 트리밍 경고 0건
+- [ ] `[TvpRow]`/`[DbResult]` DTO에 `partial` 키워드 확인
+
+### 4-2. 설정 검증
+
+- [ ] `ConnectionStringNames`에 사용할 모든 DB 키 나열
+- [ ] 각 키에 대응하는 `ConnectionStrings` 값 존재
+- [ ] `Encrypt=True;TrustServerCertificate=False` (프로덕션)
+- [ ] sa 계정 대신 최소 권한 Application User 사용
+- [ ] `MARS` 설정 확인 (`MultipleActiveResultSets=True` 필요 시)
+
+### 4-3. Connection Pool / Resilience / 캐싱
+
+- [ ] `Min Pool Size` / `Max Pool Size` 설정 (Max = CPU x 2 + 동시 요청)
+- [ ] `EnableResilience = true`, `MaxRetryCount`: 3
+- [ ] `EnableSchemaCaching = true`, `SchemaRefreshIntervalSeconds`: 60~300
+- [ ] `PrewarmExcludePatterns`: `*_Test*`, `*_Legacy*` 등 제외
+- [ ] `DefaultCommandTimeoutSeconds`: 30 (OLTP), 120+ (배치)
+
+---
+
+## 5. 성능 튜닝 가이드
+
+### 5-1. 스키마 캐시 TTL
+
+| 환경 | 권장 SchemaRefreshIntervalSeconds |
+|---|---|
+| 개발 | 10~30 (빈번한 스키마 변경) |
+| 스테이징 | 60 (기본값) |
+| 프로덕션 | 300~600 (안정적 스키마) |
+
+### 5-2. SharedMemoryCache 스트라이프
+
+128개 Mutex 스트라이프가 기본이며, 대부분의 워크로드에 적합합니다.
+동시 프로세스 수가 매우 많은 경우 `BasePath` 격리를 확인하세요.
+
+### 5-3. Polly 재시도 설정
+
+| 시나리오 | MaxRetryCount | BaseRetryDelayMs |
+|---|---|---|
+| 빠른 응답 (API) | 2 | 50 |
+| 일반 (기본값) | 3 | 100 |
+| 배치 처리 | 5 | 500 |
+| 장시간 작업 | 3 | 1000 |
+
+### 5-4. 진단 활성화
+
+`EnableObservability`와 `EnableOpenTelemetry`를 `true`로 설정합니다.
+`IncludeParametersInTrace`는 보안상 개발 환경에서만 `true`로 설정하세요.

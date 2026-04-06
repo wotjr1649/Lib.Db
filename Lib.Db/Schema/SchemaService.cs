@@ -103,7 +103,7 @@ internal sealed class SchemaService(
         Expiration = TimeSpan.FromHours(24),
         LocalCacheExpiration = TimeSpan.FromHours(1)
     };
-    
+
     private readonly TimeSpan _refreshInterval = TimeSpan.FromSeconds(options.SchemaRefreshIntervalSeconds);
 
     private static readonly ActivitySource s_activity = new("Lib.Db.Schema");
@@ -129,7 +129,7 @@ internal sealed class SchemaService(
     /// </summary>
     private static SemaphoreSlim[] InitializeLocks()
     {
-        var locks = new SemaphoreSlim[LockStripes];
+        SemaphoreSlim[] locks = new SemaphoreSlim[LockStripes];
         for (int i = 0; i < LockStripes; i++)
         {
             locks[i] = new SemaphoreSlim(1, 1);
@@ -149,8 +149,8 @@ internal sealed class SchemaService(
     /// </remarks>
     public async Task<SpSchema> GetSpSchemaAsync(string spName, string instanceHash, CancellationToken ct)
     {
-        using var activity = s_activity.StartActivity("GetSpSchema");
-        var normalized = Normalize(spName);
+        using Activity? activity = s_activity.StartActivity("GetSpSchema");
+        string normalized = Normalize(spName);
 
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
         NegativeCache.ThrowIfCached(instanceHash, normalized, "StoredProcedure");
@@ -158,7 +158,7 @@ internal sealed class SchemaService(
         // L1/L2 스냅샷에서 Zero-Alloc 조회
         // [주의] 스냅샷 키 일관성을 위해 normalized 사용 권장되나, 기존 로직 호환성을 위해 spName 유지 고려했으나,
         // 저장 시 normalized된 이름을 사용하므로 여기서도 normalized를 사용하는 것이 정확함.
-        var cached = KeyHelper.LookupSp(_snapshot, instanceHash, normalized);
+        SpSchema? cached = KeyHelper.LookupSp(_snapshot, instanceHash, normalized);
 
         if (cached is not null && !IsStale(cached.LastCheckedAt))
         {
@@ -168,19 +168,19 @@ internal sealed class SchemaService(
             return cached;
         }
 
-        // var normalized = Normalize(spName); // 상단으로 이동됨
-        var key = KeyHelper.BuildStringKey(instanceHash, "SP", normalized);
+        // string normalized = Normalize(spName); // 상단으로 이동됨
+        string key = KeyHelper.BuildStringKey(instanceHash, "SP", normalized);
 
         if (!options.EnableSchemaCaching)
             return await LoadDirectSpAsync(normalized, instanceHash, ct).ConfigureAwait(false);
 
         string[] tags = [Tag(instanceHash), Tag(instanceHash, "SP")];
 
-        var schema = await cache.GetOrCreateAsync(
+        SpSchema schema = await cache.GetOrCreateAsync(
             key,
             async token =>
             {
-                var loaded = await LoadSpFromDbAsync(normalized, instanceHash, token).ConfigureAwait(false);
+                SpSchema loaded = await LoadSpFromDbAsync(normalized, instanceHash, token).ConfigureAwait(false);
                 await UpdateCacheAsync(key, loaded, instanceHash, "SP", token).ConfigureAwait(false);
                 return loaded;
             },
@@ -203,7 +203,7 @@ internal sealed class SchemaService(
         {
             // [Negative Cache] 기록 - 두 번째 호출부터는 즉시 예외 throw
             NegativeCache.RecordMissing(instanceHash, normalized, "StoredProcedure");
-            
+
             throw new InvalidOperationException(
                 $"[스키마 조회 실패] 저장 프로시저 '{normalized}'을(를) 데이터베이스에서 찾을 수 없습니다. " +
                 $"프로시저가 존재하는지, 사용 권한이 있는지 확인하십시오. " +
@@ -223,13 +223,13 @@ internal sealed class SchemaService(
     /// </remarks>
     public async Task<TvpSchema> GetTvpSchemaAsync(string tvpName, string instanceHash, CancellationToken ct)
     {
-        using var activity = s_activity.StartActivity("GetTvpSchema");
-        var normalized = Normalize(tvpName);
+        using Activity? activity = s_activity.StartActivity("GetTvpSchema");
+        string normalized = Normalize(tvpName);
 
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
         NegativeCache.ThrowIfCached(instanceHash, normalized, "TvpType");
 
-        var cached = KeyHelper.LookupTvp(_snapshot, instanceHash, normalized);
+        TvpSchema? cached = KeyHelper.LookupTvp(_snapshot, instanceHash, normalized);
 
         if (cached is not null && !IsStale(cached.LastCheckedAt))
         {
@@ -239,18 +239,18 @@ internal sealed class SchemaService(
             return cached;
         }
 
-        var key = KeyHelper.BuildStringKey(instanceHash, "TVP", normalized);
+        string key = KeyHelper.BuildStringKey(instanceHash, "TVP", normalized);
 
         if (!options.EnableSchemaCaching)
             return await LoadDirectTvpAsync(normalized, instanceHash, ct).ConfigureAwait(false);
 
         string[] tags = [Tag(instanceHash), Tag(instanceHash, "TVP")];
 
-        var schema = await cache.GetOrCreateAsync(
+        TvpSchema schema = await cache.GetOrCreateAsync(
             key,
             async token =>
             {
-                var loaded = await LoadTvpFromDbAsync(normalized, instanceHash, token).ConfigureAwait(false);
+                TvpSchema loaded = await LoadTvpFromDbAsync(normalized, instanceHash, token).ConfigureAwait(false);
                 await UpdateCacheAsync(key, loaded, instanceHash, "TVP", token).ConfigureAwait(false);
                 return loaded;
             },
@@ -273,7 +273,7 @@ internal sealed class SchemaService(
         {
             // [Negative Cache] 기록 - 두 번째 호출부터는 즉시 예외 throw
             NegativeCache.RecordMissing(instanceHash, normalized, "TvpType");
-            
+
             throw new InvalidOperationException(
                 $"[스키마 조회 실패] TVP(사용자 정의 테이블 타입) '{normalized}'을(를) 데이터베이스에서 찾을 수 없습니다. " +
                 $"타입이 존재하는지, 사용 권한이 있는지, 스키마(dbo 등)가 올바른지 확인하십시오. " +
@@ -292,13 +292,13 @@ internal sealed class SchemaService(
     /// <inheritdoc />
     public async Task<PreloadResult> PreloadSchemaAsync(IEnumerable<string> schemaNames, string instanceHash, CancellationToken ct)
     {
-        using var activity = s_activity.StartActivity("PreloadSchema");
+        using Activity? activity = s_activity.StartActivity("PreloadSchema");
 
         // [Smart Deduplication]
         // 1. 중복 제거: "dbo", "dbo" -> "dbo" (Distinct)
         // 2. 대소문자 무시: "dbo", "DBO" -> "dbo" (OrdinalIgnoreCase)
         // 3. 유효성 체크: 빈 문자열 필터링
-        var schemaList = schemaNames
+        List<string> schemaList = schemaNames
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -306,34 +306,34 @@ internal sealed class SchemaService(
 
         if (schemaList.Count == 0)
         {
-             return new PreloadResult(0, []);
+            return new PreloadResult(0, []);
         }
 
         logger.LogInformation("[스키마 워밍업] 시작: 스키마 '{Schema}', 인스턴스 '{Instance}'",
             schemaLogStr, instanceHash);
 
-        var bulkData = await repo.GetAllSchemaMetadataAsync(
-            schemaList, 
+        SchemaBulkData bulkData = await repo.GetAllSchemaMetadataAsync(
+            schemaList,
             instanceHash,
             options.PrewarmIncludePatterns,
             options.PrewarmExcludePatterns,
             ct).ConfigureAwait(false);
 
-        var now = DateTime.UtcNow;
+        DateTime now = DateTime.UtcNow;
         string[] tags = [Tag(instanceHash)];
 
         using (_snapshot.BeginBulkLoad())
         {
             // SP 워밍업
-            foreach (var (name, version) in bulkData.SpVersions)
+            foreach ((string? name, long version) in bulkData.SpVersions)
             {
-                var norm = Normalize(name);
+                string norm = Normalize(name);
 
-                var parameters = bulkData.SpParameters.TryGetValue(name, out var pList)
+                SpParameterMetadata[] parameters = bulkData.SpParameters.TryGetValue(name, out List<SpParameterInfo>? pList)
                     ? pList.Select(SchemaMapper.MapToSpParameter).ToArray()
                     : Array.Empty<SpParameterMetadata>();
 
-                var schema = new SpSchema
+                SpSchema schema = new SpSchema
                 {
                     Name = norm,
                     VersionToken = version,
@@ -341,7 +341,7 @@ internal sealed class SchemaService(
                     Parameters = parameters
                 };
 
-                var key = KeyHelper.BuildStringKey(instanceHash, "SP", norm);
+                string key = KeyHelper.BuildStringKey(instanceHash, "SP", norm);
 
                 await cache.SetAsync(key, schema, _baseCacheOptions, tags, ct)
                             .ConfigureAwait(false);
@@ -350,15 +350,15 @@ internal sealed class SchemaService(
             }
 
             // TVP 워밍업
-            foreach (var (name, version) in bulkData.TvpVersions)
+            foreach ((string? name, long version) in bulkData.TvpVersions)
             {
-                var norm = Normalize(name);
+                string norm = Normalize(name);
 
-                var columns = bulkData.TvpColumns.TryGetValue(name, out var cList)
+                TvpColumnMetadata[] columns = bulkData.TvpColumns.TryGetValue(name, out List<TvpColumnInfo>? cList)
                     ? cList.Select(SchemaMapper.MapToTvpColumn).ToArray()
                     : Array.Empty<TvpColumnMetadata>();
 
-                var schema = new TvpSchema
+                TvpSchema schema = new TvpSchema
                 {
                     Name = norm,
                     VersionToken = version,
@@ -366,7 +366,7 @@ internal sealed class SchemaService(
                     Columns = columns
                 };
 
-                var key = KeyHelper.BuildStringKey(instanceHash, "TVP", norm);
+                string key = KeyHelper.BuildStringKey(instanceHash, "TVP", norm);
 
                 await cache.SetAsync(key, schema, _baseCacheOptions, tags, ct)
                             .ConfigureAwait(false);
@@ -379,17 +379,17 @@ internal sealed class SchemaService(
             bulkData.SpVersions.Count, bulkData.TvpVersions.Count);
 
         // 메트릭: 스키마 워밍업 성공
-        var info = BuildSchemaInfo(instanceHash, "schema.preload", schemaLogStr);
+        DbRequestInfo info = BuildSchemaInfo(instanceHash, "schema.preload", schemaLogStr);
         DbMetrics.TrackSchemaRefresh(success: true, kind: "All.Preload", info);
 
         // 검증: 요청했으나 DB에서 발견되지 않은 스키마 식별
         // (FoundSchemas는 SqlSchemaRepository에서 5번째 ResultSet으로 채워짐)
-        var loadedCount = bulkData.SpVersions.Count + bulkData.TvpVersions.Count;
-        var missingSchemas = new List<string>();
+        int loadedCount = bulkData.SpVersions.Count + bulkData.TvpVersions.Count;
+        List<string> missingSchemas = new List<string>();
 
         if (bulkData.FoundSchemas.Count > 0)
         {
-            foreach (var req in schemaList)
+            foreach (string req in schemaList)
             {
                 // FoundSchemas는 대소문자 구분 없이 비교 필요할 수 있으나,
                 // SqlDataReader.GetString()으로 가져온 값이므로 DB Collation을 따름.
@@ -402,8 +402,8 @@ internal sealed class SchemaService(
         }
         else if (schemaList.Count > 0 && loadedCount == 0)
         {
-             // FoundSchemas가 비어있고 로드된 것도 없다면 모든 요청 스키마가 누락된 것으로 간주
-             missingSchemas.AddRange(schemaList);
+            // FoundSchemas가 비어있고 로드된 것도 없다면 모든 요청 스키마가 누락된 것으로 간주
+            missingSchemas.AddRange(schemaList);
         }
 
         return new PreloadResult(loadedCount, missingSchemas);
@@ -420,7 +420,7 @@ internal sealed class SchemaService(
 
         bool hasError = false;
 
-        foreach (ref readonly var hook in _flushHooks.AsSpan())
+        foreach (ref readonly SchemaFlushHook hook in _flushHooks.AsSpan())
         {
             try
             {
@@ -436,15 +436,15 @@ internal sealed class SchemaService(
         }
 
         // 메트릭: Flush 성공/실패 기록
-        var info = BuildSchemaInfo(instanceHash, "schema.flush", "*");
+        DbRequestInfo info = BuildSchemaInfo(instanceHash, "schema.flush", "*");
         DbMetrics.TrackSchemaRefresh(success: !hasError, kind: "All.Flush", info);
     }
 
     /// <inheritdoc />
     public void InvalidateSpSchema(string spName, string instanceHash)
     {
-        var normalized = Normalize(spName);
-        var key = KeyHelper.BuildStringKey(instanceHash, "SP", normalized);
+        string normalized = Normalize(spName);
+        string key = KeyHelper.BuildStringKey(instanceHash, "SP", normalized);
 
         _ = cache.RemoveAsync(key, CancellationToken.None);
         _snapshot.RemoveSp(instanceHash, normalized);
@@ -458,7 +458,7 @@ internal sealed class SchemaService(
     /// </summary>
     public void Dispose()
     {
-        foreach (var sem in _stripedLocks)
+        foreach (SemaphoreSlim sem in _stripedLocks)
         {
             sem.Dispose();
         }
@@ -496,11 +496,11 @@ internal sealed class SchemaService(
         CancellationToken ct,
         bool isTvp)
     {
-        var kind = isTvp ? "TVP" : "SP";
-        var info = BuildSchemaInfo(hash, $"schema.{kind.ToLowerInvariant()}.refresh", name);
+        string kind = isTvp ? "TVP" : "SP";
+        DbRequestInfo info = BuildSchemaInfo(hash, $"schema.{kind.ToLowerInvariant()}.refresh", name);
 
         uint lockIdx = (uint)key.GetHashCode() & (LockStripes - 1);
-        var sem = _stripedLocks[lockIdx];
+        SemaphoreSlim sem = _stripedLocks[lockIdx];
 
         if (!await sem.WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false))
         {
@@ -535,7 +535,7 @@ internal sealed class SchemaService(
                 return current;
             }
 
-            var newSchema = isTvp
+            SchemaBase newSchema = isTvp
                 ? (SchemaBase)await LoadTvpFromDbAsync(name, hash, ct).ConfigureAwait(false)
                 : await LoadSpFromDbAsync(name, hash, ct).ConfigureAwait(false);
 
@@ -568,7 +568,7 @@ internal sealed class SchemaService(
         bool isTvp,
         CancellationToken ct)
     {
-        var nullObj = isTvp ? (SchemaBase)NullTvp : NullSp;
+        SchemaBase nullObj = isTvp ? (SchemaBase)NullTvp : NullSp;
         await UpdateCacheAsync(key, nullObj, hash, isTvp ? "TVP" : "SP", ct)
             .ConfigureAwait(false);
         return nullObj;
@@ -587,7 +587,7 @@ internal sealed class SchemaService(
         double jitterSeconds =
             options.SchemaRefreshIntervalSeconds * (0.9 + Random.Shared.NextDouble() * 0.2);
 
-        var opts = new HybridCacheEntryOptions
+        HybridCacheEntryOptions opts = new HybridCacheEntryOptions
         {
             Expiration = TimeSpan.FromSeconds(jitterSeconds),
             LocalCacheExpiration = TimeSpan.FromMinutes(60)
@@ -605,7 +605,7 @@ internal sealed class SchemaService(
         string hash,
         CancellationToken ct)
     {
-        var meta = await repo.GetSpMetadataAsync(name, hash, ct).ConfigureAwait(false);
+        SpMetadata meta = await repo.GetSpMetadataAsync(name, hash, ct).ConfigureAwait(false);
 
         if (meta.Version == 0)
             return NullSp;
@@ -627,7 +627,7 @@ internal sealed class SchemaService(
         string hash,
         CancellationToken ct)
     {
-        var meta = await repo.GetTvpMetadataAsync(name, hash, ct).ConfigureAwait(false);
+        TvpMetadata meta = await repo.GetTvpMetadataAsync(name, hash, ct).ConfigureAwait(false);
 
         if (meta.Version == 0)
             return NullTvp;
@@ -646,7 +646,7 @@ internal sealed class SchemaService(
         string hash,
         CancellationToken ct)
     {
-        var schema = await LoadSpFromDbAsync(name, hash, ct).ConfigureAwait(false);
+        SpSchema schema = await LoadSpFromDbAsync(name, hash, ct).ConfigureAwait(false);
         _snapshot.UpsertSp(hash, schema);
         return schema;
     }
@@ -656,7 +656,7 @@ internal sealed class SchemaService(
         string hash,
         CancellationToken ct)
     {
-        var schema = await LoadTvpFromDbAsync(name, hash, ct).ConfigureAwait(false);
+        TvpSchema schema = await LoadTvpFromDbAsync(name, hash, ct).ConfigureAwait(false);
         _snapshot.UpsertTvp(hash, schema);
         return schema;
     }
@@ -725,7 +725,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
 
     // [병합 플래그] Interlocked 연산을 위해 int로 선언 (0=idle, 1=merging)
     private int _isMergingInt;
-    
+
     // [벌크 로드 깊이] 중첩된 벌크 로드 추적
     private int _bulkLoadDepth;
 
@@ -737,7 +737,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     public SpSchema? GetSp(ReadOnlySpan<char> compositeKey)
     {
         if (_l1Sp.GetAlternateLookup<ReadOnlySpan<char>>()
-                 .TryGetValue(compositeKey, out var item))
+                 .TryGetValue(compositeKey, out SpSchema? item))
         {
             return item;
         }
@@ -754,7 +754,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SpSchema? GetSp(string key)
     {
-        if (_l1Sp.TryGetValue(key, out var item))
+        if (_l1Sp.TryGetValue(key, out SpSchema? item))
             return item;
 
         if (_l2Sp.TryGetValue(key, out item))
@@ -767,7 +767,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     public TvpSchema? GetTvp(ReadOnlySpan<char> compositeKey)
     {
         if (_l1Tvp.GetAlternateLookup<ReadOnlySpan<char>>()
-                  .TryGetValue(compositeKey, out var item))
+                  .TryGetValue(compositeKey, out TvpSchema? item))
         {
             return item;
         }
@@ -784,7 +784,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TvpSchema? GetTvp(string key)
     {
-        if (_l1Tvp.TryGetValue(key, out var item))
+        if (_l1Tvp.TryGetValue(key, out TvpSchema? item))
             return item;
 
         if (_l2Tvp.TryGetValue(key, out item))
@@ -802,7 +802,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     /// </summary>
     public void UpsertSp(string instanceHash, SpSchema schema)
     {
-        var key = KeyHelper.BuildSnapshotKey(instanceHash, schema.Name);
+        string key = KeyHelper.BuildSnapshotKey(instanceHash, schema.Name);
         _l2Sp[key] = schema;
         CheckMerge();
     }
@@ -812,7 +812,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     /// </summary>
     public void UpsertTvp(string instanceHash, TvpSchema schema)
     {
-        var key = KeyHelper.BuildSnapshotKey(instanceHash, schema.Name);
+        string key = KeyHelper.BuildSnapshotKey(instanceHash, schema.Name);
         _l2Tvp[key] = schema;
         CheckMerge();
     }
@@ -822,7 +822,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     /// </summary>
     public void RemoveSp(string instanceHash, string spName)
     {
-        var key = KeyHelper.BuildSnapshotKey(instanceHash, spName);
+        string key = KeyHelper.BuildSnapshotKey(instanceHash, spName);
         _l2Sp.TryRemove(key, out _);
 
         // L1에 있다면 병합 필요
@@ -837,16 +837,16 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     /// </summary>
     public void Clear(string instanceHash)
     {
-        var prefix = instanceHash + ":";
+        string prefix = instanceHash + ":";
 
         // L2에서 해당 인스턴스의 모든 항목 제거
-        foreach (var k in _l2Sp.Keys.ToArray())
+        foreach (string k in _l2Sp.Keys.ToArray())
         {
             if (k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 _l2Sp.TryRemove(k, out _);
         }
 
-        foreach (var k in _l2Tvp.Keys.ToArray())
+        foreach (string k in _l2Tvp.Keys.ToArray())
         {
             if (k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 _l2Tvp.TryRemove(k, out _);
@@ -956,12 +956,12 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
                     return;
 
                 // ===== SP 스키마 병합 =====
-                var newSp = new Dictionary<string, SpSchema>(_l1Sp, StringComparer.OrdinalIgnoreCase);
+                Dictionary<string, SpSchema> newSp = new Dictionary<string, SpSchema>(_l1Sp, StringComparer.OrdinalIgnoreCase);
 
                 // clearPrefix가 있으면 해당 항목 제거
                 if (clearPrefix is not null)
                 {
-                    foreach (var key in newSp.Keys.ToArray())
+                    foreach (string key in newSp.Keys.ToArray())
                     {
                         if (key.StartsWith(clearPrefix, StringComparison.OrdinalIgnoreCase))
                             newSp.Remove(key);
@@ -969,7 +969,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
                 }
 
                 // L2의 모든 항목을 병합 (덮어쓰기)
-                foreach (var kvp in _l2Sp)
+                foreach (KeyValuePair<string, SpSchema> kvp in _l2Sp)
                 {
                     newSp[kvp.Key] = kvp.Value;
                 }
@@ -979,18 +979,18 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
                 _l2Sp.Clear();
 
                 // ===== TVP 스키마 병합 =====
-                var newTvp = new Dictionary<string, TvpSchema>(_l1Tvp, StringComparer.OrdinalIgnoreCase);
+                Dictionary<string, TvpSchema> newTvp = new Dictionary<string, TvpSchema>(_l1Tvp, StringComparer.OrdinalIgnoreCase);
 
                 if (clearPrefix is not null)
                 {
-                    foreach (var key in newTvp.Keys.ToArray())
+                    foreach (string key in newTvp.Keys.ToArray())
                     {
                         if (key.StartsWith(clearPrefix, StringComparison.OrdinalIgnoreCase))
                             newTvp.Remove(key);
                     }
                 }
 
-                foreach (var kvp in _l2Tvp)
+                foreach (KeyValuePair<string, TvpSchema> kvp in _l2Tvp)
                 {
                     newTvp[kvp.Key] = kvp.Value;
                 }
@@ -1058,11 +1058,11 @@ internal sealed class TvpSchemaValidator(
         if (options.TvpValidationMode == TvpValidationMode.None || accessors.IsValidated)
             return;
 
-        var name = TvpName.Parse(tvpTypeName).FullName;
+        string name = TvpName.Parse(tvpTypeName).FullName;
 
         try
         {
-            var schema = await service.GetTvpSchemaAsync(name, instanceHash, ct)
+            TvpSchema schema = await service.GetTvpSchemaAsync(name, instanceHash, ct)
                                       .ConfigureAwait(false);
 
             ValidateStructure(accessors.Properties.AsSpan(), schema.Columns.AsSpan(), name);
@@ -1076,7 +1076,7 @@ internal sealed class TvpSchemaValidator(
                 : "알수없음";
 
             // 메트릭: TVP 검증 실패 (Strict / LogOnly 공통)
-            var info = new DbRequestInfo
+            DbRequestInfo info = new DbRequestInfo
             {
                 InstanceId = instanceHash,
                 Operation = "schema.tvp.validate",
@@ -1156,9 +1156,9 @@ internal sealed class TvpSchemaValidator(
                         props[i + j].Name,
                         StringComparison.OrdinalIgnoreCase);
                 }
-                
+
                 // 2. Vector256<int>로 로드
-                var propHashVec = Vector256.Create(
+                Vector256<int> propHashVec = Vector256.Create(
                     propHashes[0], propHashes[1], propHashes[2], propHashes[3],
                     propHashes[4], propHashes[5], propHashes[6], propHashes[7]);
 
@@ -1167,18 +1167,18 @@ internal sealed class TvpSchemaValidator(
                 {
                     colHashes[j] = cols[i + j].NameHash;
                 }
-                
+
                 // 4. Vector256<int>로 로드
-                var colHashVec = Vector256.Create(
+                Vector256<int> colHashVec = Vector256.Create(
                     colHashes[0], colHashes[1], colHashes[2], colHashes[3],
                     colHashes[4], colHashes[5], colHashes[6], colHashes[7]);
 
                 // 5. ✅ 벡터 비교 (8개를 한 번에!)
-                var cmpResult = Vector256.Equals(propHashVec, colHashVec);
+                Vector256<int> cmpResult = Vector256.Equals(propHashVec, colHashVec);
 
                 // 6. 모두 일치하는지 확인 (모든 비트가 1이어야 함)
-                var mask = System.Runtime.Intrinsics.X86.Avx2.MoveMask(cmpResult.AsByte());
-                
+                int mask = System.Runtime.Intrinsics.X86.Avx2.MoveMask(cmpResult.AsByte());
+
                 // 완벽히 일치하면 mask == 0xFFFFFFFF (모든 바이트가 0xFF)
                 if (mask != unchecked((int)0xFFFFFFFF))
                 {
@@ -1216,10 +1216,10 @@ internal sealed class TvpSchemaValidator(
         }
 
         // 2. SQL 타입 비교
-        var propType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
-        
+        Type propType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+
         // 타입 맵핑 검증 (기존 로직 유지)
-        if (s_typeMap.TryGetValue(propType, out var validTypes) &&
+        if (s_typeMap.TryGetValue(propType, out SqlDbType[]? validTypes) &&
             !validTypes.Contains(col.SqlDbType))
         {
             Throw(tvpName, SchemaConstants.ErrTypeMismatch,
@@ -1280,7 +1280,7 @@ file static class SchemaMapper
             IsNullable: info.IsNullable);
 
     private static SqlDbType MapToSql(string typeName)
-        => Enum.TryParse<SqlDbType>(typeName, ignoreCase: true, out var parsed)
+        => Enum.TryParse<SqlDbType>(typeName, ignoreCase: true, out SqlDbType parsed)
             ? parsed
             : typeName.ToLowerInvariant() switch
             {

@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // File: Lib.Db/Execution/Binding/DbBinding.cs
 // Role: 데이터 바인딩, TVP 변환, 유효성 검증을 총괄하는 단일 엔진
 // Merged: DataBindingEngine + DataBindingHelpers + TvpFactory
@@ -18,12 +18,11 @@ using System.Diagnostics.CodeAnalysis; // [AOT] NotNullWhen 등
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices; // [Zero-Copy] CollectionsMarshal
 using System.Text.Json;
-
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution.Tvp;
-using System.Runtime.InteropServices; // [Zero-Copy] CollectionsMarshal
 
 namespace Lib.Db.Execution.Binding;
 
@@ -181,10 +180,10 @@ public static partial class DbBinder
         // NOT NULL + Strict 모드 위반
         if (strictCheck && !meta.IsNullable && isNullOrDbNull && meta.Direction == ParameterDirection.Input)
         {
-            var baseMsg = $"파라미터 '{meta.Name}'는 필수값입니다. (NOT NULL 제약 조건 위반) " +
+            string baseMsg = $"파라미터 '{meta.Name}'는 필수값입니다. (NOT NULL 제약 조건 위반) " +
                           $"Command: {DbExecutionContextScope.Current?.CommandText ?? "N/A"}, " +
                           $"SQL 타입: {meta.SqlDbType}, Direction: {meta.Direction}";
-            var ctx = Context.FromMeta(meta, typeof(object));
+            Context ctx = Context.FromMeta(meta, typeof(object));
             throw new ArgumentException(ctx.CreateErrorMessage(baseMsg), meta.Name);
         }
 
@@ -204,7 +203,7 @@ public static partial class DbBinder
             if (finalValue is string strVal)
             {
                 // 문자열 전처리 (공백/제어문자 제거 등)
-                var processedSpan = StringPreprocessor.Sanitize(strVal);
+                ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(strVal);
 
                 // Size 기반 Truncate
                 if (meta.Size > 0 && processedSpan.Length > meta.Size)
@@ -234,7 +233,7 @@ public static partial class DbBinder
         }
 
         // 3. SqlParameter 생성 및 설정
-        var sqlParam = cmd.Parameters.Add(
+        SqlParameter sqlParam = cmd.Parameters.Add(
             meta.Name,
             meta.SqlDbType == SqlDbType.Structured ? SqlDbType.Structured : meta.SqlDbType);
 
@@ -247,11 +246,15 @@ public static partial class DbBinder
         else
         {
             // Size, Precision, Scale 설정
-            if (meta.Size > 0) sqlParam.Size = (int)meta.Size;
-            else if (meta.Size == -1) sqlParam.Size = -1; // MAX
+            if (meta.Size > 0)
+                sqlParam.Size = (int)meta.Size;
+            else if (meta.Size == -1)
+                sqlParam.Size = -1; // MAX
 
-            if (meta.Precision > 0) sqlParam.Precision = meta.Precision;
-            if (meta.Scale > 0) sqlParam.Scale = meta.Scale;
+            if (meta.Precision > 0)
+                sqlParam.Precision = meta.Precision;
+            if (meta.Scale > 0)
+                sqlParam.Scale = meta.Scale;
         }
 
         sqlParam.Value = finalValue;
@@ -303,13 +306,13 @@ public static partial class DbBinder
         // 2. 문자열 전처리
         if (finalValue is string strVal)
         {
-            var processedSpan = StringPreprocessor.Sanitize(strVal);
+            ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(strVal);
             if (processedSpan.Length != strVal.Length)
                 finalValue = processedSpan.ToString();
         }
         // 3. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
         //    List<Dto>를 넘겼을 때 JSON으로 오판하여 AOT 에러가 나는 것을 방지
-        else if (IsTvpCollection(finalValue, out var tvpReader, out tvpTypeName))
+        else if (IsTvpCollection(finalValue, out IDataReader? tvpReader, out tvpTypeName))
         {
             finalValue = tvpReader;
         }
@@ -345,8 +348,10 @@ public static partial class DbBinder
             if (finalValue is byte[] or Stream)
             {
                 // Stream은 무조건 -1(MAX), byte[]는 VarBinary인 경우에만 MAX로 처리
-                if (finalValue is Stream) size = -1;
-                else if (dbType == SqlDbType.VarBinary) size = -1;
+                if (finalValue is Stream)
+                    size = -1;
+                else if (dbType == SqlDbType.VarBinary)
+                    size = -1;
             }
         }
 
@@ -378,12 +383,14 @@ public static partial class DbBinder
         {
             p.Value = bytes;
             // 생성자에서 Size를 설정하지 않은 경우, VarBinary는 -1(MAX)로 보정
-            if (size <= 0 && p.Size == 0) p.Size = -1;
+            if (size <= 0 && p.Size == 0)
+                p.Size = -1;
         }
         else if (finalValue is Stream stream)
         {
             p.Value = stream;
-            if (size <= 0) p.Size = -1;
+            if (size <= 0)
+                p.Size = -1;
         }
         else
         {
@@ -396,8 +403,10 @@ public static partial class DbBinder
             p.TypeName = tvpTypeName;
         }
 
-        if (precision > 0) p.Precision = precision;
-        if (scale > 0) p.Scale = scale;
+        if (precision > 0)
+            p.Precision = precision;
+        if (scale > 0)
+            p.Scale = scale;
 
         cmd.Parameters.Add(p);
     }
@@ -436,8 +445,8 @@ public static partial class DbBinder
         }
         else
         {
-            var accessors = TvpAccessorCache.GetAccessors<T>();
-            foreach (var prop in accessors.Properties)
+            TvpAccessors accessors = TvpAccessorCache.GetAccessors<T>();
+            foreach (PropertyInfo prop in accessors.Properties)
                 bulk.ColumnMappings.Add(prop.Name, prop.Name);
         }
     }
@@ -468,12 +477,15 @@ public static partial class DbBinder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static object NormalizeNumericForDbType(object value, SqlDbType dbType)
     {
-        if (value is Enum e) return ConvertEnum(e, dbType);
-        if (value is DataTable or DataRow or IDataReader or Stream) return value;
+        if (value is Enum e)
+            return ConvertEnum(e, dbType);
+        if (value is DataTable or DataRow or IDataReader or Stream)
+            return value;
 
         // [수정] Half 타입 처리 추가 (.NET 10)
         // SQL Client는 Half를 직접 지원하지 않으므로 float(System.Single)로 변환
-        if (value is Half h) return (float)h;
+        if (value is Half h)
+            return (float)h;
 
         return ConvertNumeric(value, dbType);
     }
@@ -520,7 +532,7 @@ public static partial class DbBinder
                 return;
             }
 
-            var underlying = Enum.GetUnderlyingType(e.GetType());
+            Type underlying = Enum.GetUnderlyingType(e.GetType());
             if (underlying == typeof(byte) || underlying == typeof(ushort) || underlying == typeof(uint) || underlying == typeof(ulong))
                 CheckUnsignedIntegerRange(paramName, Convert.ToUInt64(e), dbType, precision, scale);
             else
@@ -532,7 +544,7 @@ public static partial class DbBinder
         // Decimal/Money
         if (dbType is SqlDbType.Decimal or SqlDbType.Money)
         {
-            var dec = Convert.ToDecimal(value);
+            decimal dec = Convert.ToDecimal(value);
             if (!DecimalFits(dec, precision, scale))
                 ThrowOverflow(paramName, dbType, value, precision, scale);
             return;
@@ -554,13 +566,15 @@ public static partial class DbBinder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool DecimalFits(decimal value, byte precision, byte scale)
     {
-        if (precision == 0 || precision <= scale) return true;
+        if (precision == 0 || precision <= scale)
+            return true;
 
         value = Math.Abs(value);
         decimal integerPart = decimal.Truncate(value);
         int maxIntegerDigits = precision - scale;
 
-        if (maxIntegerDigits >= s_powersOf10.Length) return true;
+        if (maxIntegerDigits >= s_powersOf10.Length)
+            return true;
         return integerPart < s_powersOf10[maxIntegerDigits];
     }
 
@@ -569,9 +583,9 @@ public static partial class DbBinder
     /// </summary>
     private static void ThrowOverflow(string paramName, SqlDbType dbType, object value, byte precision, byte scale)
     {
-        var baseMessage = $"파라미터 '{paramName}' ({dbType})의 값 {value}은(는) DB 제약(Precision:{precision}, Scale:{scale})을 초과합니다. " +
+        string baseMessage = $"파라미터 '{paramName}' ({dbType})의 값 {value}은(는) DB 제약(Precision:{precision}, Scale:{scale})을 초과합니다. " +
                           $"SQL 타입: {dbType}, 허용 범위: Decimal({precision},{scale})";
-        var ctx = new Context(DbExecutionContextScope.Current, paramName.AsSpan(), ReadOnlySpan<char>.Empty, value.GetType());
+        Context ctx = new Context(DbExecutionContextScope.Current, paramName.AsSpan(), ReadOnlySpan<char>.Empty, value.GetType());
         throw new ArgumentOutOfRangeException(paramName, ctx.CreateErrorMessage(baseMessage));
     }
 
@@ -621,9 +635,9 @@ public static partial class DbBinder
         // SQL Server DATETIME 최소/최대 범위
         if (val < System.Data.SqlTypes.SqlDateTime.MinValue.Value || val > System.Data.SqlTypes.SqlDateTime.MaxValue.Value)
         {
-             var ctx = new Context(DbExecutionContextScope.Current, paramName.AsSpan(), ReadOnlySpan<char>.Empty, typeof(DateTime));
-             throw new ArgumentOutOfRangeException(paramName, 
-                 ctx.CreateErrorMessage($"파라미터 '{paramName}'의 값 '{val}'은(는) DATETIME 범위를 벗어납니다. (허용: 1753-01-01 ~ 9999-12-31)"));
+            Context ctx = new Context(DbExecutionContextScope.Current, paramName.AsSpan(), ReadOnlySpan<char>.Empty, typeof(DateTime));
+            throw new ArgumentOutOfRangeException(paramName,
+                ctx.CreateErrorMessage($"파라미터 '{paramName}'의 값 '{val}'은(는) DATETIME 범위를 벗어납니다. (허용: 1753-01-01 ~ 9999-12-31)"));
         }
     }
 
@@ -680,7 +694,7 @@ public static partial class DbBinder
         {
             try
             {
-                if (TvpFactoryRegistry.TryGet(value.GetType(), out var factory, out sqlTypeName))
+                if (TvpFactoryRegistry.TryGet(value.GetType(), out Func<object, IDataReader>? factory, out sqlTypeName))
                 {
                     reader = factory!(value);
                     return true;
@@ -697,16 +711,16 @@ public static partial class DbBinder
         sqlTypeName = null;
         if (value is IEnumerable and not (string or byte[]))
         {
-            var type = value.GetType();
+            Type type = value.GetType();
             // 배열 또는 제네릭 리스트의 요소 타입 확인
-            var elementType = type.IsArray
+            Type? elementType = type.IsArray
                 ? type.GetElementType()
                 : (type.IsGenericType ? type.GetGenericArguments()[0] : null);
 
             // 요소 타입을 찾지 못했다면 인터페이스 탐색
             if (elementType == null)
             {
-                foreach (var iface in type.GetInterfaces())
+                foreach (Type iface in type.GetInterfaces())
                 {
                     if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IEnumerable<>))
                     {
@@ -721,13 +735,13 @@ public static partial class DbBinder
             {
                 // [AOT Note] MakeGenericMethod는 AOT에서 경고를 유발할 수 있으나,
                 // TvpRow가 적용된 타입은 보통 Source Generator에 의해 보존되므로 안전할 가능성이 높습니다.
-                var method = typeof(Tvp).GetMethod(nameof(Tvp.CreateReaderForBulk), BindingFlags.NonPublic | BindingFlags.Static)!
+                MethodInfo method = typeof(Tvp).GetMethod(nameof(Tvp.CreateReaderForBulk), BindingFlags.NonPublic | BindingFlags.Static)!
                     .MakeGenericMethod(elementType);
 
                 reader = (IDataReader)method.Invoke(null, [value])!;
-                
+
                 // [추가] TvpRowAttribute에서 TypeName 추출
-                var attr = elementType.GetCustomAttribute<TvpRowAttribute>();
+                TvpRowAttribute? attr = elementType.GetCustomAttribute<TvpRowAttribute>();
                 sqlTypeName = attr?.TypeName;
 
                 return true;
@@ -822,11 +836,11 @@ public static partial class DbBinder
         {
             ArgumentNullException.ThrowIfNull(list);
 
-            var listType = list.GetType();
-            var elementType = TryGetElementType(listType);
+            Type listType = list.GetType();
+            Type? elementType = TryGetElementType(listType);
             if (elementType is null)
             {
-                var ctx = Context.FromMeta(meta, listType);
+                Context ctx = Context.FromMeta(meta, listType);
                 throw new InvalidOperationException(
                     ctx.CreateErrorMessage($"'{listType.Name}'은(는) 지원되지 않는 컬렉션 타입입니다.", "[TVP 바인딩 오류]"));
             }
@@ -835,7 +849,7 @@ public static partial class DbBinder
             ValidateTvpSchema(meta, elementType);
 
             // 2. Reader 팩터리 조회 (Bounded Cache)
-            if (!s_readerCache.TryGetValue(elementType, out var factory))
+            if (!s_readerCache.TryGetValue(elementType, out Func<IEnumerable, IDataReader>? factory))
             {
                 if (s_readerCache.Count >= s_maxCacheSize)
                     s_readerCache.Clear();
@@ -843,10 +857,10 @@ public static partial class DbBinder
                 factory = s_readerCache.GetOrAdd(elementType, static t => CreateFactory(t));
             }
 
-            var reader = factory(list);
+            IDataReader? reader = factory(list);
             if (reader is null)
             {
-                var ctx = Context.FromMeta(meta, elementType);
+                Context ctx = Context.FromMeta(meta, elementType);
                 throw new InvalidOperationException(
                     ctx.CreateErrorMessage("TVP 리더 생성 결과가 null입니다.", "[TVP 바인딩 오류]"));
             }
@@ -862,8 +876,10 @@ public static partial class DbBinder
         {
             ArgumentNullException.ThrowIfNull(data);
 
-            if (data is DataTable dt) return dt.CreateDataReader();
-            if (data is IDataReader dr) return dr;
+            if (data is DataTable dt)
+                return dt.CreateDataReader();
+            if (data is IDataReader dr)
+                return dr;
 
             return CreateColumnarTvpReader(data);
         }
@@ -886,10 +902,10 @@ public static partial class DbBinder
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         private static IDataReader CreateColumnarTvpReader<T>(IEnumerable<T> items)
         {
-            var accessors = TvpAccessorCache.GetTypedAccessors<T>();
-            var props = accessors.Properties;
-            var columns = new ColumnBuffer[props.Length];
-            var adders = BufferAdderCache.GetAdders(props);
+            TvpAccessors<T> accessors = TvpAccessorCache.GetTypedAccessors<T>();
+            PropertyInfo[] props = accessors.Properties;
+            ColumnBuffer[] columns = new ColumnBuffer[props.Length];
+            Action<ColumnBuffer, object?>[] adders = BufferAdderCache.GetAdders(props);
 
             // 초기 용량 추론 (ICollection<T>이면 정확한 Count를 사용)
             int initialCapacity = items is ICollection<T> c ? c.Count : 1024;
@@ -900,9 +916,9 @@ public static partial class DbBinder
                 for (int i = 0; i < props.Length; i++)
                     columns[i] = ColumnBufferFactory.Create(props[i].PropertyType, initialCapacity);
 
-                var getters = accessors.TypedAccessors;
-                var bufferAdder = accessors.BufferAdder;
-                
+                Func<T, object?>[] getters = accessors.TypedAccessors;
+                Action<T, object[]>? bufferAdder = accessors.BufferAdder;
+
                 long totalBytesSampled = 0;
                 int rowCount = 0;
 
@@ -911,20 +927,21 @@ public static partial class DbBinder
                 {
                     // object[]로 캐스팅하여 전달 (인터페이스 변환 비용 최소화)
                     // SG 내부에서 ((ITvpColumn<T>)columns[i]).Add() 호출
-                    object[] colRefs = columns; 
-                    
-                    foreach (var item in items)
+                    object[] colRefs = columns;
+
+                    foreach (T? item in items)
                     {
                         rowCount++;
                         bufferAdder(item, colRefs);
-                        
+
                         // [메트릭] 고속 경로에서도 샘플링은 필요하지만,
                         // SG 최적화 모드에서는 편의상 첫 번째 컬럼(보통 PK)이나 단순 카운트 기반으로 추정 가능.
                         // 여기서는 정확한 바이트 계산이 어려우므로(Getter를 안 부르니까), 
                         // 평균적인 Row 크기(예: 64바이트)로 간단히 추산하거나, 
                         // 정확도를 위해 별도 로직을 탈 수 있음. 
                         // 현재 구조상 성능을 위해 루프 내 추가 계산은 최소화.
-                        if ((rowCount & 127) == 0) totalBytesSampled += 64; 
+                        if ((rowCount & 127) == 0)
+                            totalBytesSampled += 64;
                     }
                 }
 
@@ -933,8 +950,8 @@ public static partial class DbBinder
                     // [Zero-Copy 최적화] List<T> 또는 T[]인 경우 Span으로 변환하여 Enumerator 할당 제거
                     if (items is List<T> list)
                     {
-                        var span = CollectionsMarshal.AsSpan(list);
-                        foreach (var item in span)
+                        Span<T> span = CollectionsMarshal.AsSpan(list);
+                        foreach (T? item in span)
                         {
                             rowCount++;
                             ProcessItem(item, props, getters, adders, columns, ref totalBytesSampled, rowCount);
@@ -942,7 +959,7 @@ public static partial class DbBinder
                     }
                     else if (items is T[] array)
                     {
-                        foreach (var item in array)
+                        foreach (T? item in array)
                         {
                             rowCount++;
                             ProcessItem(item, props, getters, adders, columns, ref totalBytesSampled, rowCount);
@@ -951,7 +968,7 @@ public static partial class DbBinder
                     else
                     {
                         // 일반 IEnumerable (Enumerator 할당 발생)
-                        foreach (var item in items)
+                        foreach (T? item in items)
                         {
                             rowCount++;
                             ProcessItem(item, props, getters, adders, columns, ref totalBytesSampled, rowCount);
@@ -977,7 +994,7 @@ public static partial class DbBinder
             catch
             {
                 // 예외 발생 시 버퍼 자원 정리
-                foreach (var col in columns)
+                foreach (ColumnBuffer col in columns)
                     col?.Dispose();
 
                 throw;
@@ -1018,18 +1035,18 @@ public static partial class DbBinder
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void ProcessItem<T>(
-            T item, 
-            System.Reflection.PropertyInfo[] props, 
-            Func<T, object?>[] getters, 
-            Action<ColumnBuffer, object?>[] adders, 
-            ColumnBuffer[] columns, 
-            ref long totalBytesSampled, 
+            T item,
+            System.Reflection.PropertyInfo[] props,
+            Func<T, object?>[] getters,
+            Action<ColumnBuffer, object?>[] adders,
+            ColumnBuffer[] columns,
+            ref long totalBytesSampled,
             int rowCount)
         {
             for (int i = 0; i < props.Length; i++)
             {
-                var val = getters[i](item);
-                var processedValue = AutoSerializeIfNeeded(val, props[i].PropertyType);
+                object? val = getters[i](item);
+                object? processedValue = AutoSerializeIfNeeded(val, props[i].PropertyType);
                 adders[i](columns[i], processedValue);
 
                 if ((rowCount & 127) == 0)
@@ -1045,12 +1062,13 @@ public static partial class DbBinder
 
         private static Type? TryGetElementType(Type type)
         {
-            if (type.IsArray) return type.GetElementType();
+            if (type.IsArray)
+                return type.GetElementType();
 
             if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))
                 return type.GetGenericArguments()[0];
 
-            foreach (var iface in type.GetInterfaces())
+            foreach (Type iface in type.GetInterfaces())
             {
                 if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IEnumerable<>))
                     return iface.GetGenericArguments()[0];
@@ -1061,13 +1079,13 @@ public static partial class DbBinder
 
         private static Func<IEnumerable, IDataReader> CreateFactory(Type type)
         {
-            var method = typeof(Tvp)
+            MethodInfo method = typeof(Tvp)
                 .GetMethod(nameof(CreateColumnarTvpReader), BindingFlags.NonPublic | BindingFlags.Static)!
                 .MakeGenericMethod(type);
 
-            var p = Expression.Parameter(typeof(IEnumerable), "items");
-            var cast = Expression.Convert(p, typeof(IEnumerable<>).MakeGenericType(type));
-            var call = Expression.Call(method, cast);
+            ParameterExpression p = Expression.Parameter(typeof(IEnumerable), "items");
+            UnaryExpression cast = Expression.Convert(p, typeof(IEnumerable<>).MakeGenericType(type));
+            MethodCallExpression call = Expression.Call(method, cast);
 
             return Expression.Lambda<Func<IEnumerable, IDataReader>>(call, p).Compile();
         }
@@ -1081,9 +1099,9 @@ public static partial class DbBinder
             if (string.IsNullOrEmpty(meta.UdtTypeName) || ValidatorCallback is null)
                 return;
 
-            var key = (ClrType: type, TvpName: meta.UdtTypeName);
+            (Type ClrType, string TvpName) key = (ClrType: type, TvpName: meta.UdtTypeName);
 
-            if (!s_validationCache.TryGetValue(key, out var state))
+            if (!s_validationCache.TryGetValue(key, out TvpValidationState state))
             {
                 if (s_validationCache.Count >= s_maxCacheSize)
                     s_validationCache.Clear();
@@ -1104,7 +1122,7 @@ public static partial class DbBinder
 
             if (state == TvpValidationState.Failed)
             {
-                var ctx = Context.FromMeta(meta, type);
+                Context ctx = Context.FromMeta(meta, type);
                 throw new InvalidOperationException(
                     ctx.CreateErrorMessage(
                         "TVP 타입과 DTO 구조가 일치하지 않습니다. (스키마 검증 실패)",
@@ -1132,11 +1150,11 @@ public static partial class DbBinder
             /// </summary>
             public static Action<ColumnBuffer, object?>[] GetAdders(PropertyInfo[] props)
             {
-                var ret = new Action<ColumnBuffer, object?>[props.Length];
+                Action<ColumnBuffer, object?>[] ret = new Action<ColumnBuffer, object?>[props.Length];
 
                 for (int i = 0; i < props.Length; i++)
                 {
-                    var type = props[i].PropertyType;
+                    Type type = props[i].PropertyType;
 
                     ret[i] = s_cache.GetOrAdd(type, static t => CreateAdder(t));
 
@@ -1153,32 +1171,32 @@ public static partial class DbBinder
             /// </summary>
             private static Action<ColumnBuffer, object?> CreateAdder(Type type)
             {
-                var pBuf = Expression.Parameter(typeof(ColumnBuffer), "buf");
-                var pVal = Expression.Parameter(typeof(object), "val");
+                ParameterExpression pBuf = Expression.Parameter(typeof(ColumnBuffer), "buf");
+                ParameterExpression pVal = Expression.Parameter(typeof(object), "val");
 
-                var typed = typeof(TypedColumnBuffer<>).MakeGenericType(type);
-                var add = typed.GetMethod("Add")!;
-                var castBuf = Expression.Convert(pBuf, typed);
+                Type typed = typeof(TypedColumnBuffer<>).MakeGenericType(type);
+                MethodInfo add = typed.GetMethod("Add")!;
+                UnaryExpression castBuf = Expression.Convert(pBuf, typed);
 
                 // Nullable이 아닌 값 타입에 null이 들어오면 데이터 무결성 위반으로 예외 발생
                 if (type.IsValueType && Nullable.GetUnderlyingType(type) is null)
                 {
-                    var nullCheck = Expression.Equal(pVal, Expression.Constant(null));
-                    var errorMsg = $"필수 컬럼 '{type.Name}'에 Null 값이 감지되었습니다.";
+                    BinaryExpression nullCheck = Expression.Equal(pVal, Expression.Constant(null));
+                    string errorMsg = $"필수 컬럼 '{type.Name}'에 Null 값이 감지되었습니다.";
 
-                    var throwExp = Expression.Throw(
+                    UnaryExpression throwExp = Expression.Throw(
                         Expression.New(
                             typeof(InvalidOperationException).GetConstructor([typeof(string)])!,
                             Expression.Constant(errorMsg)));
 
-                    var callAdd = Expression.Call(castBuf, add, Expression.Unbox(pVal, type));
-                    var body = Expression.IfThenElse(nullCheck, throwExp, callAdd);
+                    MethodCallExpression callAdd = Expression.Call(castBuf, add, Expression.Unbox(pVal, type));
+                    ConditionalExpression body = Expression.IfThenElse(nullCheck, throwExp, callAdd);
 
                     return Expression.Lambda<Action<ColumnBuffer, object?>>(body, pBuf, pVal).Compile();
                 }
 
                 // 참조 타입 또는 Nullable 값 타입
-                var call = Expression.Call(castBuf, add, Expression.Convert(pVal, type));
+                MethodCallExpression call = Expression.Call(castBuf, add, Expression.Convert(pVal, type));
                 return Expression.Lambda<Action<ColumnBuffer, object?>>(call, pBuf, pVal).Compile();
             }
         }
@@ -1197,16 +1215,16 @@ public static partial class DbBinder
             /// </summary>
             public static ColumnBuffer Create(Type type, int capacity)
             {
-                if (!s_cache.TryGetValue(type, out var factory))
+                if (!s_cache.TryGetValue(type, out Func<int, ColumnBuffer>? factory))
                 {
                     if (s_cache.Count >= s_maxCacheSize)
                         s_cache.Clear();
 
                     factory = s_cache.GetOrAdd(type, static t =>
                     {
-                        var p = Expression.Parameter(typeof(int), "capacity");
-                        var ctor = typeof(TypedColumnBuffer<>).MakeGenericType(t).GetConstructor([typeof(int)])!;
-                        var newExpr = Expression.New(ctor, p);
+                        ParameterExpression p = Expression.Parameter(typeof(int), "capacity");
+                        ConstructorInfo ctor = typeof(TypedColumnBuffer<>).MakeGenericType(t).GetConstructor([typeof(int)])!;
+                        NewExpression newExpr = Expression.New(ctor, p);
                         return Expression.Lambda<Func<int, ColumnBuffer>>(newExpr, p).Compile();
                     });
                 }
@@ -1242,7 +1260,8 @@ public static partial class DbBinder
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int Estimate(object? val)
         {
-            if (val is null || val == DBNull.Value) return 0;
+            if (val is null || val == DBNull.Value)
+                return 0;
 
             return val switch
             {
@@ -1330,7 +1349,7 @@ public static partial class DbBinder
         /// <param name="prefix">메시지 헤더 (기본: "[바인딩 오류]")</param>
         public string CreateErrorMessage(string reason, string prefix = "[바인딩 오류]")
         {
-            var sb = new StringBuilder(512);
+            StringBuilder sb = new StringBuilder(512);
 
             sb.Append(prefix).Append(' ').AppendLine(reason);
             sb.AppendLine("--------------------------------------------------");
@@ -1349,7 +1368,7 @@ public static partial class DbBinder
                 sb.Append("   * 명령 유형 : ").Append(exec.CommandType).AppendLine();
 
                 // SQL 텍스트 요약 (너무 길면 잘라서 표시)
-                var cmdText = exec.CommandText.AsSpan();
+                ReadOnlySpan<char> cmdText = exec.CommandText.AsSpan();
                 const int maxLen = 100;
 
                 sb.Append("   * SQL 요약 : ");

@@ -49,17 +49,17 @@ public sealed class SystemMemoryMonitor : IMemoryPressureMonitor
         get
         {
             long now = DateTime.UtcNow.Ticks;
-            
+
             // 500ms 간격으로만 실제 System Call 수행
             if (now - _lastCheckTick > CacheDurationTicks)
             {
-                var info = GC.GetGCMemoryInfo();
+                GCMemoryInfo info = GC.GetGCMemoryInfo();
                 long total = info.TotalAvailableMemoryBytes;
                 long used = info.MemoryLoadBytes;
                 _cachedLoadFactor = total > 0 ? (double)used / total : 0.0;
                 _lastCheckTick = now;
             }
-            
+
             return _cachedLoadFactor;
         }
     }

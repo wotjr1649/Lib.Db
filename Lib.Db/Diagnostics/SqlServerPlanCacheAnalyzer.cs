@@ -1,11 +1,16 @@
+// ============================================================================
+// 파일: Lib.Db/Diagnostics/SqlServerPlanCacheAnalyzer.cs
+// 설명: SQL Server 실행 계획 캐시 분석기 — 계획 재사용률 및 비효율 쿼리 탐지
+// 대상: .NET 10 / C# 14
+// ============================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Lib.Db.Contracts.Execution;
-
 using Lib.Db.Contracts.Diagnostics;
+using Lib.Db.Contracts.Execution;
 
 namespace Lib.Db.Diagnostics;
 
@@ -19,7 +24,7 @@ namespace Lib.Db.Diagnostics;
 /// - <see cref="IDbExecutor"/>를 통해 쿼리를 실행하므로 기존 연결 설정과 보안 정책을 그대로 따릅니다.
 /// </para>
 /// </summary>
-public class SqlServerPlanCacheAnalyzer : IQueryAnalyzer
+internal sealed class SqlServerPlanCacheAnalyzer : IQueryAnalyzer
 {
     private readonly IDbExecutor _executor;
 
@@ -31,9 +36,9 @@ public class SqlServerPlanCacheAnalyzer : IQueryAnalyzer
     public async Task<IEnumerable<QueryPerformanceInfo>> AnalyzeSlowQueriesAsync(int top = 10, CancellationToken cancellationToken = default)
     {
         // 기본 인스턴스 해시 사용 (필요 시 파라미터화)
-        string instanceHash = "Default"; 
+        string instanceHash = "Default";
 
-        var sql = $@"
+        string sql = $@"
             SELECT TOP (@Top)
                 st.text AS QueryText,
                 qs.execution_count AS ExecutionCount,
@@ -46,18 +51,18 @@ public class SqlServerPlanCacheAnalyzer : IQueryAnalyzer
             CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) AS st
             ORDER BY qs.total_elapsed_time DESC;";
 
-        var parameters = new { Top = top };
+        object parameters = new { Top = top };
 
-        var stream = _executor.QueryAsync<object, QueryPerformanceInfo>(
-            sql, 
+        IAsyncEnumerable<QueryPerformanceInfo> stream = _executor.QueryAsync<object, QueryPerformanceInfo>(
+            sql,
             parameters,
             instanceHash,
             System.Data.CommandType.Text,
             DbExecutionOptions.Default,
             cancellationToken);
 
-        var list = new List<QueryPerformanceInfo>();
-        await foreach (var item in stream.WithCancellation(cancellationToken))
+        List<QueryPerformanceInfo> list = new List<QueryPerformanceInfo>();
+        await foreach (QueryPerformanceInfo? item in stream.WithCancellation(cancellationToken))
         {
             list.Add(item);
         }

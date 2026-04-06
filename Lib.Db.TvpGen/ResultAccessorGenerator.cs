@@ -830,43 +830,19 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         return name + suffix;
     }
 
+    /// <summary>
+    /// 멤버 이름을 C# 식별자로 안전하게 변환합니다.
+    /// <para>✅ SharedHashUtils로 위임</para>
+    /// </summary>
     private static string SanitizeIdentifier(string s)
-    {
-        if (string.IsNullOrEmpty(s))
-            return "_";
+        => SharedHashUtils.SanitizeIdentifier(s);
 
-        var sb = new StringBuilder(s.Length + 1);
-
-        char first = s[0];
-        if (!(char.IsLetter(first) || first == '_'))
-            sb.Append('_');
-
-        foreach (var ch in s)
-        {
-            if (char.IsLetterOrDigit(ch) || ch == '_') sb.Append(ch);
-            else sb.Append('_');
-        }
-
-        return sb.ToString();
-    }
-
+    /// <summary>
+    /// ASCII IgnoreCase FNV-1a 해시를 계산합니다.
+    /// <para>✅ SharedHashUtils로 위임</para>
+    /// </summary>
     private static uint HashAsciiIgnoreCaseFnv1a(string s)
-    {
-        unchecked
-        {
-            const uint offset = 2166136261u;
-            const uint prime = 16777619u;
-            uint h = offset;
-            for (int i = 0; i < s.Length; i++)
-            {
-                char c = s[i];
-                if ((uint)(c - 'A') <= 25u) c = (char)(c | 0x20);
-                h ^= c;
-                h *= prime;
-            }
-            return h;
-        }
-    }
+        => SharedHashUtils.HashAsciiIgnoreCaseFnv1a(s);
 
     #endregion
 

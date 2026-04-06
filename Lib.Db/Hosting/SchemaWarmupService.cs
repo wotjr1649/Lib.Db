@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 파일: Lib.Db/Hosting/SchemaWarmupService.cs
 // 설명: 애플리케이션 시작 시 DB 스키마 메타데이터를 미리 로드하는 백그라운드 서비스
 // 대상: .NET 10 / C# 14
@@ -46,9 +46,9 @@ public sealed class SchemaWarmupService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // 1. 워밍업 대상이 없으면 바로 Skip
-        if (_options.ConnectionStrings is not { Count: > 0 })
+        if (_options.ConnectionStringNames is not { Count: > 0 })
         {
-            _logger.LogFastInfo($"[SchemaWarmup] ConnectionStrings 가 비어 있어 워밍업을 건너뜁니다.");
+            _logger.LogFastInfo($"[SchemaWarmup] ConnectionStringNames 가 비어 있어 워밍업을 건너뜁니다.");
             return;
         }
 
@@ -59,17 +59,17 @@ public sealed class SchemaWarmupService(
         }
 
         // 2. 워밍업 대상 목록 구성
-        var workItems = BuildWarmupTargets();
+        List<WarmupTarget> workItems = BuildWarmupTargets();
         if (workItems.Count == 0)
         {
             _logger.LogFastInfo($"[SchemaWarmup] 유효한 워밍업 대상이 없어 작업을 건너뜁니다.");
             return;
         }
 
-        var concurrency = GetEffectiveConcurrency(_options.PrewarmMaxConcurrency, workItems.Count);
+        int concurrency = GetEffectiveConcurrency(_options.PrewarmMaxConcurrency, workItems.Count);
 
         _logger.LogFastInfo(
-            $"[SchemaWarmup] 시작 - 인스턴스 {_options.ConnectionStrings!.Count}개, " +
+            $"[SchemaWarmup] 시작 - 인스턴스 {_options.ConnectionStringNames!.Count}개, " +
             $"스키마 {_options.PrewarmSchemas!.Count}개, " +
             $"총 작업 {workItems.Count}개, 동시성 {concurrency}개.");
 
@@ -102,18 +102,16 @@ public sealed class SchemaWarmupService(
     /// </summary>
     private List<WarmupTarget> BuildWarmupTargets()
     {
-        var result = new List<WarmupTarget>(
-            capacity: _options.ConnectionStrings!.Count);
+        List<WarmupTarget> result = new List<WarmupTarget>(
+            capacity: _options.ConnectionStringNames!.Count);
 
-        foreach (var kvp in _options.ConnectionStrings!)
+        foreach (string instanceId in _options.ConnectionStringNames!)
         {
-            var instanceId = kvp.Key;
-
             // 빈 문자열 등을 필터링하여 유효한 스키마만 추출
-            var targetSchemas = _options.PrewarmSchemas!
+            List<string> targetSchemas = _options.PrewarmSchemas!
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .ToList();
-            
+
             if (targetSchemas.Count > 0)
             {
                 result.Add(new WarmupTarget(instanceId, targetSchemas));
@@ -134,7 +132,7 @@ public sealed class SchemaWarmupService(
             return 0;
 
         // 요청값이 0이면 CPU 코어 수 기반으로 자동 결정
-        var baseValue = requested > 0 ? requested : Environment.ProcessorCount;
+        int baseValue = requested > 0 ? requested : Environment.ProcessorCount;
 
         if (baseValue <= 0)
             baseValue = 1;
@@ -160,10 +158,10 @@ public sealed class SchemaWarmupService(
         if (maxConcurrency <= 0)
             maxConcurrency = 1;
 
-        using var gate = new SemaphoreSlim(maxConcurrency);
-        var tasks = new List<Task>(workItems.Count);
+        using SemaphoreSlim gate = new SemaphoreSlim(maxConcurrency);
+        List<Task> tasks = new List<Task>(workItems.Count);
 
-        foreach (var item in workItems)
+        foreach (WarmupTarget item in workItems)
         {
             await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -183,21 +181,21 @@ public sealed class SchemaWarmupService(
     {
         try
         {
-            var requestInfo = CreateWarmupRequestInfo(in target);
-            var stopwatch = Stopwatch.StartNew();
-            var success = false;
+            DbRequestInfo requestInfo = CreateWarmupRequestInfo(in target);
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            bool success = false;
             string schemaLogStr = string.Join(",", target.SchemaNames);
 
             try
             {
-                var preloadResult = await _schemaService
+                PreloadResult preloadResult = await _schemaService
                     .PreloadSchemaAsync(target.SchemaNames, target.InstanceId, cancellationToken)
                     .ConfigureAwait(false);
 
                 // 검증 결과 확인 및 경고 로깅
                 if (preloadResult.MissingSchemas.Count > 0)
                 {
-                    var missingStr = string.Join(",", preloadResult.MissingSchemas);
+                    string missingStr = string.Join(",", preloadResult.MissingSchemas);
                     // LogFastWarn(Exception? ex, string message) pattern
                     _logger.LogFastWarn(
                         null,
