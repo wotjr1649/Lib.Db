@@ -21,6 +21,7 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
+    # 1) 태그에서 버전 추출 (v 접두 제거)
     - name: Extract version from tag
       id: version
       shell: bash
@@ -45,6 +46,7 @@ jobs:
     - name: Build (Release)
       run: dotnet build Lib.Db/Lib.Db.csproj --configuration Release --no-restore
 
+    # 2) Pack 시 태그 버전을 강제 주입
     - name: Pack (tag version)
       run: |
         dotnet pack Lib.Db/Lib.Db.csproj \
