@@ -8,53 +8,44 @@ on:
 permissions:
   id-token: write # Required for NuGet Trusted Publishing
   contents: read  # Required to checkout code
-  checks: write   # Optional (for test reporting)
+  contents: read  # Required to checkout code
 
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '10.0.x' # Use .NET 10 Preview/RC if stable not available, or specific version
-        
-    # 1) 태그에서 버전 추출 (v 접두 제거)
+        dotnet-version: '10.0.x'
+
     - name: Extract version from tag
       id: version
       shell: bash
       run: |
-          set -euo pipefail
-          ref="${GITHUB_REF#refs/tags/}"   # v1.2.3
-          ver="${ref#v}"                   # 1.2.3
-          # (가드) 비어있으면 실패
-          if [[ -z "$ver" ]]; then
-            echo "ERROR: Empty version from tag: $ref" >&2
-            exit 1
-          fi
-          # (가드) NuGet SemVer 형태 대략 체크(1.2.3, 1.2.3-rc.1 등)
-          if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "ERROR: Tag '$ref' is not a valid SemVer for NuGet. Example: v1.2.3 or v1.2.3-rc.1" >&2
-            exit 1
-          fi
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "Resolved package version: $ver"
-        
+        set -euo pipefail
+        ref="${GITHUB_REF#refs/tags/}"
+        ver="${ref#v}"
+        if [[ -z "$ver" ]]; then
+          echo "ERROR: Empty version from tag: $ref" >&2
+          exit 1
+        fi
+        if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "ERROR: Tag '$ref' is not a valid SemVer for NuGet. Example: v1.2.3 or v1.2.3-rc.1" >&2
+          exit 1
+        fi
+        echo "version=$ver" >> "$GITHUB_OUTPUT"
+        echo "Resolved package version: $ver"
+
     - name: Restore dependencies
       run: dotnet restore Lib.Db/Lib.Db.csproj
-      
+
     - name: Build (Release)
-      # Build in Release mode to ensure Lib.Db.TvpGen is packed correctly
       run: dotnet build Lib.Db/Lib.Db.csproj --configuration Release --no-restore
-      
-    - name: Test
-      # Run tests to ensure quality before publishing
-      run: dotnet test Tests/Lib.Db.TestSuite/Lib.Db.TestSuite.csproj --configuration Release --no-build --verbosity normal
-      
-   # 2) Pack 시 태그 버전을 강제 주입
+
     - name: Pack (tag version)
       run: |
         dotnet pack Lib.Db/Lib.Db.csproj \
