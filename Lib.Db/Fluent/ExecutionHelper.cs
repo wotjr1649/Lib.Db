@@ -44,6 +44,10 @@ internal static class ExecutionHelper
             T value = operation();
             return Task.FromResult(DbResult<T>.Ok(value));
         }
+        catch (OperationCanceledException)
+        {
+            throw; // 취소 예외는 재throw — CancellationToken 계약 준수
+        }
         catch (Microsoft.Data.SqlClient.SqlException ex)
         {
             DbError error = DbErrorMapper.FromSqlException(ex, commandText);
@@ -51,7 +55,7 @@ internal static class ExecutionHelper
         }
         catch (Exception ex)
         {
-            DbError error = BuildGeneralError(ex);
+            DbError error = BuildGeneralError(ex, commandText);
             return Task.FromResult(DbResult<T>.Fail(error));
         }
     }
@@ -76,6 +80,10 @@ internal static class ExecutionHelper
         {
             return await operation().ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            throw; // 취소 예외는 재throw — CancellationToken 계약 준수
+        }
         catch (Microsoft.Data.SqlClient.SqlException ex)
         {
             DbError error = DbErrorMapper.FromSqlException(ex, commandText);
@@ -83,7 +91,7 @@ internal static class ExecutionHelper
         }
         catch (Exception ex)
         {
-            DbError error = BuildGeneralError(ex);
+            DbError error = BuildGeneralError(ex, commandText);
             return DbResult<T>.Fail(error);
         }
     }
@@ -96,13 +104,15 @@ internal static class ExecutionHelper
     /// 분류되지 않은 일반 예외를 <see cref="DbError"/>로 변환합니다.
     /// </summary>
     /// <param name="ex">변환할 예외</param>
+    /// <param name="commandText">오류가 발생한 SQL/SP 이름 (ObjectName에 기록)</param>
     /// <returns>DbErrorKind.Unknown 종류의 DbError</returns>
-    private static DbError BuildGeneralError(Exception ex)
+    private static DbError BuildGeneralError(Exception ex, string commandText)
     {
         return new DbError
         {
             Kind = DbErrorKind.Unknown,
             Message = ex.Message,
+            ObjectName = commandText,
             InnerException = ex
         };
     }

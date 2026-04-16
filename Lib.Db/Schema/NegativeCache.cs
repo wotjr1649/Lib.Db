@@ -90,7 +90,9 @@ internal static class NegativeCache
         if (Interlocked.Increment(ref s_count) > s_maxSize)
         {
             s_missingObjects.Clear();
-            Interlocked.Exchange(ref s_count, 0);
+            // [BUG-02 수정] 이 스레드가 Clear 직후 1개 항목을 추가하므로 카운터를 1로 리셋.
+            // 0으로 리셋하면 추가 후에도 카운터가 0인 상태가 되어 실제 항목 수와 불일치.
+            Interlocked.Exchange(ref s_count, 1);
         }
 
         string key = BuildKey(dbHash, objectName, objectType);

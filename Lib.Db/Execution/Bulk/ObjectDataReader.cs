@@ -6,7 +6,6 @@
 
 #nullable enable
 
-using System.Collections.Concurrent;
 using System.Data;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
@@ -36,25 +35,32 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
 
     private bool _disposed;
 
-    // [성능 최적화] 타입별 Expression Tree 컴파일 getter 캐시 (T당 1회만 컴파일)
-    // Reflection.GetValue() 대비 ~10x 빠른 접근 속도를 제공합니다.
-    private static readonly ConcurrentDictionary<Type, Func<object, object?>[]> s_getterCache = new();
+    // [BUG-01 수정] 생성자 파라미터 `properties` 순서를 그대로 사용하여 getter 인덱스 불일치 방지.
+    // 이전 구현은 s_getterCache에서 type.GetProperties() (CLR 내부 순서)로 getter를 빌드하여,
+    // 호출자가 지정한 properties 순서와 어긋날 수 있었습니다.
+    private readonly Func<object, object?>[] _getters = BuildGetters(properties);
 
-    private readonly Func<object, object?>[] _getters = s_getterCache.GetOrAdd(
-        typeof(T), static type =>
+    /// <summary>
+    /// 지정된 PropertyInfo 배열 순서대로 Expression Tree getter를 컴파일합니다.
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// GetValue(i)가 properties[i]와 정확히 대응하도록 호출자 제공 순서를 유지합니다.
+    /// </para>
+    /// </summary>
+    private static Func<object, object?>[] BuildGetters(PropertyInfo[] props)
+    {
+        Func<object, object?>[] getters = new Func<object, object?>[props.Length];
+        for (int i = 0; i < props.Length; i++)
         {
-            PropertyInfo[] props = type.GetProperties(BindingFlags.Instance | BindingFlags.Public);
-            Func<object, object?>[] getters = new Func<object, object?>[props.Length];
-            for (int i = 0; i < props.Length; i++)
-            {
-                ParameterExpression param = Expression.Parameter(typeof(object), "obj");
-                UnaryExpression cast = Expression.Convert(param, type);
-                MemberExpression access = Expression.Property(cast, props[i]);
-                UnaryExpression box = Expression.Convert(access, typeof(object));
-                getters[i] = Expression.Lambda<Func<object, object?>>(box, param).Compile();
-            }
-            return getters;
-        });
+            PropertyInfo prop = props[i];
+            ParameterExpression param = Expression.Parameter(typeof(object), "obj");
+            UnaryExpression cast = Expression.Convert(param, prop.DeclaringType!);
+            MemberExpression access = Expression.Property(cast, prop);
+            UnaryExpression box = Expression.Convert(access, typeof(object));
+            getters[i] = Expression.Lambda<Func<object, object?>>(box, param).Compile();
+        }
+        return getters;
+    }
 
     #endregion
 
