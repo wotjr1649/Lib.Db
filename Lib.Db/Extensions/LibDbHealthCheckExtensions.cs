@@ -41,14 +41,20 @@ public static class LibDbHealthCheckExtensions
     /// <para>
     /// 실제 SELECT 1을 수행하되, 과도한 호출을 방지합니다.
     /// </para>
+    /// <para>
+    /// <b>[설계 의도]</b> 이전 구현에서 static 필드를 사용하면 여러 인스턴스가 DI에 등록될 경우
+    /// 인스턴스 Lock이 static 상태를 보호하지 못하는 문제가 있었습니다.
+    /// 모든 상태를 인스턴스 필드로 변경하여 각 인스턴스가 독립적인 스로틀링 상태를 유지합니다.
+    /// 스로틀 간격은 <see cref="LibDbOptions.HealthCheckThrottleSeconds"/>에서 읽어 설정에 따라 동적으로 결정됩니다.
+    /// </para>
     /// </summary>
     private sealed class ThrottledDbHealthCheck : IHealthCheck
     {
-        private static HealthCheckResult s_lastResult =
+        // 인스턴스 필드로 변경: static → instance (동시 다중 인스턴스 시 Lock이 상태를 올바르게 보호)
+        private HealthCheckResult _lastResult =
             HealthCheckResult.Healthy("Initial State");
-        private static long s_lastCheckTick;
-        private static readonly long s_throttleTicks =
-            TimeSpan.FromSeconds(1).Ticks; // 최소 1초 간격
+        private long _lastCheckTick;
+        private readonly long _throttleTicks;
 
         private readonly IDbConnectionFactory _connFactory;
         private readonly LibDbOptions _options;
@@ -60,6 +66,8 @@ public static class LibDbHealthCheckExtensions
         {
             _connFactory = connFactory;
             _options = options;
+            // LibDbOptions.HealthCheckThrottleSeconds 설정값 반영 (기본 1초)
+            _throttleTicks = TimeSpan.FromSeconds(options.HealthCheckThrottleSeconds).Ticks;
         }
 
         public async Task<HealthCheckResult> CheckHealthAsync(
@@ -67,12 +75,12 @@ public static class LibDbHealthCheckExtensions
             CancellationToken ct = default)
         {
             long currentTick = DateTime.UtcNow.Ticks;
-            long lastTick = Interlocked.Read(ref s_lastCheckTick);
+            long lastTick = Interlocked.Read(ref _lastCheckTick);
 
             // 1. 스로틀링: 최근 검사 결과가 유효하면 재사용
-            if (currentTick - lastTick < s_throttleTicks)
+            if (currentTick - lastTick < _throttleTicks)
             {
-                return s_lastResult;
+                return _lastResult;
             }
 
             // 2. 실제 DB 검사 (Lock을 통해 중복 실행 방지)
@@ -81,8 +89,8 @@ public static class LibDbHealthCheckExtensions
                 try
                 {
                     // 더블 체크
-                    if (DateTime.UtcNow.Ticks - Interlocked.Read(ref s_lastCheckTick) < s_throttleTicks)
-                        return s_lastResult;
+                    if (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastCheckTick) < _throttleTicks)
+                        return _lastResult;
 
                     // 첫 번째 연결 문자열 사용
                     string? firstInstance = _options.ConnectionStrings.Keys.FirstOrDefault()
@@ -91,16 +99,16 @@ public static class LibDbHealthCheckExtensions
                     await using SqlConnection conn = await _connFactory.CreateConnectionAsync(firstInstance, ct).ConfigureAwait(false);
                     await using SqlCommand cmd = conn.CreateCommand();
                     cmd.CommandText = "SELECT 1";
-                    cmd.CommandTimeout = 2; // 2초 초과 시 실패 간주
+                    cmd.CommandTimeout = _options.HealthCheckTimeoutSeconds;
                     await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
 
-                    s_lastResult = HealthCheckResult.Healthy("DB Connection OK");
-                    Interlocked.Exchange(ref s_lastCheckTick, DateTime.UtcNow.Ticks);
+                    _lastResult = HealthCheckResult.Healthy("DB Connection OK");
+                    Interlocked.Exchange(ref _lastCheckTick, DateTime.UtcNow.Ticks);
                 }
                 catch (Exception ex)
                 {
-                    s_lastResult = HealthCheckResult.Unhealthy($"DB Connection Failed: {ex.Message}", ex);
-                    Interlocked.Exchange(ref s_lastCheckTick, DateTime.UtcNow.Ticks);
+                    _lastResult = HealthCheckResult.Unhealthy($"DB Connection Failed: {ex.Message}", ex);
+                    Interlocked.Exchange(ref _lastCheckTick, DateTime.UtcNow.Ticks);
                 }
                 finally
                 {
@@ -108,7 +116,7 @@ public static class LibDbHealthCheckExtensions
                 }
             }
 
-            return s_lastResult;
+            return _lastResult;
         }
     }
 }

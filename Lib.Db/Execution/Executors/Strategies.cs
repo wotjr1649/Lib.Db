@@ -423,10 +423,10 @@ internal sealed class InterceptorChain(IEnumerable<IDbCommandInterceptor> interc
 /// </list>
 ///
 /// <para><strong>🧵 스레드 안전성</strong></para>
-/// <list type="bullet">
+/// <list type=”bullet”>
 ///   <item>
-///     내부에 <c>_elevatePriorityOnNextRetry</c> 상태를 가지므로,
-///     일반적으로 “요청 단위/실행기 단위(동시 공유 금지)”로 사용하는 것을 권장합니다.
+///     내부 상태 <c>s_elevatePriorityOnNextRetry</c>는 <see cref=”AsyncLocal{T}”/>로 관리되므로,
+///     Singleton으로 등록되어 동시 요청에 공유되더라도 각 비동기 실행 컨텍스트(요청)별로 독립적인 값을 유지합니다.
 ///   </item>
 /// </list>
 /// </remarks>
@@ -442,8 +442,14 @@ internal sealed class ResilientStrategy(
     private readonly ISchemaService _schemaService = schemaService;
     private readonly ILogger _logger = logger;
 
-    /// <summary>데드락 발생 시, 다음 재시도에서 DEADLOCK_PRIORITY를 올리기 위한 플래그입니다.</summary>
-    private bool _elevatePriorityOnNextRetry;
+    /// <summary>
+    /// 데드락 발생 시, 다음 재시도에서 DEADLOCK_PRIORITY를 올리기 위한 플래그입니다.
+    /// <para>
+    /// <b>[설계 의도]</b> Singleton으로 재사용되는 전략 인스턴스에서 동시 요청 간 상태 오염을 방지하기 위해
+    /// <see cref="AsyncLocal{T}"/>를 사용합니다. 각 비동기 실행 컨텍스트(요청)별로 독립적인 값을 유지합니다.
+    /// </para>
+    /// </summary>
+    private static readonly AsyncLocal<bool> s_elevatePriorityOnNextRetry = new();
 
     /// <inheritdoc />
     public bool IsTransactional => false;
@@ -593,7 +599,7 @@ internal sealed class ResilientStrategy(
     /// </remarks>
     private async Task ApplyDeadlockPriorityAsync(SqlConnection conn, CancellationToken ct)
     {
-        if (!_elevatePriorityOnNextRetry)
+        if (!s_elevatePriorityOnNextRetry.Value)
             return;
 
         if (conn.State != ConnectionState.Open)
@@ -604,7 +610,8 @@ internal sealed class ResilientStrategy(
         await using SqlCommand cmd = new SqlCommand("SET DEADLOCK_PRIORITY HIGH", conn);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-        _elevatePriorityOnNextRetry = false;
+        // 사용 후 즉시 초기화 (동일 컨텍스트 내 재사용 방지)
+        s_elevatePriorityOnNextRetry.Value = false;
     }
 
     #endregion
@@ -635,7 +642,7 @@ internal sealed class ResilientStrategy(
         // 1) 데드락(1205): 다음 시도에서 DEADLOCK_PRIORITY HIGH
         if (ex.Number == 1205)
         {
-            _elevatePriorityOnNextRetry = true;
+            s_elevatePriorityOnNextRetry.Value = true;
 
             DbMetrics.TrackRetry("Deadlock", info);
 

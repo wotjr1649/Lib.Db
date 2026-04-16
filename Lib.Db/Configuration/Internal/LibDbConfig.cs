@@ -286,8 +286,8 @@ internal sealed class LibDbConfig
         // [11]
         options.HealthCheckThrottleSeconds = this.HealthCheckThrottleSeconds;
         options.HealthCheckTimeoutSeconds = this.HealthCheckTimeoutSeconds;
-        options.EnableOpenTelemetry = this.EnableOpenTelemetry;
-        options.EnableObservability = this.EnableObservability;
+        // EnableOpenTelemetry(구 설정 키)와 EnableObservability(신 설정 키) 중 하나라도 true면 활성화
+        options.EnableObservability = this.EnableObservability || this.EnableOpenTelemetry;
         options.IncludeParametersInTrace = this.IncludeParametersInTrace;
 
         // [12]

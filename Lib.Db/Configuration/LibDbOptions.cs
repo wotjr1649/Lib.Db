@@ -631,17 +631,28 @@ public sealed class LibDbOptions
     } = 2;
 
     /// <summary>
-    /// OpenTelemetry 추적 및 메트릭 활성화 여부 (기본값: false)
-    /// <para>true 설정 시 ActivitySource("Lib.Db")와 Meter("Lib.Db")를 통해 텔레메트리 데이터를 생성합니다.</para>
-    /// <para>비활성 시 오버헤드는 0에 가깝습니다 (분기 1회).</para>
-    /// </summary>
-    public bool EnableOpenTelemetry { get; set; } = false;
-
-    /// <summary>
     /// 관측 가능성(Logging, Metrics, Tracing) 기능 활성화 여부 (기본값: false)
-    /// <para>이 값은 EnableOpenTelemetry 등 세부 설정의 마스터 스위치 역할을 합니다.</para>
+    /// <para>
+    /// <b>[설계 의도]</b> v2.2에서 <c>EnableOpenTelemetry</c>와 통합된 단일 마스터 스위치입니다.
+    /// <c>true</c> 설정 시 ActivitySource("Lib.Db")와 Meter("Lib.Db")를 통해 텔레메트리 데이터를 생성합니다.
+    /// 비활성 시 오버헤드는 0에 가깝습니다 (분기 1회).
+    /// </para>
     /// </summary>
     public bool EnableObservability { get; set; } = false;
+
+    /// <summary>
+    /// [사용 중단] <see cref="EnableObservability"/>를 사용하세요. 이 속성은 v3.0에서 제거됩니다.
+    /// <para>
+    /// OpenTelemetry 추적 및 메트릭 활성화 여부입니다.
+    /// 이 속성은 <see cref="EnableObservability"/>의 별칭(Alias)으로, get/set 모두 <see cref="EnableObservability"/>에 위임합니다.
+    /// </para>
+    /// </summary>
+    [Obsolete("EnableObservability를 사용하세요. 이 속성은 v3.0에서 제거됩니다.")]
+    public bool EnableOpenTelemetry
+    {
+        get => EnableObservability;
+        set => EnableObservability = value;
+    }
 
     /// <summary>
     /// SQL 쿼리 파라미터를 추적(Trace)에 포함할지 여부 (기본값: false)
