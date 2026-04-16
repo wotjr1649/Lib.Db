@@ -50,6 +50,19 @@ public sealed class LibDbOptions
         }
     } = [];
 
+    /// <summary>
+    /// MARS(다중 활성 결과 집합) 정책입니다. (기본값: <see cref="MarsPolicy.Auto"/>)
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// <list type="bullet">
+    /// <item><description><c>Disabled</c>: MARS를 사용하지 않습니다. QueryMultipleAsync 호출 시 예외가 발생합니다.</description></item>
+    /// <item><description><c>Auto</c> (기본값): QueryMultipleAsync 사용 시 MARS 미설정이면 경고 후 예외를 발생시킵니다.</description></item>
+    /// <item><description><c>ForceEnable</c>: AddLibDb() 등록 시 ConnectionString에 <c>MultipleActiveResultSets=True</c>를 자동 주입합니다.</description></item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    public MarsPolicy Mars { get; set; } = MarsPolicy.Auto;
+
     #endregion
 
     #region [2] 연결 문자열 이름 목록
