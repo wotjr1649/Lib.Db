@@ -87,12 +87,6 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
     /// </summary>
     private const string AttributeMetadataName = "Lib.Db.Contracts.Models.TvpRowAttribute";
 
-    /// <summary>
-    /// Track 4 하이브리드 라우팅 임계값
-    /// <para>이 값 이하: else-if / 초과: FNV-1a + switch</para>
-    /// </summary>
-    private const int SmallMemberThreshold = 12;
-
     #endregion
 
     #region 진단 메시지
@@ -193,7 +187,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
                 continue;
 
             spc.AddSource(
-                BuildSafeHintName(t, "_TvpRegistry.g.cs"),
+                GeneratorSharedHelpers.BuildSafeHintName(t, "_TvpRegistry.g.cs"),
                 SourceText.From(code, Encoding.UTF8));
         }
     }
@@ -224,7 +218,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         }
 
         // 2) 접근성(중첩 포함)
-        if (!IsAccessibleFromGeneratedCode(type))
+        if (!GeneratorSharedHelpers.IsAccessibleFromGeneratedCode(type))
         {
             spc.ReportDiagnostic(Diagnostic.Create(
                 s_inaccessibleType,
@@ -274,25 +268,6 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
                     typeDisplay));
                 return false;
             }
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// 생성 코드(동일 어셈블리/네임스페이스)에서 접근 가능한지 검사합니다.
-    /// <para>중첩 타입의 ContainingType 체인까지 검사합니다.</para>
-    /// </summary>
-    private static bool IsAccessibleFromGeneratedCode(INamedTypeSymbol type)
-    {
-        var cur = type;
-
-        while (cur is not null)
-        {
-            if (cur.DeclaredAccessibility is Accessibility.Private or Accessibility.Protected)
-                return false;
-
-            cur = cur.ContainingType;
         }
 
         return true;
@@ -371,7 +346,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine("    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]");
         sb.AppendLine($"    internal static class {registryClassName}");
         sb.AppendLine("    {");
-        sb.AppendLine($"        private const int __SmallThreshold = {SmallMemberThreshold};");
+        sb.AppendLine($"        private const int __SmallThreshold = {GeneratorSharedHelpers.SmallMemberThreshold};");
         sb.AppendLine();
 
         // 결정론적 해시(FNV-1a)
@@ -519,7 +494,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         for (int i = 0; i < props.Count; i++)
         {
             var p = props[i];
-            uint hash = HashAsciiIgnoreCaseFnv1a(p.Name);
+            uint hash = SharedHashUtils.HashAsciiIgnoreCaseFnv1a(p.Name);
             sb.AppendLine($"                        case 0x{hash:X8}u: // {p.Name}");
             sb.AppendLine($"                            if (__props[{i}] is null && string.Equals(n, \"{p.Name}\", StringComparison.OrdinalIgnoreCase))");
             sb.AppendLine("                            {");
@@ -840,29 +815,6 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
 
         return string.IsNullOrEmpty(ns) ? type.Name : $"{ns}_{type.Name}";
     }
-
-    /// <summary>
-    /// 소스 제너레이터 AddSource에 사용될 “안전한 파일 힌트명”을 생성합니다.
-    /// <para>완전 수식 이름 기반으로 생성하며, 파일명에 부적합한 문자를 치환합니다.</para>
-    /// </summary>
-    private static string BuildSafeHintName(INamedTypeSymbol type, string suffix)
-    {
-        var name = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
-            .Replace("global::", "")
-            .Replace("<", "_").Replace(">", "_")
-            .Replace(".", "_")
-            .Replace("+", "_");
-
-        return name + suffix;
-    }
-
-    /// <summary>
-    /// ASCII IgnoreCase FNV-1a 해시를 계산합니다.
-    /// <para>해시 경로의 switch-case 키로 사용합니다(결정론적).</para>
-    /// <para>✅ SharedHashUtils로 위임</para>
-    /// </summary>
-    private static uint HashAsciiIgnoreCaseFnv1a(string s)
-        => SharedHashUtils.HashAsciiIgnoreCaseFnv1a(s);
 
     #endregion
 }

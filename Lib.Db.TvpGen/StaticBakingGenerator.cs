@@ -16,6 +16,10 @@ namespace Lib.Db.TvpGen;
 [Generator(LanguageNames.CSharp)]
 public sealed class StaticBakingGenerator : IIncrementalGenerator
 {
+    /// <summary>
+    /// 인크리멘털 제너레이터를 초기화하고 <c>AddLibDbHybridCache</c> 호출 감지 파이프라인을 구성합니다.
+    /// </summary>
+    /// <param name="context">인크리멘털 제너레이터 초기화 컨텍스트</param>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // 1. AddLibDbHybridCache 호출 감지
@@ -31,6 +35,11 @@ public sealed class StaticBakingGenerator : IIncrementalGenerator
         context.RegisterSourceOutput(hybridCacheCallProvider, Execute);
     }
 
+    /// <summary>
+    /// 구문 노드가 <c>AddLibDbHybridCache</c> 메서드 호출 후보인지 1차 필터링합니다.
+    /// </summary>
+    /// <param name="node">검사할 구문 노드</param>
+    /// <returns>후보 호출이면 <see langword="true"/></returns>
     private static bool IsCandidateInvocation(SyntaxNode node)
     {
         // 간단한 1차 필터: 메서드 호출이면서 이름이 "AddLibDbHybridCache" 인 것
@@ -39,6 +48,11 @@ public sealed class StaticBakingGenerator : IIncrementalGenerator
                mae.Name.Identifier.ValueText == "AddLibDbHybridCache";
     }
 
+    /// <summary>
+    /// 의미론적 모델(Semantic Model)을 사용하여 실제 <c>HybridCacheExtensions.AddLibDbHybridCache</c> 확장 메서드 호출인지 2차 검증합니다.
+    /// </summary>
+    /// <param name="context">제너레이터 구문 컨텍스트 (의미론적 모델 포함)</param>
+    /// <returns>실제 HybridCache 등록 호출이면 <see langword="true"/></returns>
     private static bool IsRealHybridCacheInvocation(GeneratorSyntaxContext context)
     {
         // 2차 정밀 필터: 심볼 확인 (실제 확장 메서드인지)
@@ -50,6 +64,11 @@ public sealed class StaticBakingGenerator : IIncrementalGenerator
                symbol.ContainingType.Name == "HybridCacheExtensions";
     }
 
+    /// <summary>
+    /// HybridCache 활성화 여부를 담은 <c>LibDbStaticConfiguration</c> 소스 파일을 생성합니다.
+    /// </summary>
+    /// <param name="spc">소스 생성 컨텍스트</param>
+    /// <param name="isHybridCacheEnabled">HybridCache 등록 호출이 감지되었으면 <see langword="true"/></param>
     private static void Execute(SourceProductionContext spc, bool isHybridCacheEnabled)
     {
         var sb = new StringBuilder();

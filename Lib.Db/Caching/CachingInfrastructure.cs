@@ -69,7 +69,7 @@ public sealed class IsolationKeyGenerator() : Lib.Db.Contracts.Cache.IIsolationK
         byte[] hash = SHA256.HashData(bytes);
 
         // 너무 길지 않게 앞 16자리만 사용 (충돌 확률 극히 낮음 for Isolation purpose)
-        return Convert.ToHexString(hash).Substring(0, 16);
+        return Convert.ToHexString(hash)[..16];
     }
 }
 
@@ -176,7 +176,7 @@ internal static class CacheInternalHelpers
         byte[] hash = SHA256.HashData(bytes);
 
         // 8글자만 (충돌 가능성 감수, 경로 식별용)
-        return Convert.ToHexString(hash).Substring(0, 8);
+        return Convert.ToHexString(hash)[..8];
     }
 }
 

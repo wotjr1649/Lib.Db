@@ -121,9 +121,15 @@ public readonly record struct DbRequestInfo(
 
 #region 고성능 로거 (FastLogger)
 
-// FastLogger/핸들러 부분은 질문에서 주신 그대로 유지
-// (성능 최적화와 무관한 부분이므로 생략 없이 그대로 사용하시면 됩니다)
-
+/// <summary>
+/// 로그 레벨이 활성화된 경우에만 문자열 보간을 평가하는 제로 할당 고성능 로거 확장입니다.
+/// <para>
+/// <b>[설계 의도]</b><br/>
+/// 표준 <c>ILogger</c>는 로그 레벨 비활성 시에도 보간 문자열을 평가하여 불필요한 할당이 발생합니다.<br/>
+/// <see cref="FastLogger"/>는 C# 10+ <c>[InterpolatedStringHandler]</c>를 활용하여
+/// 로그 레벨 확인 후에만 문자열을 구성하므로 핫 패스에서 GC 압력을 제거합니다.
+/// </para>
+/// </summary>
 public static class FastLogger
 {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -148,6 +154,9 @@ public static class FastLogger
     }
 }
 
+/// <summary>
+/// <see cref="LogLevel.Debug"/> 레벨 활성 시에만 보간 문자열을 평가하는 핸들러입니다.
+/// </summary>
 [InterpolatedStringHandler]
 public ref struct FastDebugLogHandler
 {
@@ -177,6 +186,9 @@ public ref struct FastDebugLogHandler
         => IsEnabled ? _inner.ToStringAndClear() : string.Empty;
 }
 
+/// <summary>
+/// <see cref="LogLevel.Information"/> 레벨 활성 시에만 보간 문자열을 평가하는 핸들러입니다.
+/// </summary>
 [InterpolatedStringHandler]
 public ref struct FastInfoLogHandler
 {
@@ -206,6 +218,9 @@ public ref struct FastInfoLogHandler
         => IsEnabled ? _inner.ToStringAndClear() : string.Empty;
 }
 
+/// <summary>
+/// <see cref="LogLevel.Warning"/> 레벨 활성 시에만 보간 문자열을 평가하는 핸들러입니다.
+/// </summary>
 [InterpolatedStringHandler]
 public ref struct FastWarnLogHandler
 {
@@ -251,11 +266,6 @@ public static class DbMetrics
     // 2.1. 상수 및 미터 정의
     // =========================================================================
 
-    private const string MeterName = "Lib.Db";
-    private const string MeterVersion = "1.0.0";
-
-    /// <summary>라이브러리 전역에서 공유하는 <see cref="Meter"/> 인스턴스입니다.</summary>
-    private static readonly Meter s_meter = new(MeterName, MeterVersion);
 
     // OTel 표준 태그 키
     private const string AttrDbSystem = "db.system";
@@ -282,34 +292,34 @@ public static class DbMetrics
 
     // 1. Connection
     private static readonly UpDownCounter<int> s_connActive =
-        s_meter.CreateUpDownCounter<int>("db.client.connections.usage", "{connections}", "현재 활성 DB 연결 수");
+        LibDbTelemetry.Meter.CreateUpDownCounter<int>("db.client.connections.usage", "{connections}", "현재 활성 DB 연결 수");
 
     // 2. Query & Resilience
     private static readonly Histogram<double> s_queryDuration =
-        s_meter.CreateHistogram<double>("db.client.operation.duration", "ms", "DB 작업 수행 시간");
+        LibDbTelemetry.Meter.CreateHistogram<double>("db.client.operation.duration", "ms", "DB 작업 수행 시간");
 
     private static readonly Counter<int> s_retries =
-        s_meter.CreateCounter<int>("db.client.resilience.retries", "{retries}", "재시도 발생 횟수");
+        LibDbTelemetry.Meter.CreateCounter<int>("db.client.resilience.retries", "{retries}", "재시도 발생 횟수");
 
     // 3. Schema & Cache
     private static readonly Counter<int> s_schemaRefresh =
-        s_meter.CreateCounter<int>("libdb.schema.refresh", "{ops}", "스키마 갱신 시도 횟수");
+        LibDbTelemetry.Meter.CreateCounter<int>("libdb.schema.refresh", "{ops}", "스키마 갱신 시도 횟수");
 
     private static readonly Counter<int> s_cacheHits =
-        s_meter.CreateCounter<int>("libdb.schema.cache.hits", "{hits}", "스키마 캐시 적중 횟수");
+        LibDbTelemetry.Meter.CreateCounter<int>("libdb.schema.cache.hits", "{hits}", "스키마 캐시 적중 횟수");
 
     private static readonly Counter<int> s_cacheMisses =
-        s_meter.CreateCounter<int>("libdb.schema.cache.misses", "{misses}", "스키마 캐시 미스 횟수");
+        LibDbTelemetry.Meter.CreateCounter<int>("libdb.schema.cache.misses", "{misses}", "스키마 캐시 미스 횟수");
 
     private static readonly Counter<long> s_cacheBytesFreed =
-        s_meter.CreateCounter<long>("libdb.cache.bytes_freed", "By", "캐시 정리로 반환된 바이트 수");
+        LibDbTelemetry.Meter.CreateCounter<long>("libdb.cache.bytes_freed", "By", "캐시 정리로 반환된 바이트 수");
 
     // 4. Bulk & TVP
     private static readonly Counter<long> s_bulkRows =
-        s_meter.CreateCounter<long>("libdb.bulk.rows", "{rows}", "벌크 삽입된 총 행 수");
+        LibDbTelemetry.Meter.CreateCounter<long>("libdb.bulk.rows", "{rows}", "벌크 삽입된 총 행 수");
 
     private static readonly Counter<long> s_tvpBytes =
-        s_meter.CreateCounter<long>("db.client.tvp.bytes", "By", "TVP 전송 바이트 수");
+        LibDbTelemetry.Meter.CreateCounter<long>("db.client.tvp.bytes", "By", "TVP 전송 바이트 수");
 
     // =========================================================================
     // 2.3. 메트릭 전역 활성 플래그 및 Reset 지원

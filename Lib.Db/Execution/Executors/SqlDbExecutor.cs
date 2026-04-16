@@ -46,16 +46,13 @@ internal sealed partial class SqlDbExecutor(
 {
     #region 상수 및 필드
 
-    /// <summary>OpenTelemetry ActivitySource 이름 (AOT 호환 — 리플렉션 제거)</summary>
-    private const string ActivitySourceName = "Lib.Db";
-
-    private static readonly ActivitySource s_activitySource = new(ActivitySourceName);
-
     // [Optimization] Activity 이름 캐싱
     private const string ActivityNameQuery = "DB Query";
     private const string ActivityNameProcedure = "DB Procedure";
     private const string ActivityNameCommand = "DB Command";
     // [MARS Validation] 연결 문자열별 MARS 활성화 여부 캐시
+    // 앱당 연결 문자열 종류는 통상 1~5개이므로 크기 상한/Clear 불필요
+    // → Count >= N 체크 + Clear() 조합은 멀티스레드 환경에서 비원자적이었음(제거)
     private static readonly ConcurrentDictionary<string, bool> s_marsEnabledCache = new();
 
     private readonly IDbExecutionStrategy _strategy = strategy;
@@ -403,7 +400,7 @@ internal sealed partial class SqlDbExecutor(
         System.Data.Common.DbDataReader? rawReader;
         long startTicks = Stopwatch.GetTimestamp();
 
-        using (Activity? activity = s_activitySource.StartActivity("DB QueryMultiple"))
+        using (Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("DB QueryMultiple"))
         {
             activity?.SetTag("db.system", "mssql");
             activity?.SetTag("db.operation", commandType.ToString());
@@ -567,7 +564,7 @@ internal sealed partial class SqlDbExecutor(
             _ => ActivityNameCommand
         };
 
-        using Activity? activity = s_activitySource.StartActivity(activityName);
+        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity(activityName);
         activity?.SetTag("db.system", "mssql");
         activity?.SetTag("db.operation", request.CommandType.ToString());
         activity?.SetTag("db.statement", request.CommandText);
@@ -773,7 +770,7 @@ internal sealed partial class SqlDbExecutor(
         System.Data.Common.DbDataReader? reader;
         long startTicks = Stopwatch.GetTimestamp();
 
-        using (Activity? activity = s_activitySource.StartActivity("DB QueryStream"))
+        using (Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("DB QueryStream"))
         {
             activity?.SetTag("db.system", "mssql");
             activity?.SetTag("db.operation", commandType.ToString());
@@ -915,9 +912,30 @@ internal sealed partial class SqlDbExecutor(
         }
     }
 
+    /// <summary>
+    /// MarsPolicy에 따라 MARS 활성화 여부를 검증합니다.
+    /// <para>
+    /// <b>[정책 분기]</b><br/>
+    /// - <c>ForceEnable</c>: 등록 시점에 이미 MARS가 주입되었으므로 검증 건너뜀.<br/>
+    /// - <c>Disabled</c>: QueryMultipleAsync 사용 자체를 금지하며 즉시 예외를 발생시킵니다.<br/>
+    /// - <c>Auto</c>: 연결 문자열을 파싱하여 MARS 설정 여부를 확인합니다 (기존 동작).
+    /// </para>
+    /// </summary>
     private void ValidateMarsEnabled(System.Data.Common.DbConnection conn)
     {
-        // 캐시 확인 (Fast Path)
+        // [ForceEnable] 등록 시 PostConfigure에서 이미 MARS를 주입했으므로 검증 불필요
+        if (_options.Mars == Lib.Db.Configuration.MarsPolicy.ForceEnable)
+            return;
+
+        // [Disabled] 정책적으로 MARS 사용 금지 — 즉시 예외
+        if (_options.Mars == Lib.Db.Configuration.MarsPolicy.Disabled)
+        {
+            throw new InvalidOperationException(
+                "MarsPolicy가 Disabled로 설정되어 QueryMultipleAsync를 사용할 수 없습니다. " +
+                "LibDbOptions.Mars를 Auto 또는 ForceEnable로 변경하세요.");
+        }
+
+        // [Auto] 연결 문자열 파싱으로 MARS 활성화 여부 확인 (캐시 적용, 연결당 1회)
         string connStr = conn.ConnectionString;
         if (s_marsEnabledCache.TryGetValue(connStr, out bool enabled))
         {
@@ -930,6 +948,7 @@ internal sealed partial class SqlDbExecutor(
         Microsoft.Data.SqlClient.SqlConnectionStringBuilder builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connStr);
         bool isEnabled = builder.MultipleActiveResultSets;
 
+        // 연결 문자열은 앱당 1~5개 수준이므로 크기 제한 없이 단순 추가
         s_marsEnabledCache[connStr] = isEnabled;
 
         if (!isEnabled)

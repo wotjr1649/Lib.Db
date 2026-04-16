@@ -39,6 +39,10 @@ internal static class NegativeCache
     // 메모리 누수를 방지하기 위한 안전장치입니다.
     private static int s_maxSize = 1000;
 
+    // [원자 카운터] 현재 캐시 항목 수를 추적합니다.
+    // s_missingObjects.Count(O(n) 스냅샷)를 대체하여 멀티스레드 환경에서 원자적으로 크기를 확인합니다.
+    private static int s_count;
+
     /// <summary>
     /// Negative Cache가 저장할 수 있는 최대 항목 수를 설정합니다.
     /// <para>
@@ -58,7 +62,12 @@ internal static class NegativeCache
     /// </list>
     /// </para>
     /// </summary>
-    public static void Clear() => s_missingObjects.Clear();
+    public static void Clear()
+    {
+        s_missingObjects.Clear();
+        // 카운터도 함께 초기화 (원자적 리셋)
+        Interlocked.Exchange(ref s_count, 0);
+    }
 
     /// <summary>
     /// 특정 객체가 DB에 존재하지 않음을 캐시에 기록합니다.
@@ -75,10 +84,15 @@ internal static class NegativeCache
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void RecordMissing(string dbHash, string objectName, string objectType)
     {
-        // [메모리 보호] 최대 크기 도달 시 초기화 (복잡한 퇴출 정책 대신 단순함 선택)
-        if (s_missingObjects.Count >= s_maxSize)
+        // [원자 크기 보호] Interlocked 카운터로 스레드 안전하게 크기 확인 후 초기화
+        // s_missingObjects.Count는 O(n) 스냅샷이므로 다중 스레드가 동시에 임계값을 통과하는 race condition 발생 가능.
+        // Interlocked.Increment를 사용하면 하나의 스레드만 정확히 임계값을 초과하는 순간을 원자적으로 감지할 수 있습니다.
+        if (Interlocked.Increment(ref s_count) > s_maxSize)
         {
             s_missingObjects.Clear();
+            // 이 스레드가 Clear 직후 1개 항목을 추가하므로 카운터를 1로 리셋.
+            // 0으로 리셋하면 추가 후에도 카운터가 0인 상태가 되어 실제 항목 수와 불일치.
+            Interlocked.Exchange(ref s_count, 1);
         }
 
         string key = BuildKey(dbHash, objectName, objectType);

@@ -73,6 +73,9 @@ internal static class DbErrorMapper
 
             #region ConnectionLost — 연결 끊김
 
+            [53] = (DbErrorKind.ConnectionLost, true,
+                "서버를 찾을 수 없거나 액세스할 수 없습니다.",
+                "서버 이름/주소가 올바른지, SQL Server 서비스가 실행 중인지 확인하세요."),
             [10053] = (DbErrorKind.ConnectionLost, true,
                 "서버와의 연결이 끊어졌습니다. (소프트웨어에 의한 연결 중단)",
                 "네트워크 상태를 확인하고, 방화벽 또는 VPN 설정을 점검하세요."),
@@ -240,6 +243,9 @@ internal static class DbErrorMapper
             [10929] = (DbErrorKind.CloudTransient, true,
                 "리소스 최소 보장을 위해 요청이 거부되었습니다. (Azure SQL)",
                 "서버 부하가 줄어들 때 재시도하세요."),
+            [49918] = (DbErrorKind.CloudTransient, true,
+                "현재 리소스 제한으로 인해 요청을 처리할 수 없습니다. (Azure SQL 일시적 오류)",
+                "잠시 후 재시도하세요. Azure SQL Database의 DTU/vCore 한계에 도달했을 수 있습니다."),
 
             #endregion
         }.ToFrozenDictionary();

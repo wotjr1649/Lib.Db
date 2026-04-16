@@ -27,8 +27,6 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
     private readonly ILogger<SchemaFlushService> _logger;
     private readonly MemoryCache _lastKnownEpochs;
 
-    private static readonly ActivitySource s_activity = new("Lib.Db.SchemaFlush");
-
     public SchemaFlushService(
         EpochStore epochStore,
         ISchemaService schemaService,
@@ -48,7 +46,7 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
     /// <inheritdoc />
     public async Task FlushAsync(string instanceHash, CancellationToken ct = default)
     {
-        using Activity? activity = s_activity.StartActivity("Flush");
+        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("Flush");
         activity?.SetTag("instance", instanceHash);
 
         Stopwatch sw = Stopwatch.StartNew();
@@ -104,7 +102,7 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
     /// <inheritdoc />
     public async Task<bool> CheckAndSyncEpochAsync(string instanceHash, CancellationToken ct = default)
     {
-        using Activity? activity = s_activity.StartActivity("CheckEpoch");
+        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("CheckEpoch");
         activity?.SetTag("instance", instanceHash);
 
         // 현재 Epoch 읽기

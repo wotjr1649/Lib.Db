@@ -50,6 +50,19 @@ public sealed class LibDbOptions
         }
     } = [];
 
+    /// <summary>
+    /// MARS(다중 활성 결과 집합) 정책입니다. (기본값: <see cref="MarsPolicy.Auto"/>)
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// <list type="bullet">
+    /// <item><description><c>Disabled</c>: MARS를 사용하지 않습니다. QueryMultipleAsync 호출 시 예외가 발생합니다.</description></item>
+    /// <item><description><c>Auto</c> (기본값): QueryMultipleAsync 사용 시 MARS 미설정이면 경고 후 예외를 발생시킵니다.</description></item>
+    /// <item><description><c>ForceEnable</c>: AddLibDb() 등록 시 ConnectionString에 <c>MultipleActiveResultSets=True</c>를 자동 주입합니다.</description></item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    public MarsPolicy Mars { get; set; } = MarsPolicy.Auto;
+
     #endregion
 
     #region [2] 연결 문자열 이름 목록
@@ -631,17 +644,28 @@ public sealed class LibDbOptions
     } = 2;
 
     /// <summary>
-    /// OpenTelemetry 추적 및 메트릭 활성화 여부 (기본값: false)
-    /// <para>true 설정 시 ActivitySource("Lib.Db")와 Meter("Lib.Db")를 통해 텔레메트리 데이터를 생성합니다.</para>
-    /// <para>비활성 시 오버헤드는 0에 가깝습니다 (분기 1회).</para>
-    /// </summary>
-    public bool EnableOpenTelemetry { get; set; } = false;
-
-    /// <summary>
     /// 관측 가능성(Logging, Metrics, Tracing) 기능 활성화 여부 (기본값: false)
-    /// <para>이 값은 EnableOpenTelemetry 등 세부 설정의 마스터 스위치 역할을 합니다.</para>
+    /// <para>
+    /// <b>[설계 의도]</b> v2.2에서 <c>EnableOpenTelemetry</c>와 통합된 단일 마스터 스위치입니다.
+    /// <c>true</c> 설정 시 ActivitySource("Lib.Db")와 Meter("Lib.Db")를 통해 텔레메트리 데이터를 생성합니다.
+    /// 비활성 시 오버헤드는 0에 가깝습니다 (분기 1회).
+    /// </para>
     /// </summary>
     public bool EnableObservability { get; set; } = false;
+
+    /// <summary>
+    /// [사용 중단] <see cref="EnableObservability"/>를 사용하세요. 이 속성은 v3.0에서 제거됩니다.
+    /// <para>
+    /// OpenTelemetry 추적 및 메트릭 활성화 여부입니다.
+    /// 이 속성은 <see cref="EnableObservability"/>의 별칭(Alias)으로, get/set 모두 <see cref="EnableObservability"/>에 위임합니다.
+    /// </para>
+    /// </summary>
+    [Obsolete("EnableObservability를 사용하세요. 이 속성은 v3.0에서 제거됩니다.")]
+    public bool EnableOpenTelemetry
+    {
+        get => EnableObservability;
+        set => EnableObservability = value;
+    }
 
     /// <summary>
     /// SQL 쿼리 파라미터를 추적(Trace)에 포함할지 여부 (기본값: false)

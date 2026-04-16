@@ -270,8 +270,14 @@ internal sealed class DbSession(
     /// <returns>16자 hex 해시 문자열</returns>
     private static string ComputeConnectionStringHash(string connectionString)
     {
+        // [성능 최적화] 연결 문자열을 UTF-8로 변환 시 stackalloc 사용 (힙 할당 제거)
+        // 연결 문자열이 512자 이하라면 스택 할당, 초과 시 힙 할당
+        int maxBytes = Encoding.UTF8.GetMaxByteCount(connectionString.Length);
+        Span<byte> utf8Bytes = maxBytes <= 512 ? stackalloc byte[maxBytes] : new byte[maxBytes];
+        int written = Encoding.UTF8.GetBytes(connectionString, utf8Bytes);
+
         Span<byte> hashBytes = stackalloc byte[32];
-        int bytesWritten = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(connectionString), hashBytes);
+        SHA256.HashData(utf8Bytes[..written], hashBytes);
         // 앞 8바이트(16자 hex)만 사용하여 충분히 고유하면서 간결한 인스턴스명 생성
         return Convert.ToHexString(hashBytes[..8]);
     }

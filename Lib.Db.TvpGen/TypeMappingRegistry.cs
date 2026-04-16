@@ -255,26 +255,30 @@ internal static class TypeMappingRegistry
     /// </para>
     /// </summary>
     /// <param name="sqlType">SQL Server 타입 이름 (예: "int", "nvarchar", "datetime2")</param>
-    /// <returns>C# 타입 키워드 (예: "int", "string", "DateTime")</returns>
+    /// <returns>C# 타입 키워드 또는 전역 한정 타입명 (예: "int", "string", "global::System.DateTime")</returns>
     public static string MapSqlTypeToCSharp(string sqlType)
     {
         return sqlType.ToLowerInvariant() switch
         {
-            "bigint" => "long",
-            "int" => "int",
-            "smallint" => "short",
-            "tinyint" => "byte",
-            "bit" => "bool",
+            "bigint"         => "long",
+            "int"            => "int",
+            "smallint"       => "short",
+            "tinyint"        => "byte",
+            "bit"            => "bool",
             "decimal" or "numeric" or "money" => "decimal",
-            "float" => "double",
-            "real" => "float",
-            "datetime" or "datetime2" or "date" => "DateTime",
-            "datetimeoffset" => "DateTimeOffset",
+            "float"          => "double",
+            "real"           => "float",
+            // ✅ T1-2: date는 DateOnly로 분리 (DateTime 오역 수정)
+            "datetime" or "datetime2" => "global::System.DateTime",
+            "date"           => "global::System.DateOnly",
+            // ✅ T1-11: FullyQualified 형식으로 변경 (using System; 의존 제거)
+            "datetimeoffset" => "global::System.DateTimeOffset",
             "varchar" or "nvarchar" or "char" or "nchar" or "text" or "ntext" => "string",
-            "uniqueidentifier" => "Guid",
+            "uniqueidentifier" => "global::System.Guid",
             "binary" or "varbinary" or "image" => "byte[]",
-            "time" => "TimeSpan",
-            _ => "object"
+            // ✅ T1-2: time은 TimeOnly로 변경 (TimeSpan 오역 수정)
+            "time"           => "global::System.TimeOnly",
+            _                => "object"
         };
     }
 

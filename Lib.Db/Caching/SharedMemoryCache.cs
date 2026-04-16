@@ -344,6 +344,13 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     public void Remove(string key)
     {
+        // [Fallback 모드] _mutexStripes.Value가 빈 배열이므로 인덱싱 시 IndexOutOfRangeException 방지
+        if (_isFallbackMode)
+        {
+            _options.FallbackCache?.Remove(key);
+            return;
+        }
+
         Mutex mutex = GetMutex(key);
         bool acquired = false;
         try
@@ -381,15 +388,21 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         return Task.CompletedTask;
     }
 
-    public void Refresh(string key)
-    {
-        // Sliding Expiration 구현 시 필요
-        // MMF 헤더만 읽어서 ExpiryTicks 업데이트
-    }
+    /// <summary>
+    /// 만료 시간을 갱신합니다. (현재 미지원 — Absolute Expiration 전용)
+    /// <para><b>[설계 의도]</b> SharedMemoryCache는 절대 만료(AbsoluteExpiration)만 지원하므로
+    /// Sliding Expiration 갱신은 no-op입니다. IDistributedCache 계약 상 구현이 필요합니다.</para>
+    /// </summary>
+    public void Refresh(string key) { /* Sliding Expiration 미지원 — 의도적 no-op */ }
 
+    /// <summary>
+    /// 만료 시간을 비동기로 갱신합니다. (현재 미지원 — Absolute Expiration 전용)
+    /// <para><b>[설계 의도]</b> SharedMemoryCache는 절대 만료(AbsoluteExpiration)만 지원하므로
+    /// Sliding Expiration 갱신은 no-op입니다. IDistributedCache 계약 상 구현이 필요합니다.</para>
+    /// </summary>
     public Task RefreshAsync(string key, CancellationToken token = default)
     {
-        Refresh(key);
+        /* Sliding Expiration 미지원 — 의도적 no-op */
         return Task.CompletedTask;
     }
 
@@ -456,6 +469,14 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     private Mutex GetMutex(string key)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // [Fallback 모드] 빈 배열(_mutexStripes = Array.Empty<Mutex>())에서
+        // 인덱싱하면 IndexOutOfRangeException 발생 — 호출 전 반드시 _isFallbackMode 확인 필요.
+        // 이 메서드는 내부용이므로, 여기서도 안전 장치로 방어합니다.
+        if (_isFallbackMode)
+            throw new InvalidOperationException(
+                "[SharedMemoryCache] Fallback 모드에서 GetMutex를 호출할 수 없습니다. " +
+                "호출 전에 _isFallbackMode를 확인하세요.");
 
         // Crc32 Stripe Mapping (UTF8 기반)
         int maxBytes = Encoding.UTF8.GetMaxByteCount(key.Length);

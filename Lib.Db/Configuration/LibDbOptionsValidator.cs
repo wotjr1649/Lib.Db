@@ -122,6 +122,24 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                 errors.Add("SharedMemoryCache.MaxCacheSizeBytes는 0보다 커야 합니다.");
         }
 
+        // [5] (T6-6) MarsPolicy.ForceEnable: 연결 문자열 파싱 가능 여부 사전 검증
+        // PostConfigure에서 MARS 자동 주입 시 파싱 실패가 발생하면 등록 자체가 불가하므로,
+        // 유효성 검사 단계에서 미리 파싱 오류를 감지합니다.
+        if (options.Mars == MarsPolicy.ForceEnable)
+        {
+            foreach (KeyValuePair<string, string> kvp in options.ConnectionStrings)
+            {
+                try
+                {
+                    _ = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(kvp.Value);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"ConnectionString '{kvp.Key}' 파싱 실패 (MARS 자동 주입 불가): {ex.Message}");
+                }
+            }
+        }
+
         return errors.Count > 0
             ? ValidateOptionsResult.Fail(errors)
             : ValidateOptionsResult.Success;

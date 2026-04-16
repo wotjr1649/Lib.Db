@@ -164,7 +164,8 @@ internal static class DbExecutionContextScope
 /// </summary>
 public static class LibDbRuntime
 {
-    private static readonly object s_sync = new();
+    // [성능 최적화] .NET 9+ System.Threading.Lock — object 기반 lock 대비 성능 개선 및 의미 명확화
+    private static readonly Lock s_sync = new();
 
     /// <summary>
     /// 현재 프로세스에서 Lib.Db가 최소 한 번이라도 <see cref="Configure"/> 되었는지 여부입니다.

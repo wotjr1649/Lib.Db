@@ -8,6 +8,7 @@
 
 using System.Data;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace Lib.Db.Execution.Bulk;
@@ -34,6 +35,33 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
 
     private bool _disposed;
 
+    // 생성자 파라미터 `properties` 순서를 그대로 사용하여 getter 인덱스 불일치 방지.
+    // 이전 구현은 s_getterCache에서 type.GetProperties() (CLR 내부 순서)로 getter를 빌드하여,
+    // 호출자가 지정한 properties 순서와 어긋날 수 있었습니다.
+    private readonly Func<object, object?>[] _getters = BuildGetters(properties);
+
+    /// <summary>
+    /// 지정된 PropertyInfo 배열 순서대로 Expression Tree getter를 컴파일합니다.
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// GetValue(i)가 properties[i]와 정확히 대응하도록 호출자 제공 순서를 유지합니다.
+    /// </para>
+    /// </summary>
+    private static Func<object, object?>[] BuildGetters(PropertyInfo[] props)
+    {
+        Func<object, object?>[] getters = new Func<object, object?>[props.Length];
+        for (int i = 0; i < props.Length; i++)
+        {
+            PropertyInfo prop = props[i];
+            ParameterExpression param = Expression.Parameter(typeof(object), "obj");
+            UnaryExpression cast = Expression.Convert(param, prop.DeclaringType!);
+            MemberExpression access = Expression.Property(cast, prop);
+            UnaryExpression box = Expression.Convert(access, typeof(object));
+            getters[i] = Expression.Lambda<Func<object, object?>>(box, param).Compile();
+        }
+        return getters;
+    }
+
     #endregion
 
     #region IDataReader 핵심 구현
@@ -49,10 +77,7 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
     }
 
     /// <summary>지정된 인덱스의 필드 값을 반환합니다.</summary>
-    public object GetValue(int i)
-    {
-        return properties[i].GetValue(enumerator.Current) ?? DBNull.Value;
-    }
+    public object GetValue(int i) => _getters[i](enumerator.Current!) ?? DBNull.Value;
 
     /// <summary>지정된 인덱스의 필드 이름을 반환합니다.</summary>
     public string GetName(int i) => properties[i].Name;
@@ -105,11 +130,7 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
     }
 
     /// <summary>지정된 인덱스의 값이 DBNull인지 확인합니다.</summary>
-    public bool IsDBNull(int i)
-    {
-        object? value = properties[i].GetValue(enumerator.Current);
-        return value is null;
-    }
+    public bool IsDBNull(int i) => _getters[i](enumerator.Current!) is null;
 
     /// <summary>인덱서 (정수).</summary>
     public object this[int i] => GetValue(i);
