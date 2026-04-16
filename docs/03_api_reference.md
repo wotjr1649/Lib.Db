@@ -163,7 +163,7 @@ DB 오류 분류 열거형입니다 (16개 값).
 | 값 | 설명 |
 |---|---|
 | `Disabled` | MARS 미사용. `QueryMultipleAsync` 호출 시 `InvalidOperationException` 발생 |
-| `Auto` | 자동 감지 (기본값). `QueryMultipleAsync` 사용 시 MARS 미설정이면 예외 |
+| `Auto` | 자동 감지 (기본값). `QueryMultipleAsync` 사용 시 MARS 미설정이면 경고 로그 후 예외 |
 | `ForceEnable` | `AddLibDb()` 등록 시 ConnectionString에 `MultipleActiveResultSets=True` 자동 주입 |
 
 ---
@@ -267,11 +267,13 @@ SqlBulkCopy 기반 대량 INSERT 옵션 클래스입니다.
 
 OpenTelemetry 기반 관측 가능성을 위한 정적 클래스입니다.
 
-| 상수/필드 | 타입 | 값 |
+| 상수/필드/메서드 | 타입 | 설명 |
 |---|---|---|
-| `SourceName` | `const string` | `"Lib.Db"` |
+| `SourceName` | `const string` | `"Lib.Db"` — ActivitySource/Meter 공통 이름 |
+| `Version` | `const string` | `"2.2.0"` — ActivitySource/Meter 버전 |
 | `ActivitySource` | `ActivitySource` | 트레이스 데이터 생성 |
 | `Meter` | `Meter` | 메트릭 데이터 생성 |
+| `RecordBytesFreed(long)` | `static void` | 캐시 정리 시 해제된 바이트 누적 기록 |
 
 ### 메트릭 목록
 

@@ -151,7 +151,7 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 - [ ] sa 계정 대신 최소 권한 Application User 사용
 - [ ] **MARS 정책 설정**: `"Mars": "ForceEnable"` (권장) 또는 `"Mars": "Auto"` (기본값)
   - `ForceEnable`: `AddLibDb()` 등록 시 ConnectionString에 `MultipleActiveResultSets=True` 자동 주입
-  - `Auto`: `QueryMultipleAsync` 사용 시 MARS 미설정이면 예외 (수동 설정 필요)
+  - `Auto`: `QueryMultipleAsync` 사용 시 MARS 미설정이면 경고 로그 후 예외 (수동 설정 필요)
   - `Disabled`: MARS 미사용 (`QueryMultipleAsync` 사용 불가)
 
 ### 4-3. Connection Pool / Resilience / 캐싱
