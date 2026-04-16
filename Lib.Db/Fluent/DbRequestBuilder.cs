@@ -10,7 +10,6 @@ using System.Globalization;
 using Lib.Db.Contracts.Core;
 using Lib.Db.Contracts.Entry;
 using Lib.Db.Contracts.Execution;
-using Lib.Db.Diagnostics;
 
 namespace Lib.Db.Fluent;
 
@@ -329,27 +328,6 @@ internal sealed class ExecutionStage<TParams> : IExecutionStage<TParams>
 
     private DbExecutionOptions CreateOptions() => new DbExecutionOptions(_schemaModeOverride, _timeout);
 
-    /// <summary>
-    /// SqlException을 DbError로 변환합니다.
-    /// </summary>
-    private static DbError MapSqlException(Microsoft.Data.SqlClient.SqlException ex, string commandText)
-    {
-        return DbErrorMapper.FromSqlException(ex, commandText);
-    }
-
-    /// <summary>
-    /// 일반 예외를 DbError로 변환합니다.
-    /// </summary>
-    private static DbError MapGeneralException(Exception ex)
-    {
-        return new DbError
-        {
-            Kind = DbErrorKind.Unknown,
-            Message = ex.Message,
-            InnerException = ex
-        };
-    }
-
     #endregion
 
     #region [메서드] 실행 메서드 — DbResult 래핑
@@ -358,116 +336,62 @@ internal sealed class ExecutionStage<TParams> : IExecutionStage<TParams>
     /// 결과를 비동기 스트림으로 조회합니다. 스트림 생성 시점의 오류만 DbResult로 래핑합니다.
     /// </summary>
     public Task<DbResult<IAsyncEnumerable<TResult>>> QueryAsync<TResult>(CancellationToken ct = default)
-    {
-        try
-        {
-            IAsyncEnumerable<TResult> stream = _executor.QueryAsync<TParams, TResult>(
-                _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct);
-            return Task.FromResult(DbResult<IAsyncEnumerable<TResult>>.Ok(stream));
-        }
-        catch (Microsoft.Data.SqlClient.SqlException ex)
-        {
-            DbError error = MapSqlException(ex, _commandText);
-            return Task.FromResult(DbResult<IAsyncEnumerable<TResult>>.Fail(error));
-        }
-        catch (Exception ex)
-        {
-            DbError error = MapGeneralException(ex);
-            return Task.FromResult(DbResult<IAsyncEnumerable<TResult>>.Fail(error));
-        }
-    }
+        => ExecutionHelper.WrapSync(
+            _commandText,
+            () => _executor.QueryAsync<TParams, TResult>(
+                _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct));
 
     /// <summary>
     /// 단일 결과를 조회합니다.
     /// </summary>
-    public async Task<DbResult<TResult?>> QuerySingleAsync<TResult>(CancellationToken ct = default)
-    {
-        try
-        {
-            TResult? value = await _executor.QuerySingleAsync<TParams, TResult>(
-                _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct).ConfigureAwait(false);
-            return DbResult<TResult?>.Ok(value);
-        }
-        catch (Microsoft.Data.SqlClient.SqlException ex)
-        {
-            DbError error = MapSqlException(ex, _commandText);
-            return DbResult<TResult?>.Fail(error);
-        }
-        catch (Exception ex)
-        {
-            DbError error = MapGeneralException(ex);
-            return DbResult<TResult?>.Fail(error);
-        }
-    }
+    public Task<DbResult<TResult?>> QuerySingleAsync<TResult>(CancellationToken ct = default)
+        => ExecutionHelper.WrapAsync(
+            _commandText,
+            async () =>
+            {
+                TResult? value = await _executor.QuerySingleAsync<TParams, TResult>(
+                    _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct).ConfigureAwait(false);
+                return DbResult<TResult?>.Ok(value);
+            });
 
     /// <summary>
     /// 단일 스칼라 값(1행 1열)을 조회합니다.
     /// </summary>
-    public async Task<DbResult<TScalar?>> ExecuteScalarAsync<TScalar>(CancellationToken ct = default)
-    {
-        try
-        {
-            TScalar? value = await _executor.ExecuteScalarAsync<TParams, TScalar>(
-                _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct).ConfigureAwait(false);
-            return DbResult<TScalar?>.Ok(value);
-        }
-        catch (Microsoft.Data.SqlClient.SqlException ex)
-        {
-            DbError error = MapSqlException(ex, _commandText);
-            return DbResult<TScalar?>.Fail(error);
-        }
-        catch (Exception ex)
-        {
-            DbError error = MapGeneralException(ex);
-            return DbResult<TScalar?>.Fail(error);
-        }
-    }
+    public Task<DbResult<TScalar?>> ExecuteScalarAsync<TScalar>(CancellationToken ct = default)
+        => ExecutionHelper.WrapAsync(
+            _commandText,
+            async () =>
+            {
+                TScalar? value = await _executor.ExecuteScalarAsync<TParams, TScalar>(
+                    _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct).ConfigureAwait(false);
+                return DbResult<TScalar?>.Ok(value);
+            });
 
     /// <summary>
     /// 다중 결과 셋(GridReader)을 조회합니다.
     /// </summary>
-    public async Task<DbResult<IMultipleResultReader>> QueryMultipleAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            IMultipleResultReader reader = await _executor.QueryMultipleAsync<TParams>(
-                _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct).ConfigureAwait(false);
-            return DbResult<IMultipleResultReader>.Ok(reader);
-        }
-        catch (Microsoft.Data.SqlClient.SqlException ex)
-        {
-            DbError error = MapSqlException(ex, _commandText);
-            return DbResult<IMultipleResultReader>.Fail(error);
-        }
-        catch (Exception ex)
-        {
-            DbError error = MapGeneralException(ex);
-            return DbResult<IMultipleResultReader>.Fail(error);
-        }
-    }
+    public Task<DbResult<IMultipleResultReader>> QueryMultipleAsync(CancellationToken ct = default)
+        => ExecutionHelper.WrapAsync(
+            _commandText,
+            async () =>
+            {
+                IMultipleResultReader reader = await _executor.QueryMultipleAsync<TParams>(
+                    _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct).ConfigureAwait(false);
+                return DbResult<IMultipleResultReader>.Ok(reader);
+            });
 
     /// <summary>
     /// 결과 조회 없이 명령을 실행하고 영향 받은 행 수를 반환합니다.
     /// </summary>
-    public async Task<DbResult<int>> ExecuteAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            int rows = await _executor.ExecuteNonQueryAsync(
-                _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct).ConfigureAwait(false);
-            return DbResult<int>.Ok(rows, rows);
-        }
-        catch (Microsoft.Data.SqlClient.SqlException ex)
-        {
-            DbError error = MapSqlException(ex, _commandText);
-            return DbResult<int>.Fail(error);
-        }
-        catch (Exception ex)
-        {
-            DbError error = MapGeneralException(ex);
-            return DbResult<int>.Fail(error);
-        }
-    }
+    public Task<DbResult<int>> ExecuteAsync(CancellationToken ct = default)
+        => ExecutionHelper.WrapAsync(
+            _commandText,
+            async () =>
+            {
+                int rows = await _executor.ExecuteNonQueryAsync(
+                    _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct).ConfigureAwait(false);
+                return DbResult<int>.Ok(rows, rows);
+            });
 
     #endregion
 }
