@@ -1,4 +1,8 @@
-// File: Lib.Db.TvpGen/TvpGenFeatureTokens.cs
+// ============================================================================
+// 파일: Lib.Db.TvpGen/TvpGenFeatureTokens.cs
+// 설명: TvpGen Source Generator 기능 토큰 상수 정의
+// 대상: .NET 10 / C# 14
+// ============================================================================
 #nullable enable
 
 namespace Lib.Db.TvpGen;

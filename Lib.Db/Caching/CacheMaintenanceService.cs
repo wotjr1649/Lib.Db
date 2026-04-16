@@ -49,6 +49,16 @@ public sealed class CacheMaintenanceService : BackgroundService
         _logger.LogInformation("[CacheMaintenance] 서비스 중지");
     }
 
+    /// <summary>
+    /// 한 사이클의 캐시 유지보수 작업을 수행합니다.
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// DI 스코프를 생성하여 <see cref="Caching.SharedMemoryCache"/>를 획득하고,
+    /// <c>Compact(0.8)</c>를 호출하여 만료된 항목 및 80% 초과 사용 공간을 정리합니다.<br/>
+    /// <see cref="SharedMemoryCache"/>가 등록되지 않은 환경에서는 즉시 반환합니다.
+    /// </para>
+    /// </summary>
+    /// <param name="ct">취소 토큰</param>
     private async Task PerformMaintenanceAsync(CancellationToken ct)
     {
         // Scoped Service Provider 생성 (DI 스코프 관리)

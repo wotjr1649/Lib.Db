@@ -121,9 +121,15 @@ public readonly record struct DbRequestInfo(
 
 #region 고성능 로거 (FastLogger)
 
-// FastLogger/핸들러 부분은 질문에서 주신 그대로 유지
-// (성능 최적화와 무관한 부분이므로 생략 없이 그대로 사용하시면 됩니다)
-
+/// <summary>
+/// 로그 레벨이 활성화된 경우에만 문자열 보간을 평가하는 제로 할당 고성능 로거 확장입니다.
+/// <para>
+/// <b>[설계 의도]</b><br/>
+/// 표준 <c>ILogger</c>는 로그 레벨 비활성 시에도 보간 문자열을 평가하여 불필요한 할당이 발생합니다.<br/>
+/// <see cref="FastLogger"/>는 C# 10+ <c>[InterpolatedStringHandler]</c>를 활용하여
+/// 로그 레벨 확인 후에만 문자열을 구성하므로 핫 패스에서 GC 압력을 제거합니다.
+/// </para>
+/// </summary>
 public static class FastLogger
 {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -148,6 +154,9 @@ public static class FastLogger
     }
 }
 
+/// <summary>
+/// <see cref="LogLevel.Debug"/> 레벨 활성 시에만 보간 문자열을 평가하는 핸들러입니다.
+/// </summary>
 [InterpolatedStringHandler]
 public ref struct FastDebugLogHandler
 {
@@ -177,6 +186,9 @@ public ref struct FastDebugLogHandler
         => IsEnabled ? _inner.ToStringAndClear() : string.Empty;
 }
 
+/// <summary>
+/// <see cref="LogLevel.Information"/> 레벨 활성 시에만 보간 문자열을 평가하는 핸들러입니다.
+/// </summary>
 [InterpolatedStringHandler]
 public ref struct FastInfoLogHandler
 {
@@ -206,6 +218,9 @@ public ref struct FastInfoLogHandler
         => IsEnabled ? _inner.ToStringAndClear() : string.Empty;
 }
 
+/// <summary>
+/// <see cref="LogLevel.Warning"/> 레벨 활성 시에만 보간 문자열을 평가하는 핸들러입니다.
+/// </summary>
 [InterpolatedStringHandler]
 public ref struct FastWarnLogHandler
 {

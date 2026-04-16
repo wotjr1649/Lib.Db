@@ -39,42 +39,47 @@ public static class LibDbTelemetry
     #region Metrics (Counters & Histograms)
 
     // A) DB Metrics
+    /// <summary>SqlDbExecutor에서 실행된 총 DB 요청 수를 추적하는 카운터입니다.</summary>
     public static readonly Counter<long> DbRequestsTotal = Meter.CreateCounter<long>(
         "libdb.db_requests_total",
         description: "Total number of DB requests executed by SqlDbExecutor.");
 
+    /// <summary>DB 요청 소요 시간(밀리초)을 기록하는 히스토그램입니다.</summary>
     public static readonly Histogram<double> DbRequestDuration = Meter.CreateHistogram<double>(
         "libdb.db_request_duration_ms",
         unit: "ms",
         description: "Duration of DB requests in milliseconds.");
 
     // A-2) Connection Pool Metrics
-    /// <summary>연결 획득 소요 시간 (밀리초)</summary>
+    /// <summary>연결 획득 소요 시간(밀리초)을 기록하는 히스토그램입니다.</summary>
     public static readonly Histogram<double> ConnectionAcquireDuration = Meter.CreateHistogram<double>(
         "libdb.connection.acquire_duration_ms",
         unit: "ms",
         description: "연결 획득 소요 시간");
 
-    /// <summary>연결 풀 대기 횟수 (100ms 이상 소요 시 카운트)</summary>
+    /// <summary>연결 풀 대기 발생 횟수를 추적하는 카운터입니다.</summary>
     public static readonly Counter<long> ConnectionPoolWaits = Meter.CreateCounter<long>(
         "libdb.connection.pool_waits",
         description: "연결 풀 대기 횟수");
 
-    /// <summary>연결 풀 타임아웃 횟수</summary>
+    /// <summary>연결 풀 타임아웃 발생 횟수를 추적하는 카운터입니다.</summary>
     public static readonly Counter<long> ConnectionPoolTimeouts = Meter.CreateCounter<long>(
         "libdb.connection.pool_timeouts",
         description: "연결 풀 타임아웃 횟수");
 
     // B) Cache Metrics
+    /// <summary>캐시 연산(Set/Get/Remove) 총 횟수를 추적하는 카운터입니다.</summary>
     public static readonly Counter<long> CacheRequestsTotal = Meter.CreateCounter<long>(
         "libdb.cache_requests_total",
         description: "Total number of Cache operations (Set/Get/Remove).");
 
+    /// <summary>캐시 연산 소요 시간(밀리초)을 기록하는 히스토그램입니다.</summary>
     public static readonly Histogram<double> CacheOpDuration = Meter.CreateHistogram<double>(
         "libdb.cache_op_duration_ms",
         unit: "ms",
         description: "Duration of Cache operations in milliseconds.");
 
+    /// <summary>캐시 정리 사이클 총 횟수를 추적하는 카운터입니다.</summary>
     public static readonly Counter<long> CacheCleanupTotal = Meter.CreateCounter<long>(
         "libdb.cache_cleanup_total",
         description: "Total number of Cache cleanup cycles.");
