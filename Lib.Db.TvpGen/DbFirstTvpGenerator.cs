@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -204,8 +205,37 @@ internal sealed class ColumnDef
     public string TvpName { get; set; } = "";
 }
 
-internal static class MiniJsonParser
+/// <summary>
+/// libdb.schema.json을 파싱하는 간이 JSON 파서
+/// <para>
+/// <b>[설계 의도 — T1-12 GeneratedRegex 최적화]</b><br/>
+/// 기존 <c>Regex.Match/Matches</c> 런타임 패턴 컴파일 → <c>[GeneratedRegex]</c> 컴파일 타임 최적화로 전환.<br/>
+/// <c>partial</c> 클래스 선언이 필요하며, 정규식 4종을 각각 <c>private static partial Regex</c> 메서드로 정의한다.
+/// </para>
+/// </summary>
+internal static partial class MiniJsonParser
 {
+    // -------------------------------------------------------------------------
+    // T1-12: [GeneratedRegex] — 컴파일 타임 정규식 최적화
+    // -------------------------------------------------------------------------
+
+    /// <summary>"Tvps" 섹션 시작을 찾는 정규식</summary>
+    [GeneratedRegex("\"Tvps\"\\s*:\\s*\\{")]
+    private static partial Regex TvpsSectionRegex();
+
+    /// <summary>TVP 이름과 배열 내용 추출 정규식 (Singleline)</summary>
+    [GeneratedRegex("\"([^\"]+)\"\\s*:\\s*\\[(.*?)\\]", RegexOptions.Singleline)]
+    private static partial Regex TvpKeyArrayRegex();
+
+    /// <summary>중괄호 내 컬럼 객체 추출 정규식 (Singleline)</summary>
+    [GeneratedRegex("\\{(.*?)\\}", RegexOptions.Singleline)]
+    private static partial Regex ColumnObjectRegex();
+
+    /// <summary>JSON 속성 키:값 쌍 추출 정규식</summary>
+    [GeneratedRegex("\"([^\"]+)\"\\s*:\\s*\"([^\"]+)\"")]
+    private static partial Regex PropertyKeyValueRegex();
+
+    // -------------------------------------------------------------------------
     // 정규식 기반의 매우 초보적인 파서 (의존성 제거 목표)
     // 실제 프로덕션 레벨에서는 System.Text.Json(SourceGen) 또는 더 견고한 파서를 권장하나
     // 현재 제약상 "libdb.schema.json"의 정해진 포맷만 파싱함.
@@ -246,9 +276,8 @@ internal static class MiniJsonParser
         // 실제 구현은 시간 관계상 "간단한 가정"에 의존합니다.
         // 가정: JSON은 Pretty Print 또는 표준 포맷을 따른다.
 
-        // 1. Tvps 섹션 찾기
-        System.Text.RegularExpressions.Match tvpSection =
-            System.Text.RegularExpressions.Regex.Match(json, "\"Tvps\"\\s*:\\s*\\{");
+        // 1. Tvps 섹션 찾기 (T1-12: GeneratedRegex 사용)
+        Match tvpSection = TvpsSectionRegex().Match(json);
         if (!tvpSection.Success) return root;
 
         int startIndex = tvpSection.Index + tvpSection.Length;
@@ -256,13 +285,10 @@ internal static class MiniJsonParser
         // 2. 각 Key 찾기 ("Key": [ ... ])
         // 닫는 중괄호 } 를 만날 때까지 반복
         // 단순 정규식으로 "키": [ ... ] 를 추출합니다. (Non-greedy)
-        System.Text.RegularExpressions.MatchCollection matches =
-            System.Text.RegularExpressions.Regex.Matches(
-                json.Substring(startIndex),
-                "\"([^\"]+)\"\\s*:\\s*\\[(.*?)\\]",
-                System.Text.RegularExpressions.RegexOptions.Singleline);
+        // T1-12: GeneratedRegex 사용
+        MatchCollection matches = TvpKeyArrayRegex().Matches(json.Substring(startIndex));
 
-        foreach (System.Text.RegularExpressions.Match m in matches)
+        foreach (Match m in matches)
         {
             string tvpName = m.Groups[1].Value;
             string arrayContent = m.Groups[2].Value;
@@ -279,24 +305,18 @@ internal static class MiniJsonParser
     {
         List<ColumnDef> list = new();
         // { "Name": "A", "Type": "B" } 패턴 반복
-        System.Text.RegularExpressions.MatchCollection matches =
-            System.Text.RegularExpressions.Regex.Matches(
-                arrayContent,
-                "\\{(.*?)\\}",
-                System.Text.RegularExpressions.RegexOptions.Singleline);
+        // T1-12: GeneratedRegex 사용
+        MatchCollection matches = ColumnObjectRegex().Matches(arrayContent);
 
-        foreach (System.Text.RegularExpressions.Match m in matches)
+        foreach (Match m in matches)
         {
             string objContent = m.Groups[1].Value;
             ColumnDef col = new();
 
-            // "Name": "Value" 찾기
-            System.Text.RegularExpressions.MatchCollection props =
-                System.Text.RegularExpressions.Regex.Matches(
-                    objContent,
-                    "\"([^\"]+)\"\\s*:\\s*\"([^\"]+)\"");
+            // "Name": "Value" 찾기 (T1-12: GeneratedRegex 사용)
+            MatchCollection props = PropertyKeyValueRegex().Matches(objContent);
 
-            foreach (System.Text.RegularExpressions.Match p in props)
+            foreach (Match p in props)
             {
                 string k = p.Groups[1].Value;
                 string v = p.Groups[2].Value;

@@ -349,14 +349,18 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         }
 
         // 7️⃣ 중복 이름 검사 (대소문자 무시)
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var m in members)
+        HashSet<string> set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (MappableMember m in members)
         {
             if (!set.Add(m.Name))
             {
+                // LocationPath는 string이므로 Location.None 처리 필요
+                Location loc = string.IsNullOrEmpty(m.LocationPath)
+                    ? Location.None
+                    : Location.Create(m.LocationPath, default, default);
                 spc.ReportDiagnostic(Diagnostic.Create(
                     RES006_DuplicateMemberName,
-                    m.Location,
+                    loc,
                     type.Name,
                     m.Name));
                 return false;
@@ -388,7 +392,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         while (cur is not null && cur.SpecialType != SpecialType.System_Object)
         {
             // [프로퍼티]
-            foreach (var p in cur.GetMembers().OfType<IPropertySymbol>())
+            foreach (IPropertySymbol p in cur.GetMembers().OfType<IPropertySymbol>())
             {
                 if (p.IsStatic || p.IsIndexer)
                     continue;
@@ -406,21 +410,28 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
                 // Nullable<T> 값 타입 여부 판별 (int?, long? 등)
                 bool isNullableVT = p.Type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
 
+                // T1-10: ITypeSymbol 대신 사전 계산된 문자열로 저장 → 컴파일 사이클 간 Equals 안정화
+                string safeName = SanitizeIdentifier(p.Name);
+                string typeFullName = p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                string readerExpr = TypeMappingRegistry.GetReaderValueExpression(p.Type, $"ord_{safeName}");
+                string locationPath = p.Locations.FirstOrDefault()?.GetLineSpan().Path ?? string.Empty;
+
                 list.Add(new MappableMember(
                     Name: p.Name,
-                    SafeName: SanitizeIdentifier(p.Name),
-                    Type: p.Type,
+                    SafeName: safeName,
+                    TypeFullName: typeFullName,
+                    ReaderExpression: readerExpr,
                     Kind: MemberKind.Property,
                     RequiresUnsafeSetter: requiresUnsafeSetter,
                     RequiresUnsafeField: false,
                     IsNullableValueType: isNullableVT,
-                    Location: p.Locations.FirstOrDefault() ?? Location.None));
+                    LocationPath: locationPath));
             }
 
             // [필드] ✅ record는 금지
             if (!isRecord)
             {
-                foreach (var f in cur.GetMembers().OfType<IFieldSymbol>())
+                foreach (IFieldSymbol f in cur.GetMembers().OfType<IFieldSymbol>())
                 {
                     if (f.IsStatic || f.IsConst || f.IsReadOnly)
                         continue;
@@ -430,15 +441,22 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
                     // Nullable<T> 값 타입 여부 판별 (int?, long? 등)
                     bool isNullableVTField = f.Type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
 
+                    // T1-10: ITypeSymbol 대신 사전 계산된 문자열로 저장 → 컴파일 사이클 간 Equals 안정화
+                    string safeNameF = SanitizeIdentifier(f.Name);
+                    string typeFullNameF = f.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                    string readerExprF = TypeMappingRegistry.GetReaderValueExpression(f.Type, $"ord_{safeNameF}");
+                    string locationPathF = f.Locations.FirstOrDefault()?.GetLineSpan().Path ?? string.Empty;
+
                     list.Add(new MappableMember(
                         Name: f.Name,
-                        SafeName: SanitizeIdentifier(f.Name),
-                        Type: f.Type,
+                        SafeName: safeNameF,
+                        TypeFullName: typeFullNameF,
+                        ReaderExpression: readerExprF,
                         Kind: MemberKind.Field,
                         RequiresUnsafeSetter: false,
                         RequiresUnsafeField: requiresUnsafeField,
                         IsNullableValueType: isNullableVTField,
-                        Location: f.Locations.FirstOrDefault() ?? Location.None));
+                        LocationPath: locationPathF));
                 }
             }
 
@@ -551,7 +569,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
         // 2) Unrolled ASCII matcher
         sb.Append(indent).AppendLine("    #region [내부 비교] 멤버별 ASCII IgnoreCase(언롤) 매칭 함수");
-        foreach (var m in members)
+        foreach (MappableMember m in members)
         {
             sb.Append(GenerateUnrolledAsciiMatch(indent + "    ", m));
             sb.AppendLine();
@@ -561,9 +579,10 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
         // 3) UnsafeAccessor 정의
         sb.Append(indent).AppendLine("    #region [UnsafeAccessor] init-only / non-public setter / non-public field 지원");
-        foreach (var m in members)
+        foreach (MappableMember m in members)
         {
-            var tName = m.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            // T1-10: m.Type 제거 → m.TypeFullName 사용
+            string tName = m.TypeFullName;
 
             if (m.Kind == MemberKind.Property && m.RequiresUnsafeSetter)
             {
@@ -589,7 +608,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         sb.Append(indent).AppendLine($"    public static Func<DbDataReader, {fullName}> CreateParser(DbDataReader reader)");
         sb.Append(indent).AppendLine("    {");
 
-        foreach (var m in members)
+        foreach (MappableMember m in members)
             sb.Append(indent).AppendLine($"        int ord_{m.SafeName} = -1;");
 
         sb.AppendLine();
@@ -605,8 +624,8 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
         for (int i = 0; i < members.Count; i++)
         {
-            var m = members[i];
-            var head = (i == 0) ? "                if" : "                else if";
+            MappableMember m = members[i];
+            string head = (i == 0) ? "                if" : "                else if";
             sb.Append(indent).AppendLine($"{head} (ord_{m.SafeName} == -1 && __Match_{m.SafeName}(span))");
             sb.Append(indent).AppendLine("                {");
             sb.Append(indent).AppendLine($"                    ord_{m.SafeName} = i;");
@@ -625,7 +644,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         sb.Append(indent).AppendLine("                switch (h)");
         sb.Append(indent).AppendLine("                {");
 
-        foreach (var m in members)
+        foreach (MappableMember m in members)
         {
             uint hash = SharedHashUtils.HashAsciiIgnoreCaseFnv1a(m.Name);
             sb.Append(indent).AppendLine($"                    case 0x{hash:X8}u: // {m.Name}");
@@ -650,9 +669,10 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         sb.Append(indent).AppendLine("        {");
         sb.Append(indent).AppendLine($"            var result = new {fullName}();");
 
-        foreach (var m in members)
+        foreach (MappableMember m in members)
         {
-            var expr = GetReaderValueExpression(m.Type, $"ord_{m.SafeName}");
+            // T1-10: ITypeSymbol 제거 → CollectMappableMembers에서 사전 계산된 ReaderExpression 사용
+            string expr = m.ReaderExpression;
 
             sb.Append(indent).AppendLine($"            if (ord_{m.SafeName} != -1 && !r.IsDBNull(ord_{m.SafeName}))");
             sb.Append(indent).AppendLine("            {");
@@ -769,23 +789,10 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
     #endregion
 
-    #region [Reader 값 읽기] 타입별 최적화 + Enum 캐스팅 + FullyQualified 강제 (CRITICAL-2)
-
-    /// <summary>
-    /// DbDataReader에서 값을 읽는 표현식을 생성합니다.
-    /// <para>
-    /// ✅ 원칙:
-    /// <list type="bullet">
-    /// <item><description>기본형: GetInt32/GetString 등 전용 API 사용</description></item>
-    /// <item><description>Enum: underlying 값을 읽은 뒤 (EnumType) 캐스팅</description></item>
-    /// <item><description>기타: GetFieldValue&lt;T&gt; 사용 (T는 FullyQualifiedFormat으로 고정)</item></list>
-    /// </para>
-    /// <para>✅ TypeMappingRegistry로 위임</para>
-    /// </summary>
-    private static string GetReaderValueExpression(ITypeSymbol typeSymbol, string ordVar)
-        => TypeMappingRegistry.GetReaderValueExpression(typeSymbol, ordVar);
-
-    #endregion
+    // [Reader 값 읽기] 래퍼 제거됨 (T1-10):
+    // 기존 GetReaderValueExpression(ITypeSymbol, string) 래퍼는 CollectMappableMembers 단계에서
+    // TypeMappingRegistry.GetReaderValueExpression를 직접 호출하여 MappableMember.ReaderExpression에 저장.
+    // → 코드 생성 단계에서는 m.ReaderExpression을 참조하므로 이 래퍼는 불필요하여 제거됨.
 
     #region [Helpers] 중첩 타입/partial 헤더/접근성/partial/힌트명/해시
 
@@ -859,16 +866,25 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
     /// <summary>
     /// 매핑 대상 멤버(프로퍼티/필드) 정보
+    /// <para>
+    /// <b>[설계 의도 — T1-10 Equatable 최적화]</b><br/>
+    /// 기존 <c>ITypeSymbol Type</c> / <c>Location Location</c>은 참조 타입으로,
+    /// 컴파일 사이클 간 의미론적으로 동일한 심볼이 다른 인스턴스로 생성되어
+    /// record struct 기본 Equals(참조 비교)가 캐시 무효화를 유발했다.<br/>
+    /// → <c>string TypeFullName</c>(FullyQualifiedFormat) + <c>string ReaderExpression</c>(사전 계산) + <c>string LocationPath</c>로 대체.<br/>
+    /// string 비교는 의미론적으로 정확하며 증분 캐시 적중률을 높인다.
+    /// </para>
     /// </summary>
     private readonly record struct MappableMember(
             string Name,
             string SafeName,
-            ITypeSymbol Type,
+            string TypeFullName,          // ITypeSymbol.ToDisplayString(FullyQualifiedFormat) — 참조 비교 대신 값 비교
+            string ReaderExpression,      // 사전 계산된 DbDataReader 값 읽기 표현식 (TypeMappingRegistry)
             MemberKind Kind,
             bool RequiresUnsafeSetter,
             bool RequiresUnsafeField,
             bool IsNullableValueType,
-            Location Location);
+            string LocationPath);         // Location.GetLineSpan().Path — 참조 비교 대신 값 비교
 
     #endregion
 }
