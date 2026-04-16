@@ -7,6 +7,7 @@
 #nullable enable
 
 using Lib.Db.Caching;
+using Lib.Db.Configuration;
 using Lib.Db.Contracts.Entry;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Mapping;
@@ -88,6 +89,32 @@ public static class LibDbServiceCollectionExtensions
 
         // 1. Options 설정
         services.AddLibDbOptions(configure);
+
+        // (T6-3) ForceEnable: ConnectionString에 MARS 자동 주입
+        // PostConfigure는 모든 Configure/IConfigureOptions 실행 후 마지막으로 호출됩니다.
+        services.PostConfigure<LibDbOptions>(options =>
+        {
+            if (options.Mars != MarsPolicy.ForceEnable)
+                return;
+
+            // 기존 딕셔너리를 순회하며 MARS가 누락된 연결 문자열에 자동 주입
+            Dictionary<string, string> corrected = new(options.ConnectionStrings.Count);
+            foreach (KeyValuePair<string, string> kvp in options.ConnectionStrings)
+            {
+                Microsoft.Data.SqlClient.SqlConnectionStringBuilder builder =
+                    new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(kvp.Value);
+
+                if (!builder.MultipleActiveResultSets)
+                {
+                    // MARS 미설정 항목에 자동 주입 (로그는 런타임 Logger 없이 불가하므로 생략)
+                    builder.MultipleActiveResultSets = true;
+                }
+
+                corrected[kvp.Key] = builder.ConnectionString;
+            }
+
+            options.ConnectionStrings = corrected;
+        });
 
         // 2. 핵심 서비스 등록
         services.RegisterLibDbCoreServices();

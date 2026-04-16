@@ -62,6 +62,8 @@ internal sealed partial class SqlDbExecutor(
     private readonly IDbInterceptor[] _userInterceptors = userInterceptors.ToArray();
     private readonly LibDbOptions _options = options;
     private readonly ILogger<SqlDbExecutor> _logger = logger;
+    // (T6-4) MarsPolicy 필드: 생성 시점에 캡처하여 핫 패스에서 분기 비용 최소화
+    private readonly Lib.Db.Configuration.MarsPolicy _marsPolicy = options.Mars;
 
     #endregion
 
@@ -912,9 +914,30 @@ internal sealed partial class SqlDbExecutor(
         }
     }
 
+    /// <summary>
+    /// (T6-4) MarsPolicy에 따라 MARS 활성화 여부를 검증합니다.
+    /// <para>
+    /// <b>[정책 분기]</b><br/>
+    /// - <c>ForceEnable</c>: 등록 시점에 이미 MARS가 주입되었으므로 검증 건너뜀.<br/>
+    /// - <c>Disabled</c>: QueryMultipleAsync 사용 자체를 금지하며 즉시 예외를 발생시킵니다.<br/>
+    /// - <c>Auto</c>: 연결 문자열을 파싱하여 MARS 설정 여부를 확인합니다 (기존 동작).
+    /// </para>
+    /// </summary>
     private void ValidateMarsEnabled(System.Data.Common.DbConnection conn)
     {
-        // 캐시 확인 (Fast Path)
+        // [ForceEnable] 등록 시 PostConfigure에서 이미 MARS를 주입했으므로 검증 불필요
+        if (_marsPolicy == Lib.Db.Configuration.MarsPolicy.ForceEnable)
+            return;
+
+        // [Disabled] 정책적으로 MARS 사용 금지 — 즉시 예외
+        if (_marsPolicy == Lib.Db.Configuration.MarsPolicy.Disabled)
+        {
+            throw new InvalidOperationException(
+                "MarsPolicy가 Disabled로 설정되어 QueryMultipleAsync를 사용할 수 없습니다. " +
+                "LibDbOptions.Mars를 Auto 또는 ForceEnable로 변경하세요.");
+        }
+
+        // [Auto] 연결 문자열 파싱으로 MARS 활성화 여부 확인 (캐시 적용, 연결당 1회)
         string connStr = conn.ConnectionString;
         if (s_marsEnabledCache.TryGetValue(connStr, out bool enabled))
         {
