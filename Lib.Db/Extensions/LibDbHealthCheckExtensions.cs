@@ -51,6 +51,9 @@ public static class LibDbHealthCheckExtensions
     private sealed class ThrottledDbHealthCheck : IHealthCheck
     {
         // 인스턴스 필드로 변경: static → instance (동시 다중 인스턴스 시 Lock이 상태를 올바르게 보호)
+        // [BUG-12 수정] HealthCheckResult는 struct이므로 volatile 적용 불가(CS0677).
+        // 스로틀 경로의 stale read는 HealthCheck 캐싱 특성상 허용 가능하며,
+        // 쓰기는 _lock 내에서만 수행하여 일관성을 보장합니다.
         private HealthCheckResult _lastResult =
             HealthCheckResult.Healthy("Initial State");
         private long _lastCheckTick;

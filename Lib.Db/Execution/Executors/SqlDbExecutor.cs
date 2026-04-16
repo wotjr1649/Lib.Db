@@ -51,8 +51,8 @@ internal sealed partial class SqlDbExecutor(
     private const string ActivityNameProcedure = "DB Procedure";
     private const string ActivityNameCommand = "DB Command";
     // [MARS Validation] 연결 문자열별 MARS 활성화 여부 캐시
-    // [T2-7] 무한 증가 방지: 키가 전체 연결 문자열이므로 64개 초과 시 전체 초기화(LRU 대신 단순 Clear)
-    private const int MarsMaxCacheSize = 64;
+    // [BUG-04] 앱당 연결 문자열 종류는 통상 1~5개이므로 크기 상한/Clear 불필요
+    // → Count >= N 체크 + Clear() 조합은 멀티스레드 환경에서 비원자적이었음(제거)
     private static readonly ConcurrentDictionary<string, bool> s_marsEnabledCache = new();
 
     private readonly IDbExecutionStrategy _strategy = strategy;
@@ -950,13 +950,7 @@ internal sealed partial class SqlDbExecutor(
         Microsoft.Data.SqlClient.SqlConnectionStringBuilder builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connStr);
         bool isEnabled = builder.MultipleActiveResultSets;
 
-        // [T2-7] 캐시 크기 상한 초과 시 전체 초기화 (연결 문자열 키 누적 방지)
-        // 운영 환경에서 연결 풀 교체/설정 변경 등으로 키 종류가 증가해도 메모리 누수 없음
-        if (s_marsEnabledCache.Count >= MarsMaxCacheSize)
-        {
-            s_marsEnabledCache.Clear();
-        }
-
+        // [BUG-04] 연결 문자열은 앱당 1~5개 수준이므로 크기 제한 없이 단순 추가
         s_marsEnabledCache[connStr] = isEnabled;
 
         if (!isEnabled)
