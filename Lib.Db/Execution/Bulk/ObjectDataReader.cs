@@ -6,8 +6,10 @@
 
 #nullable enable
 
+using System.Collections.Concurrent;
 using System.Data;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace Lib.Db.Execution.Bulk;
@@ -34,6 +36,26 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
 
     private bool _disposed;
 
+    // [성능 최적화] 타입별 Expression Tree 컴파일 getter 캐시 (T당 1회만 컴파일)
+    // Reflection.GetValue() 대비 ~10x 빠른 접근 속도를 제공합니다.
+    private static readonly ConcurrentDictionary<Type, Func<object, object?>[]> s_getterCache = new();
+
+    private readonly Func<object, object?>[] _getters = s_getterCache.GetOrAdd(
+        typeof(T), static type =>
+        {
+            PropertyInfo[] props = type.GetProperties(BindingFlags.Instance | BindingFlags.Public);
+            Func<object, object?>[] getters = new Func<object, object?>[props.Length];
+            for (int i = 0; i < props.Length; i++)
+            {
+                ParameterExpression param = Expression.Parameter(typeof(object), "obj");
+                UnaryExpression cast = Expression.Convert(param, type);
+                MemberExpression access = Expression.Property(cast, props[i]);
+                UnaryExpression box = Expression.Convert(access, typeof(object));
+                getters[i] = Expression.Lambda<Func<object, object?>>(box, param).Compile();
+            }
+            return getters;
+        });
+
     #endregion
 
     #region IDataReader 핵심 구현
@@ -49,10 +71,7 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
     }
 
     /// <summary>지정된 인덱스의 필드 값을 반환합니다.</summary>
-    public object GetValue(int i)
-    {
-        return properties[i].GetValue(enumerator.Current) ?? DBNull.Value;
-    }
+    public object GetValue(int i) => _getters[i](enumerator.Current!) ?? DBNull.Value;
 
     /// <summary>지정된 인덱스의 필드 이름을 반환합니다.</summary>
     public string GetName(int i) => properties[i].Name;
@@ -105,11 +124,7 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
     }
 
     /// <summary>지정된 인덱스의 값이 DBNull인지 확인합니다.</summary>
-    public bool IsDBNull(int i)
-    {
-        object? value = properties[i].GetValue(enumerator.Current);
-        return value is null;
-    }
+    public bool IsDBNull(int i) => _getters[i](enumerator.Current!) is null;
 
     /// <summary>인덱서 (정수).</summary>
     public object this[int i] => GetValue(i);

@@ -39,6 +39,9 @@ public ref struct SqlInterpolatedStringHandler
 {
     #region [필드] 내부 상태
 
+    // [성능 최적화] @p0~@p9 파라미터 이름 사전 캐싱 — 대부분의 쿼리는 파라미터 10개 미만
+    private static readonly string[] s_paramNames = ["@p0", "@p1", "@p2", "@p3", "@p4", "@p5", "@p6", "@p7", "@p8", "@p9"];
+
     private char[]? _buffer;
     private int _position;
     private readonly List<KeyValuePair<string, object?>> _parameters;
@@ -104,8 +107,9 @@ public ref struct SqlInterpolatedStringHandler
         if (_buffer == null || !_isValid)
             return;
 
-        // 파라미터 이름 생성 (@p0, @p1, @p2, ...)
-        string paramName = $"@p{_parameterIndex++}";
+        // 파라미터 이름 생성 (@p0~@p9 캐싱, 그 이상은 문자열 보간)
+        int idx = _parameterIndex++;
+        string paramName = idx < s_paramNames.Length ? s_paramNames[idx] : $"@p{idx}";
 
         // SQL에 파라미터 이름 추가
         EnsureCapacity(paramName.Length);
@@ -124,7 +128,8 @@ public ref struct SqlInterpolatedStringHandler
         if (_buffer == null || !_isValid)
             return;
 
-        string paramName = $"@p{_parameterIndex++}";
+        int idx = _parameterIndex++;
+        string paramName = idx < s_paramNames.Length ? s_paramNames[idx] : $"@p{idx}";
         EnsureCapacity(paramName.Length);
         paramName.AsSpan().CopyTo(_buffer.AsSpan(_position));
         _position += paramName.Length;

@@ -850,16 +850,18 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
         string prefix = instanceHash + ":";
 
         // L2에서 해당 인스턴스의 모든 항목 제거
-        foreach (string k in _l2Sp.Keys.ToArray())
+        // [최적화] ToArray() 없이 KeyValuePair<> 스냅샷으로 순회 — Keys.ToArray()는 키만 복사하나 동일 비용이므로
+        // ConcurrentDictionary는 foreach(KeyValuePair)가 스냅샷 없이도 스레드 안전하게 동작함
+        foreach (KeyValuePair<string, SpSchema> pair in _l2Sp)
         {
-            if (k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                _l2Sp.TryRemove(k, out _);
+            if (pair.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _l2Sp.TryRemove(pair.Key, out _);
         }
 
-        foreach (string k in _l2Tvp.Keys.ToArray())
+        foreach (KeyValuePair<string, TvpSchema> pair in _l2Tvp)
         {
-            if (k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                _l2Tvp.TryRemove(k, out _);
+            if (pair.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _l2Tvp.TryRemove(pair.Key, out _);
         }
 
         // clearPrefix를 전달하여 L1에서도 제거

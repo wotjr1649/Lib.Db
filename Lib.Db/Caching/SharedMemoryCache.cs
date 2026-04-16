@@ -388,15 +388,21 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         return Task.CompletedTask;
     }
 
-    public void Refresh(string key)
-    {
-        // Sliding Expiration 구현 시 필요
-        // MMF 헤더만 읽어서 ExpiryTicks 업데이트
-    }
+    /// <summary>
+    /// 만료 시간을 갱신합니다. (현재 미지원 — Absolute Expiration 전용)
+    /// <para><b>[설계 의도]</b> SharedMemoryCache는 절대 만료(AbsoluteExpiration)만 지원하므로
+    /// Sliding Expiration 갱신은 no-op입니다. IDistributedCache 계약 상 구현이 필요합니다.</para>
+    /// </summary>
+    public void Refresh(string key) { /* Sliding Expiration 미지원 — 의도적 no-op */ }
 
+    /// <summary>
+    /// 만료 시간을 비동기로 갱신합니다. (현재 미지원 — Absolute Expiration 전용)
+    /// <para><b>[설계 의도]</b> SharedMemoryCache는 절대 만료(AbsoluteExpiration)만 지원하므로
+    /// Sliding Expiration 갱신은 no-op입니다. IDistributedCache 계약 상 구현이 필요합니다.</para>
+    /// </summary>
     public Task RefreshAsync(string key, CancellationToken token = default)
     {
-        Refresh(key);
+        /* Sliding Expiration 미지원 — 의도적 no-op */
         return Task.CompletedTask;
     }
 
