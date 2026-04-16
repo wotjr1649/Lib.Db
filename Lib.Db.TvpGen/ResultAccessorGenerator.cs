@@ -178,29 +178,41 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
     #endregion
 
-    #region [초기화] 증분 파이프라인 구성 (IMapableResult 심볼 동반)
+    #region [초기화] 증분 파이프라인 구성 (IMapableResult 존재 여부 bool만 추출 — v2.2 최적화)
 
     /// <summary>
     /// Roslyn 증분 소스 생성기 파이프라인을 초기화합니다.
     /// <para>
-    /// ✅ 안전 패치:
+    /// ✅ v2.2 최적화(T1-3): CompilationProvider 전체 결합 → bool 추출로 변경.
     /// <list type="bullet">
-    /// <item><description><see cref="Compilation"/>을 함께 전달받아 IMapableResult&lt;T&gt; 심볼 존재 여부를 판단합니다.</description></item>
-    /// <item><description>심볼이 있으면 implements를 생성 코드에 포함, 없으면 생략합니다.</description></item>
+    /// <item><description>
+    /// 기존: <c>CompilationProvider.Combine(candidates)</c> — 소스 파일 변경마다 새 Compilation이 생성되어
+    /// Execute가 불필요하게 재실행되었음.
+    /// </description></item>
+    /// <item><description>
+    /// 개선: <c>CompilationProvider.Select(bool)</c>로 IMapableResult&lt;T&gt; 존재 여부 bool만 추출.
+    /// bool 비교는 저비용이며 캐시 적중률이 높아 Generator 재실행이 최소화됨.
+    /// </description></item>
     /// </list>
     /// </para>
     /// </summary>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var candidates = context.SyntaxProvider
+        IncrementalValuesProvider<INamedTypeSymbol> candidates = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 AttributeMetadataName,
                 predicate: static (node, _) => node is TypeDeclarationSyntax,
                 transform: static (ctx, _) => (INamedTypeSymbol)ctx.TargetSymbol)
             .WithComparer(SymbolEqualityComparer.Default);
 
-        // ✅ Compilation + Types 를 결합해 Execute로 전달
-        var combined = context.CompilationProvider.Combine(candidates.Collect());
+        // v2.2: Compilation 전체 대신 IMapableResult<T> 존재 여부 bool만 추출
+        // → Compilation 인스턴스 교체(소스 변경 시)가 Execute 재실행으로 이어지지 않음
+        IncrementalValueProvider<bool> hasIMapable = context.CompilationProvider
+            .Select(static (comp, _) =>
+                comp.GetTypeByMetadataName("Lib.Db.Contracts.Mapping.IMapableResult`1") is not null);
+
+        IncrementalValueProvider<(ImmutableArray<INamedTypeSymbol> Left, bool Right)> combined =
+            candidates.Collect().Combine(hasIMapable);
 
         context.RegisterSourceOutput(
             combined,
@@ -214,23 +226,28 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
     /// <summary>
     /// 후보 타입들에 대해 정책 검증을 수행하고,
     /// 통과한 타입만 Accessor 코드를 생성하여 출력합니다.
+    /// <para>
+    /// ✅ v2.2 최적화(T1-3): <paramref name="hasIMapable"/> 파라미터는
+    /// Initialize 단계에서 CompilationProvider.Select로 추출된 bool이며,
+    /// Compilation 객체 참조를 Execute 내부에서 보유하지 않음.
+    /// </para>
     /// </summary>
     private static void Execute(
         SourceProductionContext spc,
-        Compilation compilation,
-        ImmutableArray<INamedTypeSymbol> types)
+        ImmutableArray<INamedTypeSymbol> types,
+        bool hasIMapable)
     {
         if (types.IsDefaultOrEmpty)
             return;
 
-        // ✅ IMapableResult<T> 심볼 존재 여부(테스트 스텁/실환경 차이 흡수)
-        bool hasIMapableResult =
-            compilation.GetTypeByMetadataName(IMapableResultMetadataName) is not null;
+        // v2.2: hasIMapable은 Initialize의 CompilationProvider.Select에서 추출된 bool.
+        // 기존 Compilation.GetTypeByMetadataName 호출을 제거하여 Execute 내 Compilation 참조 제거.
+        bool hasIMapableResult = hasIMapable;
 
-        var visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        HashSet<INamedTypeSymbol> visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
 
 
-        foreach (var type in types)
+        foreach (INamedTypeSymbol type in types)
         {
             spc.CancellationToken.ThrowIfCancellationRequested();
 
@@ -238,11 +255,11 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
                 continue;
 
             // 1) 타입 검증 및 멤버 수집 (B-3안 정책 적용)
-            if (!ValidateTypeAndCollectMembers(spc, type, out var members))
+            if (!ValidateTypeAndCollectMembers(spc, type, out List<MappableMember> members))
                 continue;
 
             // 2) Track 5 엔진으로 소스 코드 생성 (✅ IMapableResult 조건부)
-            var source = GenerateMapperSource(type, members, hasIMapableResult);
+            string source = GenerateMapperSource(type, members, hasIMapableResult);
 
             // 3) 결과 파일 추가
             spc.AddSource(
