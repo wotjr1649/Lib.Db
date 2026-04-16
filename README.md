@@ -1,4 +1,4 @@
-# Lib.Db v2.1.0
+# Lib.Db v2.2.0
 
 **Extreme Performance Data Access Library for .NET 10+**
 
@@ -9,9 +9,9 @@
 
 ---
 
-## v2.1.0 소개
+## v2.2.0 소개
 
-`Lib.Db` v2.1.0는 .NET 10 애플리케이션을 위한 **고성능 SQL Server 데이터 액세스 라이브러리**입니다.
+`Lib.Db` v2.2.0는 .NET 10 애플리케이션을 위한 **고성능 SQL Server 데이터 액세스 라이브러리**입니다.
 
 - **Fluent API Only**: `IDbSession` 단일 진입점에서 3-Stage Fluent API로 모든 쿼리를 실행합니다
 - **DbResult\<T>**: 예외 대신 결과 타입으로 성공/실패를 구분합니다 (패턴 매칭 지원)
@@ -33,8 +33,10 @@
   },
   "LibDb": {
     "ConnectionStringNames": ["Default"],
+    "Mars": "ForceEnable",
     "EnableSchemaCaching": true,
-    "EnableResilience": true
+    "EnableResilience": true,
+    "EnableObservability": false
   }
 }
 ```
@@ -99,12 +101,13 @@ public sealed class UserRepository(IDbSession session)
 | **L1+L2 캐시** | MemoryCache + SharedMemoryCache(MMF) 하이브리드 스키마 캐싱 |
 | **스키마 워밍업** | 앱 시작 시 SP 메타데이터 사전 로딩 (Include/Exclude 패턴) |
 | **OpenTelemetry** | ActivitySource/Meter 통합 메트릭 수집 |
+| **MARS 정책** | `MarsPolicy` (Disabled/Auto/ForceEnable) — ConnectionString 자동 보정 |
 
 ---
 
 ## 성능
 
-| 시나리오 | Dapper | EF Core | Lib.Db v2.1.0 | 개선율 |
+| 시나리오 | Dapper | EF Core | Lib.Db v2.2.0 | 개선율 |
 |---|---:|---:|---:|:---:|
 | 단순 조회 (1,000건) | 12.3ms | 18.7ms | **8.1ms** | **+34%** |
 | 메모리 사용량 | 1.23MB | 2.45MB | **0.78MB** | **-37%** |
@@ -114,9 +117,23 @@ public sealed class UserRepository(IDbSession session)
 
 ---
 
-## v2.1.0 변경 요약
+## v2.2.0 변경 요약
 
-| 항목 | v1 | v2.1.0 |
+### v2.1 → v2.2 주요 변경
+
+| 항목 | v2.1 | v2.2 |
+|---|---|---|
+| MARS 정책 | 수동 설정 필수 | `MarsPolicy` (Auto/ForceEnable/Disabled) |
+| OTel 설정 | `EnableOpenTelemetry` + `EnableObservability` 이중 | `EnableObservability` 단일화 |
+| Nullable 매핑 | DB NULL → 기본값(0) 버그 | DB NULL → `null` 정상 설정 |
+| date/time 매핑 | `DateTime`/`TimeSpan` | `DateOnly`/`TimeOnly` |
+| BulkInsert | Reflection `GetValue` | Expression Tree 컴파일 getter |
+| Generator 성능 | Compilation 전체 전달 | bool 추출로 재실행 최소화 |
+| HealthCheck | 1초 하드코딩 | `HealthCheckThrottleSeconds` 옵션 반영 |
+
+### v1 → v2 주요 변경
+
+| 항목 | v1 | v2 |
 |---|---|---|
 | 진입점 | `IDbContext` | `IDbSession` |
 | 실행 경로 | 13개 | 5개 (통합) |
@@ -143,8 +160,9 @@ public sealed class UserRepository(IDbSession session)
 ### 핵심 가이드
 - **[01. 가이드](./docs/01_guide.md)** -- 아키텍처, 설정, Fluent API, 마이그레이션
 - **[02. 고급 기능](./docs/02_advanced.md)** -- TVP, AOT, 성능, Resilience, 캐싱
-- **[03. API 레퍼런스](./docs/03_api_reference.md)** -- v2.1.0 전체 Public API
+- **[03. API 레퍼런스](./docs/03_api_reference.md)** -- 전체 Public API (v2.2.0 반영)
 - **[04. 운영 가이드](./docs/04_operations.md)** -- 트러블슈팅, 에러 코드, 체크리스트
+- **[v2.1→v2.2 마이그레이션](./docs/01_guide.md#8-v21--v22-마이그레이션)** -- Breaking Changes, 신규 기능, 개선 사항
 
 ### Source Generator
 - **[Lib.Db.TvpGen](./Lib.Db.TvpGen/README.md)** -- TVP 자동 생성, DbDataReader 매핑, Track 5 알고리즘
