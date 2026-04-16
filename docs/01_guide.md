@@ -52,13 +52,15 @@ IProcedureStage → IParameterStage → IExecutionStage<T> → DbResult<T>
   },
   "LibDb": {
     "ConnectionStringNames": ["Default", "LogDb"],
+    "Mars": "ForceEnable",
     "EnableSchemaCaching": true,
     "SchemaRefreshIntervalSeconds": 60,
     "PrewarmSchemas": ["dbo"],
     "PrewarmExcludePatterns": ["*_Test*", "*_Legacy*"],
     "StrictRequiredParameterCheck": true,
     "EnableGeneratedTvpBinder": true,
-    "EnableResilience": true
+    "EnableResilience": true,
+    "EnableObservability": false
   }
 }
 ```
@@ -380,3 +382,55 @@ await using IDbTransactionScope tx3 = await session.BeginTransactionAsync(
 | `RepeatableRead` | 트랜잭션 내 반복 읽기 보장 | 중요 비즈니스 로직 |
 | `Serializable` | 최고 격리, 범위 잠금 | 재고 차감, 금융 거래 |
 | `Snapshot` | 스냅샷 기반, 잠금 없는 읽기 | 읽기 경합이 심한 환경 |
+
+---
+
+## 8. v2.1 → v2.2 마이그레이션
+
+### 8-1. Breaking Changes
+
+| 변경 | 영향 | 마이그레이션 |
+|---|---|---|
+| `EnableOpenTelemetry` → `[Obsolete]` | 컴파일 경고 발생 | `EnableObservability`로 변경 |
+| `AdaptivePolicyFactory` 삭제 | 직접 참조 시 빌드 오류 | `DefaultResiliencePipelineProvider` 사용 (DI 자동 등록) |
+| `date` 타입 매핑 변경 | `[GenerateTvpFromDb]` 사용 시 생성 타입 변경 | `DateTime` → `DateOnly` 확인, `TimeSpan` → `TimeOnly` 확인 |
+
+### 8-2. 신규 기능
+
+#### MARS 정책 (`MarsPolicy`)
+
+```json
+{
+  "LibDb": {
+    "Mars": "ForceEnable"
+  }
+}
+```
+
+| 값 | 동작 |
+|---|---|
+| `Disabled` | MARS 미사용. `QueryMultipleAsync` 호출 시 예외 |
+| `Auto` (기본값) | `QueryMultipleAsync` 사용 시 MARS 미설정이면 예외 (v2.1과 동일 동작) |
+| `ForceEnable` | `AddLibDb()` 등록 시 ConnectionString에 `MultipleActiveResultSets=True` 자동 주입 |
+
+#### 관측 가능성 통합 (`EnableObservability`)
+
+v2.2부터 `EnableOpenTelemetry`와 `EnableObservability`가 단일 속성으로 통합되었습니다.
+
+```csharp
+// v2.1
+options.EnableOpenTelemetry = true;
+
+// v2.2 (권장)
+options.EnableObservability = true;
+```
+
+> `EnableOpenTelemetry`는 하위 호환을 위해 유지되지만 v3.0에서 제거됩니다.
+
+### 8-3. 개선 사항 (코드 변경 불필요)
+
+- **Nullable 매핑 수정**: `[DbResult]` 어트리뷰트의 `int?` 등 Nullable 프로퍼티가 DB NULL 시 올바르게 `null` 설정
+- **Source Generator 성능**: CompilationProvider 최적화로 IDE 빌드 속도 향상
+- **BulkInsert 성능**: Expression Tree 기반 getter 컴파일로 Reflection 제거
+- **메모리 안전**: Meter/ActivitySource 이중 등록 제거, NegativeCache 원자성 개선
+- **HealthCheck**: `HealthCheckThrottleSeconds` 옵션이 실제 적용 (이전 1초 하드코딩)
