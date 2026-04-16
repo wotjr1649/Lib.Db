@@ -153,7 +153,18 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `EnableSharedMemoryCache` | `bool?` | `null` (자동) | L2 공유 메모리 캐시 |
 | `EnableEpochCoordination` | `bool?` | `null` | 프로세스 간 Epoch 동기화 |
 | `EnableDryRun` | `bool` | `false` | 모의 실행 모드 |
-| `EnableOpenTelemetry` | `bool` | `false` | OTel 추적/메트릭 |
+| `EnableObservability` | `bool` | `false` | 관측 가능성(Logging, Metrics, Tracing) 마스터 스위치 |
+| `EnableOpenTelemetry` | `bool` | `false` | ⚠️ **Deprecated** — `EnableObservability`를 사용하세요 (v3.0 제거 예정) |
+| `Mars` | `MarsPolicy` | `Auto` | MARS 정책 (`Disabled`/`Auto`/`ForceEnable`) |
+| `HealthCheckThrottleSeconds` | `int` | `1` | HealthCheck 최소 실행 간격 (초) |
+
+### 9-1. MarsPolicy 열거형
+
+| 값 | 설명 |
+|---|---|
+| `Disabled` | MARS 미사용. `QueryMultipleAsync` 호출 시 `InvalidOperationException` 발생 |
+| `Auto` | 자동 감지 (기본값). `QueryMultipleAsync` 사용 시 MARS 미설정이면 예외 |
+| `ForceEnable` | `AddLibDb()` 등록 시 ConnectionString에 `MultipleActiveResultSets=True` 자동 주입 |
 
 ---
 

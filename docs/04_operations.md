@@ -149,7 +149,10 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 - [ ] 각 키에 대응하는 `ConnectionStrings` 값 존재
 - [ ] `Encrypt=True;TrustServerCertificate=False` (프로덕션)
 - [ ] sa 계정 대신 최소 권한 Application User 사용
-- [ ] `MARS` 설정 확인 (`MultipleActiveResultSets=True` 필요 시)
+- [ ] **MARS 정책 설정**: `"Mars": "ForceEnable"` (권장) 또는 `"Mars": "Auto"` (기본값)
+  - `ForceEnable`: `AddLibDb()` 등록 시 ConnectionString에 `MultipleActiveResultSets=True` 자동 주입
+  - `Auto`: `QueryMultipleAsync` 사용 시 MARS 미설정이면 예외 (수동 설정 필요)
+  - `Disabled`: MARS 미사용 (`QueryMultipleAsync` 사용 불가)
 
 ### 4-3. Connection Pool / Resilience / 캐싱
 
@@ -158,6 +161,11 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 - [ ] `EnableSchemaCaching = true`, `SchemaRefreshIntervalSeconds`: 60~300
 - [ ] `PrewarmExcludePatterns`: `*_Test*`, `*_Legacy*` 등 제외
 - [ ] `DefaultCommandTimeoutSeconds`: 30 (OLTP), 120+ (배치)
+
+### 4-4. HealthCheck
+
+- [ ] `HealthCheckThrottleSeconds`: 1~10 (기본값: 1초)
+  - v2.2부터 이 설정이 실제로 적용됩니다 (이전 버전에서는 1초 하드코딩)
 
 ---
 
@@ -187,5 +195,8 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 
 ### 5-4. 진단 활성화
 
-`EnableObservability`와 `EnableOpenTelemetry`를 `true`로 설정합니다.
+`EnableObservability`를 `true`로 설정합니다.
+
+> ⚠️ `EnableOpenTelemetry`는 v2.2부터 **Deprecated**되었습니다. `EnableObservability`로 대체하세요. (v3.0에서 완전 제거 예정)
+
 `IncludeParametersInTrace`는 보안상 개발 환경에서만 `true`로 설정하세요.
