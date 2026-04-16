@@ -94,11 +94,6 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
     /// <summary>IMapableResult&lt;T&gt; 인터페이스의 메타데이터 전체 이름(제네릭 arity 포함)</summary>
     private const string IMapableResultMetadataName = "Lib.Db.Contracts.Mapping.IMapableResult`1";
 
-    /// <summary>
-    /// 하이브리드 라우팅 임계값
-    /// <para>이 값 이하: 선형(else-if) / 초과: 해시(switch) 기반 라우팅</para>
-    /// </summary>
-    private const int SmallMemberThreshold = 12;
 
     #endregion
 
@@ -263,7 +258,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
             // 3) 결과 파일 추가
             spc.AddSource(
-                BuildSafeHintName(type, "_ResultAccessor.g.cs"),
+                GeneratorSharedHelpers.BuildSafeHintName(type, "_ResultAccessor.g.cs"),
                 SourceText.From(source, Encoding.UTF8));
         }
     }
@@ -314,7 +309,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         }
 
         // 3️⃣ 접근성 검사(ContainingType 포함)
-        if (!IsAccessibleFromGeneratedCode(type))
+        if (!GeneratorSharedHelpers.IsAccessibleFromGeneratedCode(type))
         {
             spc.ReportDiagnostic(Diagnostic.Create(
                 RES003_InaccessibleType,
@@ -602,7 +597,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         sb.Append(indent).AppendLine("        int __remaining = __expected;");
         sb.AppendLine();
 
-        sb.Append(indent).AppendLine($"        if (__expected <= {SmallMemberThreshold})");
+        sb.Append(indent).AppendLine($"        if (__expected <= {GeneratorSharedHelpers.SmallMemberThreshold})");
         sb.Append(indent).AppendLine("        {");
         sb.Append(indent).AppendLine("            for (int i = 0; i < reader.FieldCount; i++)");
         sb.Append(indent).AppendLine("            {");
@@ -632,7 +627,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
         foreach (var m in members)
         {
-            uint hash = HashAsciiIgnoreCaseFnv1a(m.Name);
+            uint hash = SharedHashUtils.HashAsciiIgnoreCaseFnv1a(m.Name);
             sb.Append(indent).AppendLine($"                    case 0x{hash:X8}u: // {m.Name}");
             sb.Append(indent).AppendLine($"                        if (ord_{m.SafeName} == -1 && __Match_{m.SafeName}(span))");
             sb.Append(indent).AppendLine("                        {");
@@ -797,19 +792,6 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
     private static bool HasParameterlessCtor(INamedTypeSymbol type)
         => type.Constructors.Any(c => !c.IsStatic && c.Parameters.Length == 0);
 
-    private static bool IsAccessibleFromGeneratedCode(INamedTypeSymbol type)
-    {
-        var cur = type;
-        while (cur is not null)
-        {
-            if (cur.DeclaredAccessibility is Accessibility.Private or Accessibility.Protected)
-                return false;
-
-            cur = cur.ContainingType;
-        }
-        return true;
-    }
-
     /// <summary>
     /// ✅ “ContainingType partial 검사” 포함:
     /// <para>
@@ -862,29 +844,12 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         return $"partial class {t.Name}";
     }
 
-    private static string BuildSafeHintName(INamedTypeSymbol type, string suffix)
-    {
-        var name = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
-            .Replace("global::", "")
-            .Replace("<", "_").Replace(">", "_")
-            .Replace(".", "_")
-            .Replace("+", "_");
-        return name + suffix;
-    }
-
     /// <summary>
     /// 멤버 이름을 C# 식별자로 안전하게 변환합니다.
     /// <para>✅ SharedHashUtils로 위임</para>
     /// </summary>
     private static string SanitizeIdentifier(string s)
         => SharedHashUtils.SanitizeIdentifier(s);
-
-    /// <summary>
-    /// ASCII IgnoreCase FNV-1a 해시를 계산합니다.
-    /// <para>✅ SharedHashUtils로 위임</para>
-    /// </summary>
-    private static uint HashAsciiIgnoreCaseFnv1a(string s)
-        => SharedHashUtils.HashAsciiIgnoreCaseFnv1a(s);
 
     #endregion
 
