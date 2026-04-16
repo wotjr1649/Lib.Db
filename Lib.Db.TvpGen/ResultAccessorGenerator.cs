@@ -391,6 +391,9 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
                 // init-only 또는 public이 아닌 setter는 UnsafeAccessor로 우회 주입
                 bool requiresUnsafeSetter = isInitOnly || !isPublicSet;
 
+                // Nullable<T> 값 타입 여부 판별 (int?, long? 등)
+                bool isNullableVT = p.Type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+
                 list.Add(new MappableMember(
                     Name: p.Name,
                     SafeName: SanitizeIdentifier(p.Name),
@@ -398,6 +401,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
                     Kind: MemberKind.Property,
                     RequiresUnsafeSetter: requiresUnsafeSetter,
                     RequiresUnsafeField: false,
+                    IsNullableValueType: isNullableVT,
                     Location: p.Locations.FirstOrDefault() ?? Location.None));
             }
 
@@ -411,6 +415,9 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
 
                     bool requiresUnsafeField = f.DeclaredAccessibility != Accessibility.Public;
 
+                    // Nullable<T> 값 타입 여부 판별 (int?, long? 등)
+                    bool isNullableVTField = f.Type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+
                     list.Add(new MappableMember(
                         Name: f.Name,
                         SafeName: SanitizeIdentifier(f.Name),
@@ -418,6 +425,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
                         Kind: MemberKind.Field,
                         RequiresUnsafeSetter: false,
                         RequiresUnsafeField: requiresUnsafeField,
+                        IsNullableValueType: isNullableVTField,
                         Location: f.Locations.FirstOrDefault() ?? Location.None));
                 }
             }
@@ -653,6 +661,23 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
             }
 
             sb.Append(indent).AppendLine("            }");
+
+            // Nullable<T> 값 타입 프로퍼티/필드에 DB NULL이 들어올 때 명시적으로 null을 설정
+            // (없으면 new T()의 기본값 0이 유지되어 버그 발생)
+            if (m.IsNullableValueType)
+            {
+                sb.Append(indent).AppendLine($"            else if (ord_{m.SafeName} != -1)");
+                sb.Append(indent).AppendLine("            {");
+
+                if (m.Kind == MemberKind.Property && m.RequiresUnsafeSetter)
+                    sb.Append(indent).AppendLine($"                __Set_{m.SafeName}(result, null);");
+                else if (m.Kind == MemberKind.Field && m.RequiresUnsafeField)
+                    sb.Append(indent).AppendLine($"                __Field_{m.SafeName}(result) = null;");
+                else
+                    sb.Append(indent).AppendLine($"                result.{m.Name} = null;");
+
+                sb.Append(indent).AppendLine("            }");
+            }
         }
 
         sb.Append(indent).AppendLine("            return result;");
@@ -860,6 +885,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
             MemberKind Kind,
             bool RequiresUnsafeSetter,
             bool RequiresUnsafeField,
+            bool IsNullableValueType,
             Location Location);
 
     #endregion
