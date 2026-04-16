@@ -344,6 +344,13 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     public void Remove(string key)
     {
+        // [Fallback 모드] _mutexStripes.Value가 빈 배열이므로 인덱싱 시 IndexOutOfRangeException 방지
+        if (_isFallbackMode)
+        {
+            _options.FallbackCache?.Remove(key);
+            return;
+        }
+
         Mutex mutex = GetMutex(key);
         bool acquired = false;
         try
@@ -456,6 +463,14 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     private Mutex GetMutex(string key)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // [Fallback 모드] 빈 배열(_mutexStripes = Array.Empty<Mutex>())에서
+        // 인덱싱하면 IndexOutOfRangeException 발생 — 호출 전 반드시 _isFallbackMode 확인 필요.
+        // 이 메서드는 내부용이므로, 여기서도 안전 장치로 방어합니다.
+        if (_isFallbackMode)
+            throw new InvalidOperationException(
+                "[SharedMemoryCache] Fallback 모드에서 GetMutex를 호출할 수 없습니다. " +
+                "호출 전에 _isFallbackMode를 확인하세요.");
 
         // Crc32 Stripe Mapping (UTF8 기반)
         int maxBytes = Encoding.UTF8.GetMaxByteCount(key.Length);
