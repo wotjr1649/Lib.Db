@@ -165,8 +165,11 @@ public static class LibDbServiceCollectionExtensions
     /// <summary>
     /// Hosted Services (Schema Warmup)를 등록합니다.
     /// <para>
-    /// <b>[조건]</b> Options.EnableSchemaCaching == true<br/>
-    /// <b>[조건]</b> Options.PrewarmSchemas.Count > 0
+    /// <b>[설계 의도]</b><br/>
+    /// BuildServiceProvider() 호출을 제거하여 중간 ServiceProvider 생성 비용과 싱글턴 중복 경고를 방지합니다.<br/>
+    /// SchemaWarmupService가 <see cref="LibDbOptions"/>를 직접 주입받아 <c>ExecuteAsync</c> 진입 시
+    /// <c>EnableSchemaCaching</c> 및 <c>PrewarmSchemas.Count</c>를 스스로 확인하므로,
+    /// 조건이 미충족되면 서비스는 즉시 종료합니다.
     /// </para>
     /// </summary>
     /// <param name="services">서비스 컬렉션</param>
@@ -174,15 +177,10 @@ public static class LibDbServiceCollectionExtensions
     public static IServiceCollection AddLibDbHostedServices(
         this IServiceCollection services)
     {
-        // ServiceProvider를 임시로 빌드하여 Options 확인
-        using ServiceProvider sp = services.BuildServiceProvider();
-        LibDbOptions? options = sp.GetService<LibDbOptions>();
-
-        if (options?.EnableSchemaCaching == true && options.PrewarmSchemas.Count > 0)
-        {
-            services.TryAddEnumerable(
-                ServiceDescriptor.Singleton<IHostedService, SchemaWarmupService>());
-        }
+        // [Anti-pattern 제거] BuildServiceProvider() 대신 서비스 내부에서 옵션 확인
+        // SchemaWarmupService.ExecuteAsync()가 PrewarmSchemas/EnableSchemaCaching을 직접 검사합니다.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, SchemaWarmupService>());
 
         return services;
     }
@@ -202,11 +200,11 @@ public static class LibDbServiceCollectionExtensions
     /// - <see cref="EpochWatcherService"/> (조건부: WatchedInstances 설정 시)
     /// </para>
     /// </summary>
-    /// <param name="services">서비스 컨렉션</param>
+    /// <param name="services">서비스 컬렉션</param>
     /// <param name="epochBasePath">Epoch 파일 저장 경로 (기본값: %TEMP%/Lib.Db.Epochs)</param>
     /// <returns>체이닝을 위한 IServiceCollection</returns>
     /// <remarks>
-    /// <b>⚠️ 경고 조건:</b><br/>
+    /// <b>경고 조건:</b><br/>
     /// <see cref="LibDbOptions.EnableSharedMemoryCache"/> = <c>false</c>인데<br/>
     /// <see cref="LibDbOptions.EnableEpochCoordination"/> = <c>true</c>인 경우:<br/>
     /// Epoch 파일 기반 동기화는 되지만 실제 캐시는 프로세스마다 독립적이므로 비효율적.
@@ -215,51 +213,46 @@ public static class LibDbServiceCollectionExtensions
         this IServiceCollection services,
         string? epochBasePath = null)
     {
-        // ServiceProvider 임시 빌드로 옵션 확인
-        using ServiceProvider sp = services.BuildServiceProvider();
-        LibDbOptions? options = sp.GetService<LibDbOptions>();
-
-        // 플랫폼 자동 감지
-        bool enableSharedMemory = options?.EnableSharedMemoryCache
-            ?? System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                System.Runtime.InteropServices.OSPlatform.Windows);
-
-        bool enableEpoch = options?.EnableEpochCoordination ?? enableSharedMemory;
-
-        // Epoch 비활성화 시 조기 리턴
-        if (!enableEpoch)
-        {
-            ILogger<SchemaFlushService>? logger = sp.GetService<ILogger<SchemaFlushService>>();
-            logger?.LogInformation(
-                "[Epoch] 비활성화됨 - EpochStore 및 SchemaFlushService 등록 건너뛀 (명시적 설정: {ExplicitSetting})",
-                options?.EnableEpochCoordination?.ToString() ?? "null (auto-detect)");
-            return services;
-        }
-
-        // 경고: 공유 메모리 없이 Epoch만 사용
-        if (!enableSharedMemory && enableEpoch)
-        {
-            ILogger<EpochStore>? logger = sp.GetService<ILogger<EpochStore>>();
-            logger?.LogWarning(
-                "[Epoch] 경고: 공유 메모리 비활성화 상태에서 Epoch 사용 - " +
-                "프로세스 간 스키마 동기화 불가. " +
-                "권장: EnableSharedMemoryCache=true 또는 EnableEpochCoordination=false");
-        }
-
-        // 1. EpochStore 등록 (Singleton)
+        // [Anti-pattern 제거] BuildServiceProvider() 호출 없이 팩토리 람다에서 런타임 옵션 확인
+        // 1. EpochStore — 팩토리 내부에서 EnableEpochCoordination 판정 후 조건부 생성
         services.TryAddSingleton(sp =>
         {
+            LibDbOptions options = sp.GetRequiredService<LibDbOptions>();
+
+            // 플랫폼 자동 감지: 옵션이 null이면 공유 메모리와 동일한 값으로 설정
+            bool enableSharedMemory = options.EnableSharedMemoryCache
+                ?? System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                    System.Runtime.InteropServices.OSPlatform.Windows);
+
+            bool enableEpoch = options.EnableEpochCoordination ?? enableSharedMemory;
+
+            ILogger<EpochStore> logger = sp.GetRequiredService<ILogger<EpochStore>>();
+
+            if (!enableEpoch)
+            {
+                logger.LogInformation(
+                    "[Epoch] 비활성화됨 - EpochStore를 Noop 모드로 생성합니다 (명시적 설정: {ExplicitSetting})",
+                    options.EnableEpochCoordination?.ToString() ?? "null (auto-detect)");
+            }
+            else if (!enableSharedMemory)
+            {
+                logger.LogWarning(
+                    "[Epoch] 경고: 공유 메모리 비활성화 상태에서 Epoch 사용 - " +
+                    "프로세스 간 스키마 동기화 불가. " +
+                    "권장: EnableSharedMemoryCache=true 또는 EnableEpochCoordination=false");
+            }
+
             string basePath = epochBasePath ?? Path.Combine(
                 Path.GetTempPath(), "Lib.Db.Epochs");
-            ILogger<EpochStore> logger = sp.GetRequiredService<ILogger<EpochStore>>();
+
             return new EpochStore(basePath, logger);
         });
 
         // 2. SchemaFlushService 등록
         services.TryAddSingleton<ISchemaFlushCoordinator, SchemaFlushService>();
 
-        // 3. EpochWatcherService 조건부 등록
-        // (WatchedInstances가 설정된 경우만)
+        // 3. EpochWatcherService 등록
+        // (EpochWatcherService.ExecuteAsync는 WatchedInstances가 비어있으면 즉시 종료)
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, EpochWatcherService>());
 

@@ -6,6 +6,7 @@
 
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Threading;
 
 namespace Lib.Db.Diagnostics;
 
@@ -78,11 +79,28 @@ public static class LibDbTelemetry
         "libdb.cache_cleanup_total",
         description: "Total number of Cache cleanup cycles.");
 
+    // [내부 상태] 캐시 정리에서 해제된 누적 바이트 수를 원자적으로 추적합니다.
+    // ObservableGauge 콜백에서 Interlocked.Read로 안전하게 읽습니다.
+    private static long s_totalBytesFreed;
+
+    /// <summary>
+    /// 캐시 정리 사이클에서 해제된 바이트 수를 누적 기록합니다.
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// SharedMemoryCache, CacheMaintenanceService 등 캐시 해제 발생 지점에서 호출합니다.<br/>
+    /// Interlocked.Add를 사용하여 멀티스레드 환경에서 원자적으로 누적합니다.
+    /// </para>
+    /// </summary>
+    /// <param name="bytes">해제된 바이트 수</param>
+    public static void RecordBytesFreed(long bytes) =>
+        Interlocked.Add(ref s_totalBytesFreed, bytes);
+
+    /// <summary>캐시 정리 사이클에서 해제된 총 바이트를 관측하는 게이지 메트릭입니다.</summary>
     public static readonly ObservableGauge<long> CacheBytesFreed = Meter.CreateObservableGauge<long>(
         "libdb.cache_bytes_freed",
-        () => 0, // Placeholder: Actual value updated via callbacks if needed, or better use dedicated Gauge reporting 
+        () => Interlocked.Read(ref s_totalBytesFreed),
         unit: "bytes",
-        description: "Bytes freed during cache cleanup cycles."
+        description: "캐시 정리 사이클에서 해제된 총 바이트"
     );
     #endregion
 }
