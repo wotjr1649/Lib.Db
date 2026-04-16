@@ -90,14 +90,14 @@ public static class LibDbServiceCollectionExtensions
         // 1. Options 설정
         services.AddLibDbOptions(configure);
 
-        // (T6-3) ForceEnable: ConnectionString에 MARS 자동 주입
+        // ForceEnable: ConnectionString에 MARS 자동 주입
         // PostConfigure는 모든 Configure/IConfigureOptions 실행 후 마지막으로 호출됩니다.
         services.PostConfigure<LibDbOptions>(options =>
         {
             if (options.Mars != MarsPolicy.ForceEnable)
                 return;
 
-            // 기존 딕셔너리를 순회하며 MARS가 누락된 연결 문자열에 자동 주입
+            // 기존 딕셔너리를 순회하며 MARS가 누락된 연결 문자열에만 자동 주입
             Dictionary<string, string> corrected = new(options.ConnectionStrings.Count);
             foreach (KeyValuePair<string, string> kvp in options.ConnectionStrings)
             {
@@ -108,9 +108,12 @@ public static class LibDbServiceCollectionExtensions
                 {
                     // MARS 미설정 항목에 자동 주입 (로그는 런타임 Logger 없이 불가하므로 생략)
                     builder.MultipleActiveResultSets = true;
+                    corrected[kvp.Key] = builder.ConnectionString;
                 }
-
-                corrected[kvp.Key] = builder.ConnectionString;
+                else
+                {
+                    corrected[kvp.Key] = kvp.Value; // 원본 보존
+                }
             }
 
             options.ConnectionStrings = corrected;

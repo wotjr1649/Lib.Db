@@ -47,16 +47,13 @@ internal static class GeneratorSharedHelpers
 
     /// <summary>
     /// 소스 제너레이터 AddSource에 사용될 안전한 파일 힌트명을 생성합니다.
-    /// <para>완전 수식 이름 기반으로 생성하며, 파일명에 부적합한 문자를 치환합니다.</para>
+    /// <para>완전 수식 이름 기반으로 생성하며, <see cref="SharedHashUtils.SanitizeIdentifier"/>로 파일명에 부적합한 문자를 치환합니다.</para>
     /// </summary>
     internal static string BuildSafeHintName(INamedTypeSymbol type, string suffix)
     {
-        string name = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
-            .Replace("global::", "")
-            .Replace("<", "_").Replace(">", "_")
-            .Replace(".", "_")
-            .Replace("+", "_");
-        return name + suffix;
+        string fqn = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+            .Replace("global::", "");
+        return SharedHashUtils.SanitizeIdentifier(fqn) + suffix;
     }
 
     #endregion

@@ -35,7 +35,7 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
 
     private bool _disposed;
 
-    // [BUG-01 수정] 생성자 파라미터 `properties` 순서를 그대로 사용하여 getter 인덱스 불일치 방지.
+    // 생성자 파라미터 `properties` 순서를 그대로 사용하여 getter 인덱스 불일치 방지.
     // 이전 구현은 s_getterCache에서 type.GetProperties() (CLR 내부 순서)로 getter를 빌드하여,
     // 호출자가 지정한 properties 순서와 어긋날 수 있었습니다.
     private readonly Func<object, object?>[] _getters = BuildGetters(properties);
