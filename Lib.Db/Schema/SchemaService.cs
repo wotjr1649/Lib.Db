@@ -155,48 +155,24 @@ internal sealed class SchemaService(
         NegativeCache.ThrowIfCached(instanceHash, normalized, "StoredProcedure");
 
         // L1/L2 스냅샷에서 Zero-Alloc 조회
-        // [주의] 스냅샷 키 일관성을 위해 normalized 사용 권장되나, 기존 로직 호환성을 위해 spName 유지 고려했으나,
-        // 저장 시 normalized된 이름을 사용하므로 여기서도 normalized를 사용하는 것이 정확함.
-        SpSchema? cached = KeyHelper.LookupSp(_snapshot, instanceHash, normalized);
-
-        if (cached is not null && !IsStale(cached.LastCheckedAt))
+        SpSchema? snapshotHit = KeyHelper.LookupSp(_snapshot, instanceHash, normalized);
+        if (snapshotHit is not null && !IsStale(snapshotHit.LastCheckedAt))
         {
-            DbMetrics.TrackCacheHit(
-                "SP",
-                BuildSchemaInfo(instanceHash, "schema.sp", cached.Name));
-            return cached;
+            DbMetrics.TrackCacheHit("SP", BuildSchemaInfo(instanceHash, "schema.sp", snapshotHit.Name));
+            return snapshotHit;
         }
-
-        // string normalized = Normalize(spName); // 상단으로 이동됨
-        string key = KeyHelper.BuildStringKey(instanceHash, "SP", normalized);
 
         if (!options.EnableSchemaCaching)
             return await LoadDirectSpAsync(normalized, instanceHash, ct).ConfigureAwait(false);
 
-        string[] tags = [Tag(instanceHash), Tag(instanceHash, "SP")];
-
-        SpSchema schema = await cache.GetOrCreateAsync(
-            key,
-            async token =>
-            {
-                SpSchema loaded = await LoadSpFromDbAsync(normalized, instanceHash, token).ConfigureAwait(false);
-                await UpdateCacheAsync(key, loaded, instanceHash, "SP", token).ConfigureAwait(false);
-                return loaded;
-            },
-            _baseCacheOptions,
-            tags,
-            ct).ConfigureAwait(false);
-
-        if (IsStale(schema.LastCheckedAt))
-        {
-            schema = (SpSchema)await RefreshSchemaSafeAsync(
-                key,
-                schema,
-                normalized,
-                instanceHash,
-                ct,
-                isTvp: false).ConfigureAwait(false);
-        }
+        SpSchema schema = await GetSchemaAsync(
+            key: KeyHelper.BuildStringKey(instanceHash, "SP", normalized),
+            kind: "SP",
+            instanceHash: instanceHash,
+            normalized: normalized,
+            loadFromDb: LoadSpFromDbAsync,
+            isTvp: false,
+            ct: ct).ConfigureAwait(false);
 
         if (schema.Name == SchemaConstants.NullMarker)
         {
@@ -210,7 +186,6 @@ internal sealed class SchemaService(
         }
 
         _snapshot.UpsertSp(instanceHash, schema);
-
         return schema;
     }
 
@@ -228,45 +203,25 @@ internal sealed class SchemaService(
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
         NegativeCache.ThrowIfCached(instanceHash, normalized, "TvpType");
 
-        TvpSchema? cached = KeyHelper.LookupTvp(_snapshot, instanceHash, normalized);
-
-        if (cached is not null && !IsStale(cached.LastCheckedAt))
+        // L1/L2 스냅샷에서 Zero-Alloc 조회
+        TvpSchema? snapshotHit = KeyHelper.LookupTvp(_snapshot, instanceHash, normalized);
+        if (snapshotHit is not null && !IsStale(snapshotHit.LastCheckedAt))
         {
-            DbMetrics.TrackCacheHit(
-                "TVP",
-                BuildSchemaInfo(instanceHash, "schema.tvp", cached.Name));
-            return cached;
+            DbMetrics.TrackCacheHit("TVP", BuildSchemaInfo(instanceHash, "schema.tvp", snapshotHit.Name));
+            return snapshotHit;
         }
-
-        string key = KeyHelper.BuildStringKey(instanceHash, "TVP", normalized);
 
         if (!options.EnableSchemaCaching)
             return await LoadDirectTvpAsync(normalized, instanceHash, ct).ConfigureAwait(false);
 
-        string[] tags = [Tag(instanceHash), Tag(instanceHash, "TVP")];
-
-        TvpSchema schema = await cache.GetOrCreateAsync(
-            key,
-            async token =>
-            {
-                TvpSchema loaded = await LoadTvpFromDbAsync(normalized, instanceHash, token).ConfigureAwait(false);
-                await UpdateCacheAsync(key, loaded, instanceHash, "TVP", token).ConfigureAwait(false);
-                return loaded;
-            },
-            _baseCacheOptions,
-            tags,
-            ct).ConfigureAwait(false);
-
-        if (IsStale(schema.LastCheckedAt))
-        {
-            schema = (TvpSchema)await RefreshSchemaSafeAsync(
-                key,
-                schema,
-                normalized,
-                instanceHash,
-                ct,
-                isTvp: true).ConfigureAwait(false);
-        }
+        TvpSchema schema = await GetSchemaAsync(
+            key: KeyHelper.BuildStringKey(instanceHash, "TVP", normalized),
+            kind: "TVP",
+            instanceHash: instanceHash,
+            normalized: normalized,
+            loadFromDb: LoadTvpFromDbAsync,
+            isTvp: true,
+            ct: ct).ConfigureAwait(false);
 
         if (schema.Name == SchemaConstants.NullMarker)
         {
@@ -280,6 +235,62 @@ internal sealed class SchemaService(
         }
 
         _snapshot.UpsertTvp(instanceHash, schema);
+        return schema;
+    }
+
+    /// <summary>
+    /// SP/TVP 스키마 조회의 공통 HybridCache 조회 + Stale 갱신 로직을 처리하는 제네릭 내부 메서드입니다.
+    /// <para>
+    /// <b>[설계 의도]</b><br/>
+    /// GetSpSchemaAsync / GetTvpSchemaAsync 두 메서드에서 공유되는 90% 동일한 HybridCache 조회,
+    /// 팩토리 로드, Stale 감지 후 RefreshSchemaSafeAsync 호출 패턴을 하나로 통합합니다.<br/>
+    /// 타입 파라미터 TSchema가 SpSchema 또는 TvpSchema 중 하나를 받으며,
+    /// loadFromDb 델리게이트가 타입별 DB 로드를 담당합니다.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="TSchema">SpSchema 또는 TvpSchema</typeparam>
+    /// <param name="key">HybridCache 캐시 키</param>
+    /// <param name="kind">"SP" 또는 "TVP" (태그/메트릭/로그 구분용)</param>
+    /// <param name="instanceHash">DB 인스턴스 해시</param>
+    /// <param name="normalized">정규화된 스키마 이름</param>
+    /// <param name="loadFromDb">DB에서 스키마를 로드하는 비동기 함수</param>
+    /// <param name="isTvp">RefreshSchemaSafeAsync에 전달되는 TVP 여부 플래그</param>
+    /// <param name="ct">취소 토큰</param>
+    /// <returns>조회 또는 갱신된 스키마 객체</returns>
+    private async Task<TSchema> GetSchemaAsync<TSchema>(
+        string key,
+        string kind,
+        string instanceHash,
+        string normalized,
+        Func<string, string, CancellationToken, Task<TSchema>> loadFromDb,
+        bool isTvp,
+        CancellationToken ct)
+        where TSchema : SchemaBase
+    {
+        string[] tags = [Tag(instanceHash), Tag(instanceHash, kind)];
+
+        TSchema schema = await cache.GetOrCreateAsync(
+            key,
+            async token =>
+            {
+                TSchema loaded = await loadFromDb(normalized, instanceHash, token).ConfigureAwait(false);
+                await UpdateCacheAsync(key, loaded, instanceHash, kind, token).ConfigureAwait(false);
+                return loaded;
+            },
+            _baseCacheOptions,
+            tags,
+            ct).ConfigureAwait(false);
+
+        if (IsStale(schema.LastCheckedAt))
+        {
+            schema = (TSchema)await RefreshSchemaSafeAsync(
+                key,
+                schema,
+                normalized,
+                instanceHash,
+                ct,
+                isTvp: isTvp).ConfigureAwait(false);
+        }
 
         return schema;
     }

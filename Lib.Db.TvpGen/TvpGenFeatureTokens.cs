@@ -15,24 +15,24 @@ namespace Lib.Db.TvpGen;
 /// ⚠️ 이 문자열은 "고정 계약"이므로, 리팩토링 시에도 변경하지 마십시오.
 /// </para>
 /// </summary>
-public static class TvpGenFeatureTokens
+internal static class TvpGenFeatureTokens
 {
     /// <summary>Result(조회 매핑) 제너레이터 트랙 토큰</summary>
-    public const string ResultTrack5 = "TVPGEN:RESULT:TRACK5";
+    internal const string ResultTrack5 = "TVPGEN:RESULT:TRACK5";
 
     /// <summary>TVP(입력) 제너레이터 트랙 토큰</summary>
-    public const string TvpTrack5 = "TVPGEN:TVP:TRACK5";
+    internal const string TvpTrack5 = "TVPGEN:TVP:TRACK5";
 
     /// <summary>알고리즘/출력 규약 버전(필요 시 확장)</summary>
-    public const string AlgoVersion = "TVPGEN:ALGO:2025-12-18";
+    internal const string AlgoVersion = "TVPGEN:ALGO:2025-12-18";
 
     /// <summary>DateTime 타입 매핑 토큰 prefix</summary>
-    public const string DateTimeTypeToken = "TVPGEN:DATETIME_TYPE";
+    internal const string DateTimeTypeToken = "TVPGEN:DATETIME_TYPE";
 
     /// <summary>
     /// DateTime vs DateTime2 사용 여부를 나타내는 토큰을 생성합니다.
     /// <para>
-    /// ✅ 목적: 스냅샷 테스트에서 DateTime2 옵션 검증 가능
+    /// 목적: 스냅샷 테스트에서 DateTime2 옵션 검증 가능
     /// </para>
     /// </summary>
     /// <param name="useDatetime2">DateTime2 사용 여부</param>
@@ -40,7 +40,7 @@ public static class TvpGenFeatureTokens
     /// - true: "TVPGEN:DATETIME_TYPE:DateTime2"
     /// - false: "TVPGEN:DATETIME_TYPE:DateTime"
     /// </returns>
-    public static string GetDateTimeToken(bool useDatetime2)
+    internal static string GetDateTimeToken(bool useDatetime2)
         => $"{DateTimeTypeToken}:{(useDatetime2 ? "DateTime2" : "DateTime")}";
 }
 
