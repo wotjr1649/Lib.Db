@@ -23,6 +23,7 @@ using System.Runtime.Intrinsics;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
+using Lib.Db.Diagnostics;
 
 namespace Lib.Db.Schema;
 
@@ -106,8 +107,6 @@ internal sealed class SchemaService(
 
     private readonly TimeSpan _refreshInterval = TimeSpan.FromSeconds(options.SchemaRefreshIntervalSeconds);
 
-    private static readonly ActivitySource s_activity = new("Lib.Db.Schema");
-
     private static readonly SpSchema NullSp = new()
     {
         Name = SchemaConstants.NullMarker,
@@ -149,7 +148,7 @@ internal sealed class SchemaService(
     /// </remarks>
     public async Task<SpSchema> GetSpSchemaAsync(string spName, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = s_activity.StartActivity("GetSpSchema");
+        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("GetSpSchema");
         string normalized = Normalize(spName);
 
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
@@ -223,7 +222,7 @@ internal sealed class SchemaService(
     /// </remarks>
     public async Task<TvpSchema> GetTvpSchemaAsync(string tvpName, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = s_activity.StartActivity("GetTvpSchema");
+        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("GetTvpSchema");
         string normalized = Normalize(tvpName);
 
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
@@ -292,7 +291,7 @@ internal sealed class SchemaService(
     /// <inheritdoc />
     public async Task<PreloadResult> PreloadSchemaAsync(IEnumerable<string> schemaNames, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = s_activity.StartActivity("PreloadSchema");
+        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("PreloadSchema");
 
         // [Smart Deduplication]
         // 1. 중복 제거: "dbo", "dbo" -> "dbo" (Distinct)

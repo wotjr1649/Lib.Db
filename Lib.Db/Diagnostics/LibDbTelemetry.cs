@@ -18,15 +18,20 @@ public static class LibDbTelemetry
     #region Core Sources
     public const string SourceName = "Lib.Db";
 
+    /// <summary>Lib.Db 라이브러리 버전입니다.</summary>
+    public const string Version = "2.2.0";
+
     /// <summary>
     /// Lib.Db 전용 ActivitySource입니다. 추적(Tracing) 데이터 생성에 사용됩니다.
+    /// <para><b>[단일 인스턴스 원칙]</b> 라이브러리 전체에서 이 인스턴스만 사용해야 합니다. 로컬 ActivitySource 선언은 금지됩니다.</para>
     /// </summary>
-    public static readonly ActivitySource ActivitySource = new(SourceName);
+    public static readonly ActivitySource ActivitySource = new(SourceName, Version);
 
     /// <summary>
     /// Lib.Db 전용 Meter입니다. 메트릭(Metrics) 데이터 생성에 사용됩니다.
+    /// <para><b>[단일 인스턴스 원칙]</b> 라이브러리 전체에서 이 인스턴스만 사용해야 합니다. 로컬 Meter 선언은 금지됩니다.</para>
     /// </summary>
-    public static readonly Meter Meter = new(SourceName);
+    public static readonly Meter Meter = new(SourceName, Version);
 
     #endregion
 

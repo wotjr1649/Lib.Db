@@ -251,11 +251,6 @@ public static class DbMetrics
     // 2.1. 상수 및 미터 정의
     // =========================================================================
 
-    private const string MeterName = "Lib.Db";
-    private const string MeterVersion = "1.0.0";
-
-    /// <summary>라이브러리 전역에서 공유하는 <see cref="Meter"/> 인스턴스입니다.</summary>
-    private static readonly Meter s_meter = new(MeterName, MeterVersion);
 
     // OTel 표준 태그 키
     private const string AttrDbSystem = "db.system";
@@ -282,34 +277,34 @@ public static class DbMetrics
 
     // 1. Connection
     private static readonly UpDownCounter<int> s_connActive =
-        s_meter.CreateUpDownCounter<int>("db.client.connections.usage", "{connections}", "현재 활성 DB 연결 수");
+        LibDbTelemetry.Meter.CreateUpDownCounter<int>("db.client.connections.usage", "{connections}", "현재 활성 DB 연결 수");
 
     // 2. Query & Resilience
     private static readonly Histogram<double> s_queryDuration =
-        s_meter.CreateHistogram<double>("db.client.operation.duration", "ms", "DB 작업 수행 시간");
+        LibDbTelemetry.Meter.CreateHistogram<double>("db.client.operation.duration", "ms", "DB 작업 수행 시간");
 
     private static readonly Counter<int> s_retries =
-        s_meter.CreateCounter<int>("db.client.resilience.retries", "{retries}", "재시도 발생 횟수");
+        LibDbTelemetry.Meter.CreateCounter<int>("db.client.resilience.retries", "{retries}", "재시도 발생 횟수");
 
     // 3. Schema & Cache
     private static readonly Counter<int> s_schemaRefresh =
-        s_meter.CreateCounter<int>("libdb.schema.refresh", "{ops}", "스키마 갱신 시도 횟수");
+        LibDbTelemetry.Meter.CreateCounter<int>("libdb.schema.refresh", "{ops}", "스키마 갱신 시도 횟수");
 
     private static readonly Counter<int> s_cacheHits =
-        s_meter.CreateCounter<int>("libdb.schema.cache.hits", "{hits}", "스키마 캐시 적중 횟수");
+        LibDbTelemetry.Meter.CreateCounter<int>("libdb.schema.cache.hits", "{hits}", "스키마 캐시 적중 횟수");
 
     private static readonly Counter<int> s_cacheMisses =
-        s_meter.CreateCounter<int>("libdb.schema.cache.misses", "{misses}", "스키마 캐시 미스 횟수");
+        LibDbTelemetry.Meter.CreateCounter<int>("libdb.schema.cache.misses", "{misses}", "스키마 캐시 미스 횟수");
 
     private static readonly Counter<long> s_cacheBytesFreed =
-        s_meter.CreateCounter<long>("libdb.cache.bytes_freed", "By", "캐시 정리로 반환된 바이트 수");
+        LibDbTelemetry.Meter.CreateCounter<long>("libdb.cache.bytes_freed", "By", "캐시 정리로 반환된 바이트 수");
 
     // 4. Bulk & TVP
     private static readonly Counter<long> s_bulkRows =
-        s_meter.CreateCounter<long>("libdb.bulk.rows", "{rows}", "벌크 삽입된 총 행 수");
+        LibDbTelemetry.Meter.CreateCounter<long>("libdb.bulk.rows", "{rows}", "벌크 삽입된 총 행 수");
 
     private static readonly Counter<long> s_tvpBytes =
-        s_meter.CreateCounter<long>("db.client.tvp.bytes", "By", "TVP 전송 바이트 수");
+        LibDbTelemetry.Meter.CreateCounter<long>("db.client.tvp.bytes", "By", "TVP 전송 바이트 수");
 
     // =========================================================================
     // 2.3. 메트릭 전역 활성 플래그 및 Reset 지원

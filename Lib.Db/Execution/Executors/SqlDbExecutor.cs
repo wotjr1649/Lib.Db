@@ -46,11 +46,6 @@ internal sealed partial class SqlDbExecutor(
 {
     #region 상수 및 필드
 
-    /// <summary>OpenTelemetry ActivitySource 이름 (AOT 호환 — 리플렉션 제거)</summary>
-    private const string ActivitySourceName = "Lib.Db";
-
-    private static readonly ActivitySource s_activitySource = new(ActivitySourceName);
-
     // [Optimization] Activity 이름 캐싱
     private const string ActivityNameQuery = "DB Query";
     private const string ActivityNameProcedure = "DB Procedure";
@@ -403,7 +398,7 @@ internal sealed partial class SqlDbExecutor(
         System.Data.Common.DbDataReader? rawReader;
         long startTicks = Stopwatch.GetTimestamp();
 
-        using (Activity? activity = s_activitySource.StartActivity("DB QueryMultiple"))
+        using (Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("DB QueryMultiple"))
         {
             activity?.SetTag("db.system", "mssql");
             activity?.SetTag("db.operation", commandType.ToString());
@@ -567,7 +562,7 @@ internal sealed partial class SqlDbExecutor(
             _ => ActivityNameCommand
         };
 
-        using Activity? activity = s_activitySource.StartActivity(activityName);
+        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity(activityName);
         activity?.SetTag("db.system", "mssql");
         activity?.SetTag("db.operation", request.CommandType.ToString());
         activity?.SetTag("db.statement", request.CommandText);
@@ -773,7 +768,7 @@ internal sealed partial class SqlDbExecutor(
         System.Data.Common.DbDataReader? reader;
         long startTicks = Stopwatch.GetTimestamp();
 
-        using (Activity? activity = s_activitySource.StartActivity("DB QueryStream"))
+        using (Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("DB QueryStream"))
         {
             activity?.SetTag("db.system", "mssql");
             activity?.SetTag("db.operation", commandType.ToString());
