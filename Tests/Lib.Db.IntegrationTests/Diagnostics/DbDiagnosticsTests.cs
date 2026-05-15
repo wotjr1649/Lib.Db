@@ -5,8 +5,10 @@
 // ============================================================================
 
 using Lib.Db.Diagnostics;
+using Lib.Db.Configuration;
 using Lib.Db.IntegrationTests.Infrastructure;
 using Microsoft.Extensions.Logging;
+using System.Data;
 using System.Diagnostics;
 
 namespace Lib.Db.IntegrationTests.Diagnostics;
@@ -105,5 +107,50 @@ public sealed class DbDiagnosticsTests
         Assert.Contains(tags, t => t.Key == "libdb.command.kind" && (string)t.Value! == "StoredProcedure");
 
         Assert.DoesNotContain(tags, t => t.Key == "db.name");
+    }
+
+    [Fact]
+    public void DD06_CommandTextPolicy_ShouldSuppressRawSqlText_ByDefault()
+    {
+        const string sql = "SELECT * FROM Users WHERE Email = 'secret@example.com'";
+        LibDbOptions options = new();
+
+        DbCommandTextDiagnostic diagnostic = DbCommandTextPolicy.CreateDiagnostic(sql, CommandType.Text, options);
+
+        Assert.Equal("SQL Text", diagnostic.Summary);
+        Assert.False(string.IsNullOrWhiteSpace(diagnostic.Hash));
+        Assert.Null(diagnostic.SensitiveText);
+        Assert.DoesNotContain("secret@example.com", diagnostic.Summary);
+        Assert.DoesNotContain("secret@example.com", diagnostic.Hash);
+
+        IReadOnlyList<KeyValuePair<string, object?>> tags =
+            DbCommandTextPolicy.BuildActivityTags(sql, CommandType.Text, "test-instance", options);
+
+        Assert.Contains(tags, t => t.Key == "db.query.summary" && (string)t.Value! == "SQL Text");
+        Assert.Contains(tags, t => t.Key == "libdb.command.hash" && !string.IsNullOrWhiteSpace((string?)t.Value));
+        Assert.DoesNotContain(tags, t => t.Key == "db.statement");
+        Assert.DoesNotContain(tags, t => t.Key == "db.query.text");
+        Assert.DoesNotContain(tags, t => t.Value is string value && value.Contains("secret@example.com", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DD07_CommandTextPolicy_ShouldExposeBoundedRawText_OnlyWhenOptedIn()
+    {
+        const string sql = "SELECT * FROM Users WHERE Email = 'secret@example.com'";
+        LibDbOptions options = new()
+        {
+            EnableSensitiveCommandTextLogging = true,
+            MaxSensitiveCommandTextLength = 17
+        };
+
+        DbCommandTextDiagnostic diagnostic = DbCommandTextPolicy.CreateDiagnostic(sql, CommandType.Text, options);
+
+        Assert.Equal("SELECT * FROM Use...", diagnostic.SensitiveText);
+
+        IReadOnlyList<KeyValuePair<string, object?>> tags =
+            DbCommandTextPolicy.BuildActivityTags(sql, CommandType.Text, "test-instance", options);
+
+        Assert.Contains(tags, t => t.Key == "db.statement" && (string)t.Value! == "SELECT * FROM Use...");
+        Assert.Contains(tags, t => t.Key == "db.query.text" && (string)t.Value! == "SELECT * FROM Use...");
     }
 }

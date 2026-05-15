@@ -7,6 +7,7 @@
 #nullable enable
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace Lib.Db.TvpGen;
 
@@ -55,6 +56,40 @@ internal static class GeneratorSharedHelpers
             .Replace("global::", "");
         return SharedHashUtils.SanitizeIdentifier(fqn) + suffix;
     }
+
+    #endregion
+
+    #region C# 코드 생성 안전화
+
+    /// <summary>
+    /// 값을 C# 문자열 리터럴로 변환합니다.
+    /// </summary>
+    internal static string ToCSharpStringLiteral(string value)
+        => SymbolDisplay.FormatLiteral(value, quote: true);
+
+    /// <summary>
+    /// XML documentation text 노드에 안전하게 들어갈 수 있도록 escape합니다.
+    /// </summary>
+    internal static string EscapeXmlText(string value)
+        => value
+            .Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal);
+
+    /// <summary>
+    /// 생성 코드에서 C# 식별자로 사용할 수 있는 이름인지 확인합니다.
+    /// </summary>
+    internal static bool IsValidCSharpIdentifier(string value)
+        => SyntaxFacts.IsValidIdentifier(value) &&
+           SyntaxFacts.GetKeywordKind(value) == SyntaxKind.None;
+
+    /// <summary>
+    /// 기존 C# 심볼 이름을 멤버 접근 식별자로 출력합니다.
+    /// </summary>
+    internal static string ToCSharpIdentifier(string value)
+        => SyntaxFacts.GetKeywordKind(value) == SyntaxKind.None
+            ? value
+            : "@" + value;
 
     #endregion
 }

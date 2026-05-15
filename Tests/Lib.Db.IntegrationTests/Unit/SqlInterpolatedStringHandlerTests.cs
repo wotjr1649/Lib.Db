@@ -5,6 +5,7 @@
 // ============================================================================
 
 using Lib.Db.Fluent;
+using System.Data;
 
 namespace Lib.Db.IntegrationTests.Unit;
 
@@ -61,5 +62,132 @@ public sealed class SqlInterpolatedStringHandlerTests
         sql.Should().Be("SELECT TOP @p0 * FROM Users");
         parameters.Should().HaveCount(1);
         parameters["@p0"].Should().Be(limit);
+    }
+
+    [Fact]
+    public async Task SqlRaw_Should_Execute_As_Text_Command()
+    {
+        // Arrange
+        CapturingDbExecutor executor = new();
+        DbRequestBuilder builder = new(executor, "Default");
+
+        // Act
+        await builder.SqlRaw("SELECT 1").ExecuteAsync();
+
+        // Assert
+        executor.LastCommandText.Should().Be("SELECT 1");
+        executor.LastCommandType.Should().Be(CommandType.Text);
+    }
+
+    [Fact]
+    public async Task FormattableSql_Should_Parameterize_Interpolated_Values()
+    {
+        // Arrange
+        CapturingDbExecutor executor = new();
+        DbRequestBuilder builder = new(executor, "Default");
+        int userId = 42;
+        string userName = "Alice";
+
+        // Act
+        await builder.Sql((FormattableString)$"SELECT * FROM Users WHERE Id = {userId} AND Name = {userName}")
+            .ExecuteAsync();
+
+        // Assert
+        executor.LastCommandText.Should().Be("SELECT * FROM Users WHERE Id = @p0 AND Name = @p1");
+        executor.LastCommandType.Should().Be(CommandType.Text);
+        executor.LastParameters.Should().BeAssignableTo<IDictionary<string, object?>>();
+
+        IDictionary<string, object?> parameters = (IDictionary<string, object?>)executor.LastParameters!;
+        parameters.Should().ContainKey("@p0").WhoseValue.Should().Be(userId);
+        parameters.Should().ContainKey("@p1").WhoseValue.Should().Be(userName);
+    }
+
+    private sealed class CapturingDbExecutor : IDbExecutor
+    {
+        public string? LastCommandText { get; private set; }
+        public object? LastParameters { get; private set; }
+        public string? LastInstanceHash { get; private set; }
+        public CommandType? LastCommandType { get; private set; }
+        public DbExecutionOptions? LastOptions { get; private set; }
+
+        public IAsyncEnumerable<TResult> QueryAsync<TParams, TResult>(
+            string commandText,
+            TParams parameters,
+            string instanceHash,
+            CommandType commandType,
+            DbExecutionOptions options,
+            CancellationToken ct)
+        {
+            Capture(commandText, parameters, instanceHash, commandType, options);
+            return EmptyAsync<TResult>();
+        }
+
+        public Task<TResult?> QuerySingleAsync<TParams, TResult>(
+            string commandText,
+            TParams parameters,
+            string instanceHash,
+            CommandType commandType,
+            DbExecutionOptions options,
+            CancellationToken ct)
+        {
+            Capture(commandText, parameters, instanceHash, commandType, options);
+            return Task.FromResult<TResult?>(default);
+        }
+
+        public Task<TScalar?> ExecuteScalarAsync<TParams, TScalar>(
+            string commandText,
+            TParams parameters,
+            string instanceHash,
+            CommandType commandType,
+            DbExecutionOptions options,
+            CancellationToken ct)
+        {
+            Capture(commandText, parameters, instanceHash, commandType, options);
+            return Task.FromResult<TScalar?>(default);
+        }
+
+        public Task<int> ExecuteNonQueryAsync<TParams>(
+            string commandText,
+            TParams parameters,
+            string instanceHash,
+            CommandType commandType,
+            DbExecutionOptions options,
+            CancellationToken ct)
+        {
+            Capture(commandText, parameters, instanceHash, commandType, options);
+            return Task.FromResult(0);
+        }
+
+        public Task<IMultipleResultReader> QueryMultipleAsync<TParams>(
+            string commandText,
+            TParams parameters,
+            string instanceHash,
+            CommandType commandType,
+            DbExecutionOptions options,
+            CancellationToken ct)
+        {
+            Capture(commandText, parameters, instanceHash, commandType, options);
+            throw new NotSupportedException();
+        }
+
+        private void Capture<TParams>(
+            string commandText,
+            TParams parameters,
+            string instanceHash,
+            CommandType commandType,
+            DbExecutionOptions options)
+        {
+            LastCommandText = commandText;
+            LastParameters = parameters;
+            LastInstanceHash = instanceHash;
+            LastCommandType = commandType;
+            LastOptions = options;
+        }
+
+        private static async IAsyncEnumerable<TResult> EmptyAsync<TResult>()
+        {
+            await Task.CompletedTask.ConfigureAwait(false);
+            yield break;
+        }
     }
 }

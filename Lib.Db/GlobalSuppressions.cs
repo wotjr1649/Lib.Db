@@ -10,6 +10,8 @@
 // - AOT/Trimming 환경에서는 리플렉션 기반 접근이 IL Linker에 의해 제거될 수 있고, 분석기가 경고를 냅니다.
 // - 그러나 실제 실행에서는 RuntimeFeature 체크, 안전한 fallback, 제한된 사용범위 등을 통해
 //   "JIT 경로에서만 리플렉션을 쓰거나", "AOT에서는 다른 경로로 우회"하도록 설계되어 있을 수 있습니다.
+// - DTO 결과 매핑에서 reflection/expression fallback을 허용하지 않아야 하는 소비자는
+//   MapperCompatibilityMode.AotStrict를 사용해 소스 생성/명시 등록 매퍼만 허용해야 합니다.
 //
 // 주의
 // - 경고 억제는 '문제를 숨기는 것'이 아니라, 라이브러리 설계상 의도된 동작을 설명하고
@@ -77,12 +79,12 @@ using System.Runtime.CompilerServices;
 // 유지보수 포인트:
 // - "Protected by RuntimeFeature checks"가 사실이려면,
 //   실제 코드가 AOT에서 해당 경로를 타지 않도록 확실한 조건(예: RuntimeFeature.IsDynamicCodeSupported)
-//   또는 명시적 옵션 플래그가 존재해야 합니다.
+//   또는 명시적 옵션 플래그(예: MapperCompatibilityMode.AotStrict)가 존재해야 합니다.
 // ============================================================================
 [assembly: SuppressMessage(
     "AOT",
     "IL3050:Calling members annotated with 'RequiresDynamicCodeAttribute' may break functionality when AOT compiling.",
-    Justification = "JIT paths use Expression Trees and Reflection optimization. Protected by RuntimeFeature checks.",
+    Justification = "JIT paths use Expression Trees and Reflection optimization. Protected by RuntimeFeature checks and MapperCompatibilityMode.AotStrict for strict consumers.",
     Scope = "module")]
 
 

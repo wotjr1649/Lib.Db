@@ -138,7 +138,14 @@ public static partial class DbBinder
     /// LibDbOptions에서 이미 검증된 값을 사용하므로 별도의 유효성 검사를 수행하지 않습니다.
     /// </para>
     /// </summary>
-    public static void ConfigureTvp(LibDbOptions options) => Tvp.Configure(options);
+    private static StringParameterPolicy s_stringParameterPolicy = StringParameterPolicy.Preserve;
+
+    public static void ConfigureTvp(LibDbOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        s_stringParameterPolicy = options.StringParameterPolicy;
+        Tvp.Configure(options);
+    }
 
     /// <summary>
     /// TVP 관련 캐시 및 버퍼 팩터리를 모두 초기화합니다.
@@ -202,14 +209,7 @@ public static partial class DbBinder
 
             if (finalValue is string strVal)
             {
-                // 문자열 전처리 (공백/제어문자 제거 등)
-                ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(strVal);
-
-                // Size 기반 Truncate
-                if (meta.Size > 0 && processedSpan.Length > meta.Size)
-                    finalValue = processedSpan[..(int)meta.Size].ToString();
-                else if (processedSpan.Length != strVal.Length)
-                    finalValue = processedSpan.ToString();
+                finalValue = ApplyStringPolicy(meta.Name, strVal, meta.Size);
             }
             // ★ JSON 직렬화: "문자열 컬럼" 이면서 "복합 객체"인 경우에만 수행 (구조적 데이터 보존)
             else if (IsStringColumn(meta.SqlDbType) && IsComplexObject(finalValue))
@@ -306,9 +306,7 @@ public static partial class DbBinder
         // 2. 문자열 전처리
         if (finalValue is string strVal)
         {
-            ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(strVal);
-            if (processedSpan.Length != strVal.Length)
-                finalValue = processedSpan.ToString();
+            finalValue = ApplyStringPolicy(paramName, strVal, metaOverride?.Size ?? 0);
         }
         // 3. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
         //    List<Dto>를 넘겼을 때 JSON으로 오판하여 AOT 에러가 나는 것을 방지
@@ -409,6 +407,28 @@ public static partial class DbBinder
             p.Scale = scale;
 
         cmd.Parameters.Add(p);
+    }
+
+    private static string ApplyStringPolicy(string parameterName, string value, long size)
+    {
+        if (s_stringParameterPolicy == StringParameterPolicy.LegacySanitizeAndTruncate)
+        {
+            ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(value);
+            if (size > 0 && processedSpan.Length > size)
+                return processedSpan[..(int)size].ToString();
+
+            return processedSpan.Length == value.Length ? value : processedSpan.ToString();
+        }
+
+        if (size > 0 && value.Length > size)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                value.Length,
+                $"문자열 파라미터 '{parameterName}' 길이가 DB 스키마 Size:{size}를 초과했습니다. 자동 절단은 기본 비활성화되어 있습니다.");
+        }
+
+        return value;
     }
 
     #endregion

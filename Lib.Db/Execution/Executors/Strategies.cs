@@ -495,7 +495,7 @@ internal sealed class ResilientStrategy(
             InstanceId: request.InstanceHash,
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
-            Target: request.CommandText);
+            Target: DbCommandTextPolicy.CreateSummary(request.CommandText, request.CommandType));
 
         await using SqlConnection conn = await _connFactory
             .CreateConnectionAsync(request.InstanceHash, token)
@@ -545,7 +545,7 @@ internal sealed class ResilientStrategy(
             InstanceId: request.InstanceHash,
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
-            Target: request.CommandText);
+            Target: DbCommandTextPolicy.CreateSummary(request.CommandText, request.CommandType));
 
         // 스트리밍은 “연결 수명”이 Reader 수명과 묶이므로 await using을 쓰지 않습니다.
         SqlConnection conn = await _connFactory
@@ -637,7 +637,7 @@ internal sealed class ResilientStrategy(
             InstanceId: request.InstanceHash,
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
-            Target: request.CommandText);
+            Target: DbCommandTextPolicy.CreateSummary(request.CommandText, request.CommandType));
 
         // 1) 데드락(1205): 다음 시도에서 DEADLOCK_PRIORITY HIGH
         if (ex.Number == 1205)
@@ -785,7 +785,7 @@ internal sealed class TransactionalStrategy(
                 InstanceId: request.InstanceHash,
                 DbSystem: "mssql",
                 Operation: request.CommandType.ToString(),
-                Target: request.CommandText);
+                Target: DbCommandTextPolicy.CreateSummary(request.CommandText, request.CommandType));
 
             _logger.LogWarning(ex,
                 "[Transaction/Schema] 스키마 불일치(코드: {Code}) 감지. SP '{SpName}' 캐시를 무효화합니다.",

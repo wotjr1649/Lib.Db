@@ -5,6 +5,7 @@
 // ============================================================================
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using Lib.Db.Caching;
@@ -133,6 +134,48 @@ public sealed class SharedMemorySecurityTests : IDisposable
         try { Task.WaitAll([.. tasks]); } catch { }
 
         Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Activity_Tags_Should_Not_Expose_Raw_Cache_Key()
+    {
+        const string sensitiveKey = "SecurityTestKey:tenant=alpha;email=secret@example.com";
+        List<Activity> activities = [];
+
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = static source => source.Name == "Lib.Db.SharedMemoryCache",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => activities.Add(activity)
+        };
+
+        ActivitySource.AddActivityListener(listener);
+
+        _cache.Set(
+            sensitiveKey,
+            Encoding.UTF8.GetBytes("value"),
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        _ = _cache.Get(sensitiveKey);
+
+        Activity[] cacheActivities = activities
+            .Where(activity => activity.OperationName is "CacheSet" or "CacheGet")
+            .ToArray();
+
+        Assert.Contains(cacheActivities, activity => activity.OperationName == "CacheSet");
+        Assert.Contains(cacheActivities, activity => activity.OperationName == "CacheGet");
+
+        foreach (Activity activity in cacheActivities)
+        {
+            KeyValuePair<string, string?>[] tags = activity.Tags.ToArray();
+
+            Assert.Contains(tags, tag => tag.Key == "db.cache.key.summary" && tag.Value is { Length: > 0 });
+            Assert.Contains(tags, tag => tag.Key == "libdb.cache.key.hash" && tag.Value is { Length: > 0 });
+            Assert.DoesNotContain(tags, tag => tag.Key == "db.cache.key");
+            Assert.DoesNotContain(tags, tag => tag.Value is { } value &&
+                value.Contains(sensitiveKey, StringComparison.Ordinal));
+            Assert.DoesNotContain(tags, tag => tag.Value is { } value &&
+                value.Contains("secret@example.com", StringComparison.Ordinal));
+        }
     }
 
     public void Dispose()

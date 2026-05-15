@@ -75,10 +75,10 @@ public readonly record struct DbRequestInfo(
                 _ => value.CommandType.ToString()
             };
 
-        // 2) Target: 명시값 없으면 CommandText 사용
+        // 2) Target: 명시값 없으면 원문 CommandText 대신 안전한 요약 사용
         string tgt = !string.IsNullOrWhiteSpace(target)
             ? target
-            : value.CommandText;
+            : DbCommandTextPolicy.CreateSummary(value.CommandText, value.CommandType);
 
         // 3) CommandKind: CommandType 자체를 의미 있게 구분
         string cmdKind = value.CommandType switch

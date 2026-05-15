@@ -144,7 +144,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     public byte[]? Get(string key)
     {
         using Activity? activity = s_activitySource.StartActivity("CacheGet");
-        activity?.SetTag("db.cache.key", key);
+        EnrichActivityWithCacheKey(activity, key);
 
         if (_isFallbackMode)
         {
@@ -162,7 +162,10 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             catch (AbandonedMutexException)
             {
                 acquired = true;
-                _logger.LogWarning("[Cache] Abandoned Mutex 복구됨 (Get): {Key}", key);
+                _logger.LogWarning(
+                    "[Cache] Abandoned Mutex 복구됨 (Get): {KeySummary}, Hash={KeyHash}",
+                    CreateCacheKeySummary(key),
+                    CreateCacheKeyHash(key));
             }
 
             if (!acquired)
@@ -216,7 +219,10 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             uint actualCrc = Crc32.HashToUInt32(data);
             if (actualCrc != header.Crc32)
             {
-                _logger.LogWarning("[Cache] CRC Mismatch: {Key}", key);
+                _logger.LogWarning(
+                    "[Cache] CRC Mismatch: {KeySummary}, Hash={KeyHash}",
+                    CreateCacheKeySummary(key),
+                    CreateCacheKeyHash(key));
                 return null;
             }
 
@@ -227,7 +233,11 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[Cache] Get 오류: {Key}", key);
+            _logger.LogError(
+                ex,
+                "[Cache] Get 오류: {KeySummary}, Hash={KeyHash}",
+                CreateCacheKeySummary(key),
+                CreateCacheKeyHash(key));
             return _options.FallbackCache?.Get(key);
         }
         finally
@@ -250,6 +260,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
     {
         using Activity? activity = s_activitySource.StartActivity("CacheSet");
+        EnrichActivityWithCacheKey(activity, key);
 
         if (_isFallbackMode)
         {
@@ -268,7 +279,10 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             catch (AbandonedMutexException)
             {
                 acquired = true;
-                _logger.LogWarning("[Cache] Abandoned Mutex 복구됨 (Set): {Key}", key);
+                _logger.LogWarning(
+                    "[Cache] Abandoned Mutex 복구됨 (Set): {KeySummary}, Hash={KeyHash}",
+                    CreateCacheKeySummary(key),
+                    CreateCacheKeyHash(key));
             }
 
             if (!acquired)
@@ -321,7 +335,11 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[Cache] Set 오류: {Key}", key);
+            _logger.LogError(
+                ex,
+                "[Cache] Set 오류: {KeySummary}, Hash={KeyHash}",
+                CreateCacheKeySummary(key),
+                CreateCacheKeyHash(key));
             // Error fallback
             _options.FallbackCache?.Set(key, value, options);
         }
@@ -362,7 +380,10 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             catch (AbandonedMutexException)
             {
                 acquired = true;
-                _logger.LogWarning("[Cache] Abandoned Mutex 복구됨 (Remove): {Key}", key);
+                _logger.LogWarning(
+                    "[Cache] Abandoned Mutex 복구됨 (Remove): {KeySummary}, Hash={KeyHash}",
+                    CreateCacheKeySummary(key),
+                    CreateCacheKeyHash(key));
             }
 
             if (!acquired)
@@ -466,6 +487,24 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     #region 도우미 메서드
 
+    private static void EnrichActivityWithCacheKey(Activity? activity, string key)
+    {
+        if (activity is null)
+            return;
+
+        activity.SetTag("db.cache.key.summary", CreateCacheKeySummary(key));
+        activity.SetTag("libdb.cache.key.hash", CreateCacheKeyHash(key));
+    }
+
+    private static string CreateCacheKeySummary(string key)
+        => $"Cache key (length: {key.Length})";
+
+    private static string CreateCacheKeyHash(string key)
+    {
+        byte[] hashBytes = XxHash128.Hash(Encoding.UTF8.GetBytes(key));
+        return Convert.ToHexString(hashBytes).ToLowerInvariant();
+    }
+
     private Mutex GetMutex(string key)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -507,9 +546,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     {
         // 파일명: Hash(Key).cache
         // XxHash128 사용 — SHA256 대비 133배 빠르고 파일명이 43% 짧음
-        byte[] hashBytes = XxHash128.Hash(Encoding.UTF8.GetBytes(key));
-        string hex = Convert.ToHexString(hashBytes).ToLowerInvariant();
-        return Path.Combine(_basePath, hex + ".cache");
+        return Path.Combine(_basePath, CreateCacheKeyHash(key) + ".cache");
     }
 
     private static long GetExpiryTicks(DistributedCacheEntryOptions options)

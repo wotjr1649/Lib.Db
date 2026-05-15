@@ -43,6 +43,9 @@ internal sealed class LibDbConfig
     // [3] 쿼리 실행 정책
     public bool EnableDryRun { get; set; } = false;
     public bool StrictRequiredParameterCheck { get; set; } = true;
+    public bool AllowStoredProcedureSchemaFallback { get; set; } = false;
+    public StringParameterPolicy StringParameterPolicy { get; set; } = StringParameterPolicy.Preserve;
+    public MapperCompatibilityMode MapperCompatibilityMode { get; set; } = MapperCompatibilityMode.Default;
 
     // [4] 데이터 직렬화 및 검증
     public TvpValidationMode TvpValidationMode { get; set; } = TvpValidationMode.Strict;
@@ -188,6 +191,18 @@ internal sealed class LibDbConfig
 
     public bool EnableOpenTelemetry { get; set; } = false;
     public bool EnableObservability { get; set; } = false;
+    public bool EnableSensitiveCommandTextLogging { get; set; } = false;
+    public int MaxSensitiveCommandTextLength
+    {
+        get;
+        set
+        {
+            if (value <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "0보다 커야 합니다.");
+            field = value;
+        }
+    } = 1024;
+
     public bool IncludeParametersInTrace { get; set; } = false;
 
     // [12] 내부 튜닝
@@ -246,6 +261,9 @@ internal sealed class LibDbConfig
         // [3]
         options.EnableDryRun = this.EnableDryRun;
         options.StrictRequiredParameterCheck = this.StrictRequiredParameterCheck;
+        options.AllowStoredProcedureSchemaFallback = this.AllowStoredProcedureSchemaFallback;
+        options.StringParameterPolicy = this.StringParameterPolicy;
+        options.MapperCompatibilityMode = this.MapperCompatibilityMode;
 
         // [4]
         options.TvpValidationMode = this.TvpValidationMode;
@@ -288,6 +306,8 @@ internal sealed class LibDbConfig
         options.HealthCheckTimeoutSeconds = this.HealthCheckTimeoutSeconds;
         // EnableOpenTelemetry(구 설정 키)와 EnableObservability(신 설정 키) 중 하나라도 true면 활성화
         options.EnableObservability = this.EnableObservability || this.EnableOpenTelemetry;
+        options.EnableSensitiveCommandTextLogging = this.EnableSensitiveCommandTextLogging;
+        options.MaxSensitiveCommandTextLength = this.MaxSensitiveCommandTextLength;
         options.IncludeParametersInTrace = this.IncludeParametersInTrace;
 
         // [12]

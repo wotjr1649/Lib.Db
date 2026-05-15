@@ -6,6 +6,7 @@
 
 using System.Collections;
 using System.Reflection;
+using FluentAssertions;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution.Binding;
 
@@ -16,6 +17,16 @@ public sealed class AotDto
 {
     public int Id { get; set; }
     public string Name { get; set; } = "AotTest";
+}
+
+public sealed class AotStrictResultDto
+{
+    public int Id { get; set; }
+}
+
+public sealed class AotStrictCachedResultDto
+{
+    public int Id { get; set; }
 }
 
 public sealed class AotRegistryTests
@@ -46,5 +57,41 @@ public sealed class AotRegistryTests
         }
 
         Assert.True(found, "AotDto was not found in TvpFactoryRegistry. Source Generator might have failed.");
+    }
+
+    [Fact]
+    public void MapperFactory_AotStrict_ShouldReject_DtoWithoutGeneratedResultMapper()
+    {
+        MapperFactory factory = new(
+            new EmptyServiceProvider(),
+            new LibDbOptions { MapperCompatibilityMode = MapperCompatibilityMode.AotStrict });
+
+        Action act = () => factory.GetMapper<AotStrictResultDto>();
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*AotStrict*source-generated*scalar*");
+    }
+
+    [Fact]
+    public void MapperFactory_AotStrict_ShouldNotReuse_DefaultCachedFallbackMapper()
+    {
+        MapperFactory defaultFactory = new(new EmptyServiceProvider(), new LibDbOptions());
+        _ = defaultFactory.GetMapper<AotStrictCachedResultDto>();
+
+        MapperFactory strictFactory = new(
+            new EmptyServiceProvider(),
+            new LibDbOptions { MapperCompatibilityMode = MapperCompatibilityMode.AotStrict });
+
+        Action act = () => strictFactory.GetMapper<AotStrictCachedResultDto>();
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*AotStrict*source-generated*scalar*");
+    }
+
+    private sealed class EmptyServiceProvider : IServiceProvider
+    {
+        public object? GetService(Type serviceType) => null;
     }
 }
