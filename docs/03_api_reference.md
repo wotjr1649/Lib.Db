@@ -147,6 +147,9 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `PrewarmExcludePatterns` | `List<string>` | `[]` | 워밍업 제외 패턴 |
 | `DefaultCommandTimeoutSeconds` | `int` | `30` | 기본 타임아웃 (1~600초) |
 | `StrictRequiredParameterCheck` | `bool` | `true` | 필수 파라미터 검사 |
+| `AllowStoredProcedureSchemaFallback` | `bool` | `false` | SP 스키마 조회 실패 시 스키마 없이 매핑을 계속할지 여부 |
+| `StringParameterPolicy` | `StringParameterPolicy` | `Preserve` | 문자열 파라미터 공백/NUL/길이 처리 정책 |
+| `MapperCompatibilityMode` | `MapperCompatibilityMode` | `Default` | 매퍼 fallback 허용 정책 |
 | `EnableGeneratedTvpBinder` | `bool` | `true` | SG 기반 TVP 바인더 |
 | `EnableResilience` | `bool` | `false` | Polly 회복 탄력성 |
 | `Resilience` | `ResilienceOptions` | (내부 기본값) | 재시도/Circuit Breaker 설정 |
@@ -155,6 +158,8 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `EnableDryRun` | `bool` | `false` | 모의 실행 모드 |
 | `EnableObservability` | `bool` | `false` | 관측 가능성(Logging, Metrics, Tracing) 마스터 스위치 |
 | `EnableOpenTelemetry` | `bool` | `false` | ⚠️ **Deprecated** — `EnableObservability`를 사용하세요 (v3.0 제거 예정) |
+| `EnableSensitiveCommandTextLogging` | `bool` | `false` | SQL 원문을 로그/Activity에 포함할지 여부 |
+| `MaxSensitiveCommandTextLength` | `int` | `256` | 원문 기록 opt-in 시 최대 기록 길이 |
 | `Mars` | `MarsPolicy` | `Auto` | MARS 정책 (`Disabled`/`Auto`/`ForceEnable`) |
 | `HealthCheckThrottleSeconds` | `int` | `1` | HealthCheck 최소 실행 간격 (초) |
 
@@ -165,6 +170,22 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `Disabled` | MARS 미사용. `QueryMultipleAsync` 호출 시 `InvalidOperationException` 발생 |
 | `Auto` | 자동 감지 (기본값). `QueryMultipleAsync` 사용 시 MARS 미설정이면 경고 로그 후 예외 |
 | `ForceEnable` | `AddLibDb()` 등록 시 ConnectionString에 `MultipleActiveResultSets=True` 자동 주입 |
+
+---
+
+### 9-2. StringParameterPolicy 열거형
+
+| 값 | 설명 |
+|---|---|
+| `Preserve` | 문자열 값을 임의로 trim/truncate하지 않습니다. 크기 제한 초과 시 예외를 발생시킵니다. |
+| `LegacySanitizeAndTruncate` | v2.1 호환 동작입니다. trim, NUL 앞부분 절단, 크기 초과 시 조용한 truncate를 수행합니다. |
+
+### 9-3. MapperCompatibilityMode 열거형
+
+| 값 | 설명 |
+|---|---|
+| `Default` | 기존 호환 동작입니다. source-generated 매퍼가 없으면 Expression/Reflection fallback을 사용할 수 있습니다. |
+| `AotStrict` | source-generated 또는 명시 등록 매퍼 없이 DTO 매핑 fallback을 사용하지 않습니다. Native AOT/trim 엄격 소비자용입니다. |
 
 ---
 

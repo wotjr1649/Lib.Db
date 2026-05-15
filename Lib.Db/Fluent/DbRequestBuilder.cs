@@ -75,16 +75,29 @@ internal sealed class DbRequestBuilder : IProcedureStage, IParameterStage
     }
 
     /// <summary>
-    /// 실행할 인라인 SQL 쿼리를 지정합니다.
+    /// 실행할 raw SQL 쿼리를 명시적으로 지정합니다.
     /// </summary>
     /// <param name="sqlText">SQL 쿼리 문장 (예: SELECT * FROM Users WHERE Id = @Id)</param>
     /// <returns>파라미터 설정 단계로 이동</returns>
-    public IParameterStage Sql(string sqlText)
+    public IParameterStage SqlRaw(string sqlText)
     {
         _commandText = sqlText;
         _commandType = CommandType.Text;
         return this;
     }
+
+    /// <summary>
+    /// 호환성을 위해 유지되는 raw SQL API입니다.
+    /// <para>
+    /// 이 메서드는 <see cref="SqlRaw(string)"/>와 동일하게 SQL 텍스트를 그대로 실행합니다.
+    /// 새 코드에서는 raw 실행 의도를 드러내는 <see cref="SqlRaw(string)"/> 또는
+    /// 자동 파라미터화를 수행하는 <see cref="Sql(FormattableString)"/>을 사용하세요.
+    /// </para>
+    /// </summary>
+    /// <param name="sqlText">SQL 쿼리 문장 (예: SELECT * FROM Users WHERE Id = @Id)</param>
+    /// <returns>파라미터 설정 단계로 이동</returns>
+    public IParameterStage Sql(string sqlText)
+        => SqlRaw(sqlText);
 
     /// <summary>
     /// FormattableString(보간된 문자열)을 사용하여 SQL을 지정합니다.

@@ -42,8 +42,24 @@ public interface IProcedureStage
     IParameterStage Procedure(string spName);
 
     /// <summary>
-    /// Raw SQL 텍스트를 지정합니다.
+    /// Raw SQL 텍스트를 명시적으로 지정합니다.
+    /// <para>
+    /// SQL 텍스트를 그대로 실행해야 하는 경우에만 사용하세요.
+    /// 값 바인딩이 필요한 호출은 <see cref="Sql(FormattableString)"/> 또는 <see cref="IParameterStage.With{TParams}(TParams)"/>를 사용하세요.
+    /// </para>
     /// <para>예: <c>"SELECT * FROM ..."</c></para>
+    /// </summary>
+    /// <param name="sqlText">실행할 SQL 텍스트</param>
+    /// <returns>파라미터를 설정하는 2단계 인터페이스</returns>
+    IParameterStage SqlRaw(string sqlText) => Sql(sqlText);
+
+    /// <summary>
+    /// 호환성을 위해 유지되는 Raw SQL 텍스트 API입니다.
+    /// <para>
+    /// 이 메서드는 <see cref="SqlRaw(string)"/>와 동일하게 SQL 텍스트를 그대로 실행합니다.
+    /// 새 코드에서는 raw 실행 의도를 드러내는 <see cref="SqlRaw(string)"/> 또는 자동 파라미터화를 수행하는
+    /// <see cref="Sql(FormattableString)"/> 사용을 권장합니다.
+    /// </para>
     /// </summary>
     /// <param name="sqlText">실행할 SQL 텍스트</param>
     /// <returns>파라미터를 설정하는 2단계 인터페이스</returns>

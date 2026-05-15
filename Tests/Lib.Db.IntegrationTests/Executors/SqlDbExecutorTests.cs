@@ -5,9 +5,12 @@
 // ============================================================================
 
 using System.Data;
+using System.Data.Common;
+using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
-using Lib.Db.Contracts.Schema;
 using Lib.Db.Contracts.Mapping;
+using Lib.Db.Contracts.Models;
+using Lib.Db.Contracts.Schema;
 using Lib.Db.Execution;
 using Lib.Db.Execution.Executors;
 using Microsoft.Data.SqlClient;
@@ -36,17 +39,42 @@ public sealed class SqlDbExecutorTests
         _options = new LibDbOptions();
     }
 
-    private SqlDbExecutor CreateExecutor()
+    private SqlDbExecutor CreateExecutor(params IDbCommandInterceptor[] interceptors)
     {
+        InterceptorChain interceptorChain = interceptors.Length == 0
+            ? _interceptorChain
+            : new InterceptorChain(interceptors);
+
         return new SqlDbExecutor(
             _mockStrategy.Object,
             _mockSchemaService.Object,
             _mockMapperFactory.Object,
-            _interceptorChain,
+            interceptorChain,
             Enumerable.Empty<IDbInterceptor>(),
             _options,
             _mockLogger.Object
         );
+    }
+
+    private void SetupExecuteAsync<TResult, TParams>()
+    {
+        _mockStrategy
+            .Setup(x => x.ExecuteAsync(
+                It.IsAny<DbRequest<TParams>>(),
+                It.IsAny<Func<SqlConnection, CancellationToken, Task<TResult>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<DbRequest<TParams>, Func<SqlConnection, CancellationToken, Task<TResult>>, CancellationToken>(
+                static (_, operation, token) => operation(new SqlConnection(), token));
+    }
+
+    private Mock<ISqlMapper<SchemaFallbackParams>> SetupSchemaFallbackMapper()
+    {
+        Mock<ISqlMapper<SchemaFallbackParams>> mapper = new();
+        _mockMapperFactory
+            .Setup(x => x.GetMapper<SchemaFallbackParams>())
+            .Returns(mapper.Object);
+
+        return mapper;
     }
 
     [Fact]
@@ -95,5 +123,86 @@ public sealed class SqlDbExecutorTests
             CancellationToken.None));
 
         Assert.Same(exOriginal, ex.InnerException);
+    }
+
+    [Fact]
+    public async Task SQ07_StoredProcedureSchemaLookupFailure_ShouldThrow_ByDefault()
+    {
+        Exception schemaFailure = new InvalidOperationException("schema lookup failed");
+        SetupExecuteAsync<int, SchemaFallbackParams>();
+        SetupSchemaFallbackMapper();
+
+        _mockStrategy
+            .SetupGet(x => x.DefaultSchemaMode)
+            .Returns(SchemaResolutionMode.ServiceOnly);
+        _mockSchemaService
+            .Setup(x => x.GetSpSchemaAsync("SP_Test", "hash", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(schemaFailure);
+
+        SqlDbExecutor executor = CreateExecutor(new SuppressResultInterceptor(42));
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            executor.ExecuteNonQueryAsync(
+                "SP_Test",
+                new SchemaFallbackParams(),
+                "hash",
+                CommandType.StoredProcedure,
+                DbExecutionOptions.Default,
+                CancellationToken.None));
+
+        Assert.Same(schemaFailure, ex.InnerException);
+    }
+
+    [Fact]
+    public async Task SQ08_StoredProcedureSchemaLookupFailure_ShouldFallback_WhenExplicitlyAllowed()
+    {
+        _options.AllowStoredProcedureSchemaFallback = true;
+        Exception schemaFailure = new InvalidOperationException("schema lookup failed");
+        SetupExecuteAsync<int, SchemaFallbackParams>();
+        Mock<ISqlMapper<SchemaFallbackParams>> mapper = SetupSchemaFallbackMapper();
+
+        _mockStrategy
+            .SetupGet(x => x.DefaultSchemaMode)
+            .Returns(SchemaResolutionMode.ServiceOnly);
+        _mockSchemaService
+            .Setup(x => x.GetSpSchemaAsync("SP_Test", "hash", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(schemaFailure);
+
+        SqlDbExecutor executor = CreateExecutor(new SuppressResultInterceptor(42));
+
+        int result = await executor.ExecuteNonQueryAsync(
+            "SP_Test",
+            new SchemaFallbackParams(),
+            "hash",
+            CommandType.StoredProcedure,
+            DbExecutionOptions.Default,
+            CancellationToken.None);
+
+        Assert.Equal(42, result);
+        mapper.Verify(x => x.MapParameters(
+                It.IsAny<SqlCommand>(),
+                It.IsAny<SchemaFallbackParams>(),
+                It.Is<SpSchema?>(schema => schema == null)),
+            Times.Once);
+    }
+
+    public sealed class SchemaFallbackParams
+    {
+        public int Id { get; set; } = 1;
+    }
+
+    private sealed class SuppressResultInterceptor(object result) : IDbCommandInterceptor
+    {
+        public ValueTask ReaderExecutingAsync(DbCommand command, DbCommandInterceptionContext context)
+        {
+            context.SetResult(result);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ReaderExecutedAsync(DbCommand command, DbCommandExecutedEventData eventData)
+            => ValueTask.CompletedTask;
+
+        public ValueTask CommandFailedAsync(DbCommand command, DbCommandFailedEventData eventData)
+            => ValueTask.CompletedTask;
     }
 }

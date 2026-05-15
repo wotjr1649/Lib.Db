@@ -17,6 +17,38 @@ using System.Text.Json.Serialization;
 namespace Lib.Db.Configuration;
 
 /// <summary>
+/// 문자열 파라미터를 SQL 파라미터로 바인딩할 때 적용할 데이터 무결성 정책입니다.
+/// </summary>
+public enum StringParameterPolicy
+{
+    /// <summary>
+    /// 호출자가 전달한 문자열을 그대로 보존하고, 스키마 Size를 초과하면 예외를 발생시킵니다.
+    /// </summary>
+    Preserve = 0,
+
+    /// <summary>
+    /// 기존 호환 동작입니다. 앞뒤 공백을 제거하고 NUL 이후를 절단하며, 스키마 Size를 초과하면 잘라냅니다.
+    /// </summary>
+    LegacySanitizeAndTruncate = 1
+}
+
+/// <summary>
+/// 결과 DTO 매퍼 생성 시 사용할 호환성 정책입니다.
+/// </summary>
+public enum MapperCompatibilityMode
+{
+    /// <summary>
+    /// 기존 동작입니다. 소스 생성 매퍼가 없으면 실행 환경에 따라 Expression Tree 또는 Reflection fallback을 사용합니다.
+    /// </summary>
+    Default = 0,
+
+    /// <summary>
+    /// Native AOT/trim 친화 모드입니다. 명시 등록 매퍼, 소스 생성 매퍼, 스칼라/내장 매퍼만 허용합니다.
+    /// </summary>
+    AotStrict = 1
+}
+
+/// <summary>
 /// Lib.Db 라이브러리의 동작을 제어하는 전역 설정 클래스입니다.
 /// <para>
 /// <b>[설계의도 (Design Rationale)]</b><br/>
@@ -203,6 +235,32 @@ public sealed class LibDbOptions
     /// <para>true: SP에 정의된 필수 파라미터가 누락되면 호출 전 클라이언트 레벨에서 차단합니다.</para>
     /// </summary>
     public bool StrictRequiredParameterCheck { get; set; } = true;
+
+    /// <summary>
+    /// 저장 프로시저 스키마 조회 실패 시 스키마 없이 파라미터 매핑을 계속할지 여부입니다.
+    /// 기본값은 <c>false</c>이며, 조회 실패를 호출 실패로 전파합니다.
+    /// <para>
+    /// 레거시 호환을 위해 스키마 조회 실패를 허용해야 하는 경우에만 <c>true</c>로 설정하세요.
+    /// </para>
+    /// </summary>
+    public bool AllowStoredProcedureSchemaFallback { get; set; } = false;
+
+    /// <summary>
+    /// 문자열 파라미터 바인딩 정책입니다. 기본값은 원문 보존입니다.
+    /// <para>
+    /// 기존의 공백 제거/NUL 절단/자동 길이 절단 동작이 필요한 경우
+    /// <see cref="StringParameterPolicy.LegacySanitizeAndTruncate"/>를 명시적으로 설정하세요.
+    /// </para>
+    /// </summary>
+    public StringParameterPolicy StringParameterPolicy { get; set; } = StringParameterPolicy.Preserve;
+
+    /// <summary>
+    /// 결과 DTO 매퍼 생성 호환성 정책입니다. 기본값은 기존 adaptive fallback 동작입니다.
+    /// <para>
+    /// <see cref="MapperCompatibilityMode.AotStrict"/>에서는 소스 생성 매퍼 또는 명시 등록 매퍼가 없는 DTO 결과 매핑을 차단합니다.
+    /// </para>
+    /// </summary>
+    public MapperCompatibilityMode MapperCompatibilityMode { get; set; } = MapperCompatibilityMode.Default;
 
     #endregion
 
@@ -652,6 +710,30 @@ public sealed class LibDbOptions
     /// </para>
     /// </summary>
     public bool EnableObservability { get; set; } = false;
+
+    /// <summary>
+    /// SQL 명령 원문을 로그와 Activity 태그에 포함할지 여부입니다. (기본값: false)
+    /// <para>
+    /// 기본값에서는 원문 대신 명령 요약과 해시만 기록합니다. 리터럴 값, 조건절, 힌트 등에 민감정보가
+    /// 포함될 수 있으므로 로컬 진단 환경에서만 명시적으로 활성화하세요.
+    /// </para>
+    /// </summary>
+    public bool EnableSensitiveCommandTextLogging { get; set; } = false;
+
+    /// <summary>
+    /// <see cref="EnableSensitiveCommandTextLogging"/> 활성화 시 기록할 SQL 명령 원문의 최대 길이입니다.
+    /// </summary>
+    public int MaxSensitiveCommandTextLength
+    {
+        get;
+        set
+        {
+            if (value <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), value, "민감 명령 텍스트 최대 길이는 0보다 커야 합니다.");
+
+            field = value;
+        }
+    } = 1024;
 
     /// <summary>
     /// [사용 중단] <see cref="EnableObservability"/>를 사용하세요. 이 속성은 v3.0에서 제거됩니다.

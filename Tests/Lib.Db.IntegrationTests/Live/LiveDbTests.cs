@@ -51,7 +51,7 @@ public sealed class LiveDbTests : IClassFixture<LiveDbFixture>
 
         DbResult<int> result = await new DbRequestBuilder(_executor, "Default")
             .Procedure("tvp.usp_Tvp_Bulk_Insert_AllTypes")
-            .With(new { Types = list })
+            .With(new { Items = list })
             .ExecuteScalarAsync<int>();
 
         result.IsSuccess.Should().BeTrue();

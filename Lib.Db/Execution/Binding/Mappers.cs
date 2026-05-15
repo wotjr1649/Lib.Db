@@ -45,12 +45,12 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// <summary>
     /// [Gen0] 젊은 세대 캐시 - 새로 생성된 매퍼 + 접근 횟수 추적
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, CacheEntry> s_gen0Cache = new();
+    private static readonly ConcurrentDictionary<MapperCacheKey, CacheEntry> s_gen0Cache = new();
 
     /// <summary>
     /// [Gen1] 오래된 세대 캐시 - 자주 사용되는 매퍼 (승격된 항목)
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, object> s_gen1Cache = new();
+    private static readonly ConcurrentDictionary<MapperCacheKey, object> s_gen1Cache = new();
 
     /// <summary>Source Generator가 생성한 매퍼 타입 캐시 (Type → Mapper Type)</summary>
     private static volatile FrozenDictionary<Type, Type>? s_generatedMapperTypes;
@@ -66,6 +66,8 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// <summary>
     /// 캐시 항목 - 매퍼 인스턴스 + 접근 횟수
     /// </summary>
+    private readonly record struct MapperCacheKey(Type Type, MapperCompatibilityMode CompatibilityMode);
+
     private readonly record struct CacheEntry(object Mapper, int AccessCount);
 
     #endregion
@@ -80,11 +82,12 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
             return diMapper;
 
         Type type = typeof(T);
+        MapperCacheKey cacheKey = new(type, options.MapperCompatibilityMode);
 
         // ---------------------------------------------------------------------
         // 2) Gen1 캐시 조회 (가장 자주 사용되는 매퍼)
         // ---------------------------------------------------------------------
-        if (s_gen1Cache.TryGetValue(type, out object? gen1Cached))
+        if (s_gen1Cache.TryGetValue(cacheKey, out object? gen1Cached))
         {
             return (ISqlMapper<T>)gen1Cached;
         }
@@ -92,7 +95,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // ---------------------------------------------------------------------
         // 3) Gen0 캐시 조회
         // ---------------------------------------------------------------------
-        if (s_gen0Cache.TryGetValue(type, out CacheEntry gen0Entry))
+        if (s_gen0Cache.TryGetValue(cacheKey, out CacheEntry gen0Entry))
         {
             // 접근 횟수 증가
             int newAccessCount = gen0Entry.AccessCount + 1;
@@ -100,12 +103,12 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
             // ✅ [승격 조건] 접근 횟수가 임계값 이상이면 Gen1로 승격
             if (newAccessCount >= PromotionThreshold)
             {
-                PromoteToGen1(type, gen0Entry.Mapper);
+                PromoteToGen1(cacheKey, gen0Entry.Mapper);
             }
             else
             {
                 // 접근 횟수만 증가 (CAS 패턴)
-                s_gen0Cache.TryUpdate(type,
+                s_gen0Cache.TryUpdate(cacheKey,
                     new CacheEntry(gen0Entry.Mapper, newAccessCount),
                     gen0Entry);
             }
@@ -129,7 +132,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
 
         // Gen0에 추가 (초기 접근 횟수 = 0)
         CacheEntry entry = new CacheEntry(mapper, 0);
-        s_gen0Cache.TryAdd(type, entry);
+        s_gen0Cache.TryAdd(cacheKey, entry);
 
         return mapper;
     }
@@ -137,13 +140,13 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// <summary>
     /// Gen0에서 Gen1로 매퍼를 승격합니다.
     /// </summary>
-    private static void PromoteToGen1(Type type, object mapper)
+    private static void PromoteToGen1(MapperCacheKey key, object mapper)
     {
         // Gen1에 추가
-        s_gen1Cache.TryAdd(type, mapper);
+        s_gen1Cache.TryAdd(key, mapper);
 
         // Gen0에서 제거
-        s_gen0Cache.TryRemove(type, out _);
+        s_gen0Cache.TryRemove(key, out _);
     }
 
     /// <summary>
@@ -172,10 +175,10 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // 접근 빈도와 무관하게 무작위로 50%를 선택하여 제거
         // 이는 LRU보다 구현이 단순하며 충분히 효과적임
 
-        List<Type> toRemove = new List<Type>(s_gen0Cache.Count / 2);
+        List<MapperCacheKey> toRemove = new List<MapperCacheKey>(s_gen0Cache.Count / 2);
 
         // Random.Shared는 .NET 6+에서 제공하는 Thread-safe 난수 생성기
-        foreach (KeyValuePair<Type, CacheEntry> kv in s_gen0Cache)
+        foreach (KeyValuePair<MapperCacheKey, CacheEntry> kv in s_gen0Cache)
         {
             // 50% 확률로 제거 대상에 추가
             if (Random.Shared.Next(2) == 0)
@@ -188,7 +191,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         if (toRemove.Count < s_gen0Cache.Count / 4)
         {
             int needed = (s_gen0Cache.Count / 2) - toRemove.Count;
-            foreach (KeyValuePair<Type, CacheEntry> kv in s_gen0Cache)
+            foreach (KeyValuePair<MapperCacheKey, CacheEntry> kv in s_gen0Cache)
             {
                 if (needed <= 0)
                     break;
@@ -201,7 +204,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         }
 
         // 실제 제거
-        foreach (Type key in toRemove)
+        foreach (MapperCacheKey key in toRemove)
         {
             s_gen0Cache.TryRemove(key, out _);
         }
@@ -244,6 +247,9 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         if (sgMapper is not null)
             return sgMapper;
 
+        if (options.MapperCompatibilityMode == MapperCompatibilityMode.AotStrict)
+            throw CreateAotStrictMapperException(type);
+
         // =====================================================================
         // [2순위] JIT 환경: Expression Tree 기반 DTO 매퍼
         // =====================================================================
@@ -255,6 +261,10 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // =====================================================================
         return new ReflectionParameterMapper<T>(options.StrictRequiredParameterCheck);
     }
+
+    private static InvalidOperationException CreateAotStrictMapperException(Type type)
+        => new(
+            $"MapperCompatibilityMode.AotStrict requires a source-generated or explicitly registered mapper for '{type.FullName}', or a scalar type mapper. ExpressionTree/Reflection fallback is disabled.");
 
     /// <summary>
     /// Source Generator가 생성한 매퍼를 Assembly Scan을 통해 발견합니다.

@@ -105,6 +105,18 @@ public sealed class UserRepository(IDbSession session)
 
 ---
 
+## 안전 기본값
+
+- Interpolated SQL: `Sql($"... {value}")`는 `SqlInterpolatedStringHandler`로 자동 파라미터화됩니다.
+- Raw SQL: 문자열 원문 실행 의도를 드러내려면 `SqlRaw(string)`을 사용하세요. `Sql(string)`은 호환성 API로 유지되며 같은 raw 동작을 합니다.
+- 문자열 파라미터: 기본 `StringParameterPolicy.Preserve`는 공백과 NUL 문자를 임의 변경하지 않고, 지정된 크기를 초과하면 예외를 발생시킵니다.
+- 민감 SQL 텍스트: 기본값은 `EnableSensitiveCommandTextLogging=false`이며 로그/Activity에는 SQL 요약과 해시만 기록합니다. 원문 기록은 명시 opt-in이며 길이 제한을 적용합니다.
+- AOT 엄격 모드: `MapperCompatibilityMode.AotStrict`를 설정하면 source-generated 또는 명시 등록 매퍼 없이 Reflection/Expression fallback을 사용하지 않습니다.
+- SP 스키마 fallback: `AllowStoredProcedureSchemaFallback=false`가 기본값입니다. Stored Procedure 스키마 조회 실패 시 기본적으로 실패를 전파하며, 기존 fallback 동작은 명시 opt-in입니다.
+- SharedMemoryCache: Activity와 로그에는 원본 cache key 대신 `db.cache.key.summary`, `libdb.cache.key.hash`를 기록합니다. L2 캐시는 같은 머신/같은 격리키 범위의 IPC 캐시이며 보안 경계가 아닙니다.
+
+---
+
 ## 성능
 
 | 시나리오 | Dapper | EF Core | Lib.Db v2.2.0 | 개선율 |

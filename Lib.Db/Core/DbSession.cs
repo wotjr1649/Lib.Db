@@ -544,11 +544,19 @@ internal sealed class DbTransactionScopeAdapter : IDbTransactionScope
     }
 
     /// <summary>
-    /// Raw SQL 문을 실행합니다.
+    /// Raw SQL 문을 명시적으로 실행합니다.
+    /// </summary>
+    public IParameterStage SqlRaw(string sqlText)
+    {
+        return CreateBoundBuilder().SqlRaw(sqlText);
+    }
+
+    /// <summary>
+    /// 호환성을 위해 유지되는 raw SQL API입니다.
     /// </summary>
     public IParameterStage Sql(string sqlText)
     {
-        return CreateBoundBuilder().Sql(sqlText);
+        return SqlRaw(sqlText);
     }
 
     /// <summary>

@@ -149,6 +149,43 @@ public sealed class DataBindingTests : IDisposable
         Assert.Contains("1753", ex.Message);
     }
 
+    [Fact]
+    public void DB06_BindParameter_ShouldPreserve_StringWhitespace_ByDefault()
+    {
+        using SqlCommand cmd = new();
+        SpParameterMetadata meta = new()
+        {
+            Name = "pName",
+            SqlDbType = SqlDbType.NVarChar,
+            Size = 20,
+            Direction = ParameterDirection.Input
+        };
+
+        DbBinder.BindParameter(cmd, meta, "  A  ", strictCheck: false);
+
+        SqlParameter param = cmd.Parameters["pName"];
+        Assert.Equal("  A  ", param.Value);
+    }
+
+    [Fact]
+    public void DB07_BindParameter_ShouldThrow_WhenStringExceedsSchemaSize_ByDefault()
+    {
+        using SqlCommand cmd = new();
+        SpParameterMetadata meta = new()
+        {
+            Name = "pCode",
+            SqlDbType = SqlDbType.NVarChar,
+            Size = 3,
+            Direction = ParameterDirection.Input
+        };
+
+        ArgumentOutOfRangeException ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            DbBinder.BindParameter(cmd, meta, "ABCDE", strictCheck: false));
+
+        Assert.Contains("pCode", ex.Message);
+        Assert.Contains("Size:3", ex.Message);
+    }
+
     private sealed class SimpleDto
     {
         public int Id { get; set; }
