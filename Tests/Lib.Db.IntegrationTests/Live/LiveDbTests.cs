@@ -8,6 +8,7 @@ using System.Data;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution;
 using Lib.Db.Fluent;
+using Lib.Db.IntegrationTests.Infrastructure;
 
 namespace Lib.Db.IntegrationTests.Live;
 
@@ -51,7 +52,7 @@ public sealed class LiveDbTests : IClassFixture<LiveDbFixture>
 
         DbResult<int> result = await new DbRequestBuilder(_executor, "Default")
             .Procedure("tvp.usp_Tvp_Bulk_Insert_AllTypes")
-            .With(new { Types = list })
+            .With(new { Items = list })
             .ExecuteScalarAsync<int>();
 
         result.IsSuccess.Should().BeTrue();
@@ -91,13 +92,16 @@ public sealed class LiveDbFixture : IDisposable
 
     public LiveDbFixture()
     {
+        IConfiguration configuration = TestConnectionStrings.CreateConfiguration();
+        string connectionString = TestConnectionStrings.Require(configuration, TestConnectionStrings.Verification);
+
         ServiceCollection services = new();
         services.AddLogging(builder => builder.AddConsole());
         services.AddHighPerformanceDb(options =>
         {
             options.ConnectionStrings = new Dictionary<string, string>
             {
-                { "Default", "Server=127.0.0.1;Database=LIBDB_VERIFICATION_TEST;User Id=sa;Password=123456;TrustServerCertificate=True;Encrypt=False;" }
+                ["Default"] = connectionString
             };
             options.EnableResilience = true;
         });

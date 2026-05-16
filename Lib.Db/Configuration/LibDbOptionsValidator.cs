@@ -6,6 +6,7 @@
 
 #nullable enable
 
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
 
 namespace Lib.Db.Configuration;
@@ -64,14 +65,15 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                     continue;
                 }
 
-                // 연결 문자열 형식 검증
+                // 연결 문자열 형식 및 보안 프로필 검증
                 try
                 {
-                    Microsoft.Data.SqlClient.SqlConnectionStringBuilder builder = new(connStr);
+                    SqlConnectionStringBuilder builder = new(connStr);
+                    ValidateConnectionSecurityProfile(options, csName, builder, errors);
                 }
-                catch (ArgumentException ex)
+                catch (ArgumentException)
                 {
-                    errors.Add($"'{csName}'의 연결 문자열 형식이 잘못되었습니다: {ex.Message}");
+                    errors.Add($"'{csName}'의 연결 문자열 형식이 잘못되었습니다.");
                 }
             }
         }
@@ -131,11 +133,11 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
             {
                 try
                 {
-                    _ = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(kvp.Value);
+                    _ = new SqlConnectionStringBuilder(kvp.Value);
                 }
-                catch (Exception ex)
+                catch
                 {
-                    errors.Add($"ConnectionString '{kvp.Key}' 파싱 실패 (MARS 자동 주입 불가): {ex.Message}");
+                    errors.Add($"ConnectionString '{kvp.Key}' 파싱 실패 (MARS 자동 주입 불가).");
                 }
             }
         }
@@ -143,5 +145,38 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
         return errors.Count > 0
             ? ValidateOptionsResult.Fail(errors)
             : ValidateOptionsResult.Success;
+    }
+
+    private static void ValidateConnectionSecurityProfile(
+        LibDbOptions options,
+        string connectionName,
+        SqlConnectionStringBuilder builder,
+        List<string> errors)
+    {
+        if (options.ConnectionSecurityProfile != ConnectionSecurityProfile.Production)
+            return;
+
+        string encrypt = builder.Encrypt.ToString();
+        if (string.Equals(encrypt, "False", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(encrypt, "Optional", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"ConnectionString '{connectionName}' production security profile requires Encrypt=True/Mandatory/Strict.");
+        }
+
+        if (builder.TrustServerCertificate &&
+            !options.AllowProductionTrustServerCertificateWaiver)
+        {
+            errors.Add(
+                $"ConnectionString '{connectionName}' production security profile does not allow TrustServerCertificate=True without an explicit waiver.");
+        }
+
+        if (!builder.IntegratedSecurity &&
+            string.Equals(builder.UserID, "sa", StringComparison.OrdinalIgnoreCase) &&
+            !options.AllowProductionSaLoginWaiver)
+        {
+            errors.Add(
+                $"ConnectionString '{connectionName}' production security profile does not allow privileged SQL login without an explicit waiver.");
+        }
     }
 }

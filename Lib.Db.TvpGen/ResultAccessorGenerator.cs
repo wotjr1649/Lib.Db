@@ -171,6 +171,15 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
             defaultSeverity: DiagnosticSeverity.Error,
             isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor RES009_FileLocalNotSupported =
+        new(
+            id: "RES009",
+            title: "file-local 타입 미지원",
+            messageFormat: "타입 '{0}' 또는 상위 타입은 file-local 타입이므로 생성 코드에서 접근하거나 확장할 수 없습니다.",
+            category: "Design",
+            defaultSeverity: DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
+
     #endregion
 
     #region [초기화] 증분 파이프라인 구성 (IMapableResult 존재 여부 bool만 추출 — v2.2 최적화)
@@ -204,7 +213,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         // → Compilation 인스턴스 교체(소스 변경 시)가 Execute 재실행으로 이어지지 않음
         IncrementalValueProvider<bool> hasIMapable = context.CompilationProvider
             .Select(static (comp, _) =>
-                comp.GetTypeByMetadataName("Lib.Db.Contracts.Mapping.IMapableResult`1") is not null);
+                comp.GetTypeByMetadataName(IMapableResultMetadataName) is not null);
 
         IncrementalValueProvider<(ImmutableArray<INamedTypeSymbol> Left, bool Right)> combined =
             candidates.Collect().Combine(hasIMapable);
@@ -308,7 +317,17 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 3️⃣ 접근성 검사(ContainingType 포함)
+        // 3️⃣ file-local 타입 금지
+        if (GeneratorSharedHelpers.IsFileLocalType(type, spc.CancellationToken))
+        {
+            spc.ReportDiagnostic(Diagnostic.Create(
+                RES009_FileLocalNotSupported,
+                type.Locations.FirstOrDefault(),
+                type.Name));
+            return false;
+        }
+
+        // 4️⃣ 접근성 검사(ContainingType 포함)
         if (!GeneratorSharedHelpers.IsAccessibleFromGeneratedCode(type))
         {
             spc.ReportDiagnostic(Diagnostic.Create(
@@ -318,7 +337,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 4️⃣ partial 검사(ContainingType 포함)  ✅ “ContainingType partial 검사” 강제
+        // 5️⃣ partial 검사(ContainingType 포함)  ✅ “ContainingType partial 검사” 강제
         if (!IsPartialIncludingContainingTypes(type))
         {
             spc.ReportDiagnostic(Diagnostic.Create(
@@ -328,7 +347,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 5️⃣ 생성자 검증 (Record와 Class 분리 메시지)
+        // 6️⃣ 생성자 검증 (Record와 Class 분리 메시지)
         if (!HasParameterlessCtor(type))
         {
             DiagnosticDescriptor diag = type.IsRecord ? RES008_RecordNotCreatable : RES004_MissingParameterlessCtor;
@@ -336,7 +355,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 6️⃣ 멤버 수집 (정책: Record는 필드 매핑 제외)
+        // 7️⃣ 멤버 수집 (정책: Record는 필드 매핑 제외)
         members = CollectMappableMembers(type, isRecord: type.IsRecord);
 
         if (members.Count == 0)
@@ -348,7 +367,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 7️⃣ 중복 이름 검사 (대소문자 무시)
+        // 8️⃣ 중복 이름 검사 (대소문자 무시)
         HashSet<string> set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (MappableMember m in members)
         {
@@ -673,6 +692,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         {
             // T1-10: ITypeSymbol 제거 → CollectMappableMembers에서 사전 계산된 ReaderExpression 사용
             string expr = m.ReaderExpression;
+            string memberIdentifier = SharedHashUtils.EscapeIdentifier(m.Name);
 
             sb.Append(indent).AppendLine($"            if (ord_{m.SafeName} != -1 && !r.IsDBNull(ord_{m.SafeName}))");
             sb.Append(indent).AppendLine("            {");
@@ -682,14 +702,14 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
                 if (m.RequiresUnsafeSetter)
                     sb.Append(indent).AppendLine($"                __Set_{m.SafeName}(result, {expr});");
                 else
-                    sb.Append(indent).AppendLine($"                result.{m.Name} = {expr};");
+                    sb.Append(indent).AppendLine($"                result.{memberIdentifier} = {expr};");
             }
             else
             {
                 if (m.RequiresUnsafeField)
                     sb.Append(indent).AppendLine($"                __Field_{m.SafeName}(result) = {expr};");
                 else
-                    sb.Append(indent).AppendLine($"                result.{m.Name} = {expr};");
+                    sb.Append(indent).AppendLine($"                result.{memberIdentifier} = {expr};");
             }
 
             sb.Append(indent).AppendLine("            }");
@@ -706,7 +726,7 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
                 else if (m.Kind == MemberKind.Field && m.RequiresUnsafeField)
                     sb.Append(indent).AppendLine($"                __Field_{m.SafeName}(result) = null;");
                 else
-                    sb.Append(indent).AppendLine($"                result.{m.Name} = null;");
+                    sb.Append(indent).AppendLine($"                result.{memberIdentifier} = null;");
 
                 sb.Append(indent).AppendLine("            }");
             }
@@ -845,10 +865,12 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
     /// </summary>
     private static string BuildPartialTypeHeader(INamedTypeSymbol t)
     {
-        if (t.IsRecord)
-            return $"partial record class {t.Name}";
+        string name = SharedHashUtils.EscapeIdentifier(t.Name);
 
-        return $"partial class {t.Name}";
+        if (t.IsRecord)
+            return $"partial record class {name}";
+
+        return $"partial class {name}";
     }
 
     /// <summary>

@@ -4,6 +4,7 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Collections.Concurrent;
 using System.Reflection;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Models;
@@ -104,6 +105,74 @@ public sealed class DbSchemaTests
 
         Assert.Contains("[Negative Cache]", ex2.Message);
         _mockRepo.Verify(r => r.GetTvpMetadataAsync(missingTvp, hash, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task DS_04_RawInstance_ShouldBeRedactedInSchemaMissMessages()
+    {
+        string missingTvp = "dbo.MissingRawTvp";
+        string rawInstance = "Raw:InstanceMaterialForRedactionTest;Segment=Alpha;";
+
+        _mockRepo.Setup(r => r.GetTvpMetadataAsync(missingTvp, rawInstance, It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(new TvpMetadata(0, []));
+
+        using SchemaService service = CreateService();
+
+        InvalidOperationException ex1 = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.GetTvpSchemaAsync(missingTvp, rawInstance, CancellationToken.None));
+
+        ex1.Message.Should().Contain("Raw:[redacted]");
+        ex1.Message.Should().NotContain(rawInstance);
+        ex1.Message.Should().NotContain("Segment=Alpha");
+
+        InvalidOperationException ex2 = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.GetTvpSchemaAsync(missingTvp, rawInstance, CancellationToken.None));
+
+        ex2.Message.Should().Contain("Raw:[redacted]");
+        ex2.Message.Should().NotContain(rawInstance);
+        ex2.Message.Should().NotContain("Segment=Alpha");
+    }
+
+    [Fact]
+    public void DS_05_RawInstance_ShouldBeHashedInNegativeCacheKey()
+    {
+        string objectName = "dbo.MissingRawKeyTvp";
+        string rawInstance = "Raw:InstanceMaterialForKeyOnly;Segment=Beta;";
+
+        try
+        {
+            NegativeCache.Clear();
+            NegativeCache.RecordMissing(rawInstance, objectName, "TvpType");
+
+            FieldInfo field = typeof(NegativeCache)
+                .GetField("s_missingObjects", BindingFlags.NonPublic | BindingFlags.Static)!;
+            ConcurrentDictionary<string, InvalidOperationException> dictionary =
+                (ConcurrentDictionary<string, InvalidOperationException>)field.GetValue(null)!;
+
+            string key = dictionary.Keys.Single(k => k.Contains(objectName, StringComparison.Ordinal));
+
+            key.Should().StartWith("raw-sha256-");
+            key.Should().NotContain(rawInstance);
+            key.Should().NotContain("Segment=Beta");
+        }
+        finally
+        {
+            NegativeCache.Clear();
+        }
+    }
+
+    [Fact]
+    public void DS_06_RawInstance_ShouldUseDeterministicSafeSchemaCacheIdentity()
+    {
+        string rawInstance = "Raw:InstanceMaterialForSnapshotKey;Segment=Gamma;";
+
+        string first = SchemaCacheIdentity.ForCache(rawInstance);
+        string second = SchemaCacheIdentity.ForCache(rawInstance);
+
+        first.Should().Be(second);
+        first.Should().StartWith("raw-sha256-");
+        first.Should().NotContain(rawInstance);
+        first.Should().NotContain("Segment=Gamma");
     }
 
     #endregion

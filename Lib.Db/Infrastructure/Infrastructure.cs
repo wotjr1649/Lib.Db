@@ -40,7 +40,7 @@ namespace Lib.Db.Repository;
 ///   <item>
 ///     <description>
 ///     <b>Raw 접두사</b>:
-///     <paramref name="instanceHash"/>가 <c>"Raw:"</c>로 시작하면 뒤의 문자열을 연결 문자열로 간주합니다.
+    ///     <c>instanceHash</c>가 <c>"Raw:"</c>로 시작하면 뒤의 문자열을 연결 문자열로 간주합니다.
 ///     (레거시/테스트/임시 연결 호환)
 ///     </description>
 ///   </item>
@@ -77,7 +77,7 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
     /// </summary>
     /// <remarks>
     /// <para>
-    /// - 키: 인스턴스 이름/해시(<paramref name="instanceHash"/>로 들어오는 값과 동일한 규칙 사용)<br/>
+    /// - 키: 인스턴스 이름/해시(<c>instanceHash</c>로 들어오는 값과 동일한 규칙 사용)<br/>
     /// - 값: 연결 문자열(Connection String)
     /// </para>
     /// <para>
@@ -116,7 +116,7 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
     /// </para>
     /// <para><b>리소스 누수 방지</b></para>
     /// <para>
-    /// Open 중 예외가 발생하면 즉시 <see cref="SqlConnection.DisposeAsync"/>를 호출한 뒤 예외를 다시 던집니다.
+    /// Open 중 예외가 발생하면 즉시 <c>DisposeAsync</c>를 호출한 뒤 예외를 다시 던집니다.
     /// </para>
     /// </remarks>
     public async Task<SqlConnection> CreateConnectionAsync(string instanceHash, CancellationToken ct)
@@ -160,6 +160,7 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
 
         #region [2] SqlConnection 생성 및 Open(실패 시 즉시 Dispose) + 연결 풀 메트릭
 
+        string diagnosticInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
         SqlConnection conn = new SqlConnection(connStr);
         Stopwatch sw = Stopwatch.StartNew();
 
@@ -171,13 +172,13 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
             // [메트릭] 연결 획득 소요 시간 기록
             LibDbTelemetry.ConnectionAcquireDuration.Record(
                 sw.Elapsed.TotalMilliseconds,
-                new KeyValuePair<string, object?>("instance", instanceHash));
+                new KeyValuePair<string, object?>("instance", diagnosticInstance));
 
             // [메트릭] PoolWaitThresholdMs 이상이면 풀 대기로 간주
             if (sw.ElapsedMilliseconds > PoolWaitThresholdMs)
             {
                 LibDbTelemetry.ConnectionPoolWaits.Add(1,
-                    new KeyValuePair<string, object?>("instance", instanceHash));
+                    new KeyValuePair<string, object?>("instance", diagnosticInstance));
             }
         }
         catch (Exception ex)
@@ -190,7 +191,7 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
                 : "other";
 
             LibDbTelemetry.ConnectionPoolTimeouts.Add(1,
-                new KeyValuePair<string, object?>("instance", instanceHash),
+                new KeyValuePair<string, object?>("instance", diagnosticInstance),
                 new KeyValuePair<string, object?>("reason", reason));
 
             // Open 실패 시 커넥션 핸들/소켓 등 리소스 누수를 막기 위해 즉시 해제합니다.
@@ -447,7 +448,7 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
     /// <returns>버전과 컬럼 목록을 포함한 <see cref="TvpMetadata"/>를 반환합니다.</returns>
     /// <remarks>
     /// <para>
-    /// TVP는 <see cref="sys.table_types"/>와 해당 타입의 내부 테이블 객체(<see cref="sys.objects"/>)를 조인하여 수정 시각을 산출합니다.
+    /// TVP는 <c>sys.table_types</c>와 해당 타입의 내부 테이블 객체(<c>sys.objects</c>)를 조인하여 수정 시각을 산출합니다.
     /// </para>
     /// </remarks>
     public async Task<TvpMetadata> GetTvpMetadataAsync(string name, string instanceHash, CancellationToken ct)
@@ -515,10 +516,10 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
     #region [일괄 조회] 스키마 전체 메타데이터(필터 포함)
 
     /// <summary>
-    /// 지정한 스키마(<paramref name="schemaName"/>)에 대해
+    /// 지정한 스키마 목록(<paramref name="schemaNames"/>)에 대해
     /// SP/TVP 목록과 각 SP의 파라미터, 각 TVP의 컬럼을 <b>한 번의 왕복</b>으로 일괄 조회합니다.
     /// </summary>
-    /// <param name="schemaName">스키마 이름(예: <c>dbo</c>)</param>
+    /// <param name="schemaNames">스키마 이름 목록(예: <c>dbo</c>)</param>
     /// <param name="instanceHash">DB 인스턴스 식별자(연결 문자열 키)</param>
     /// <param name="includePatterns">
     /// 포함 패턴 목록입니다. (예: <c>*Order*</c>, <c>usp_*</c>)

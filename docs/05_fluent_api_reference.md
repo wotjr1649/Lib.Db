@@ -26,7 +26,7 @@ IProcedureStage (1단계: 명령 선택)
 |
 +-- .Procedure("sp_name") ----> IParameterStage
 +-- .Sql("raw sql") ----------> IParameterStage
-+-- .Sql($"interpolated {v}") -> IParameterStage (자동 파라미터화)
++-- .SqlInterpolated($"interpolated {v}") -> IParameterStage (자동 파라미터화)
 
 IParameterStage (2단계: 파라미터/옵션) [IExecutionStage<object> 상속]
 |
@@ -96,8 +96,13 @@ public interface IProcedureStage
     IParameterStage Procedure(string spName);
     IParameterStage Sql(string sqlText);
     IParameterStage Sql(FormattableString sql);
+    IParameterStage SqlInterpolated(FormattableString sql)
+        => Sql(sql);
 }
 ```
+
+`Sql(string)`은 Raw SQL 텍스트를 그대로 전달합니다. 사용자 입력 값은 문자열 결합하지 말고 `SqlInterpolated(FormattableString)`, `Sql(FormattableString)` 또는 `.With(...)` 파라미터로 전달하세요.
+`SqlInterpolated(FormattableString)`는 외부 구현체 호환성을 위해 default interface method로 제공되며, 기본 동작은 `Sql(FormattableString)` 위임입니다.
 
 ### 2-4. IParameterStage (2단계)
 
@@ -231,16 +236,19 @@ DbResult<int> result = await session.Default
     .ExecuteAsync();
 ```
 
-### 5-4. 보간 SQL (자동 파라미터화)
+### 5-4. 보간 SQL (값 인수 자동 파라미터화)
 
-`FormattableString` 오버로드를 사용하면 보간 인수가 자동으로 `@p0`, `@p1`, ... 파라미터로 변환됩니다. SQL Injection이 원천 차단됩니다.
+`SqlInterpolated(FormattableString)` 또는 `Sql(FormattableString)`를 사용하면 보간 값 인수가 `@p0`, `@p1`, ... 파라미터로 변환됩니다.
+이 경로는 값 기반 SQL injection 위험을 줄이지만, SQL 구조 전체를 검증하는 파서는 아닙니다.
+테이블명, 컬럼명, 정렬 방향 같은 식별자/구문 조각은 사용자 입력을 직접 조립하지 말고 allow-list로 선택하세요.
+보간 SQL 뒤의 `.With(...)`는 수동 명명 파라미터를 추가로 병합할 때만 사용하세요. 자동 생성된 `@pN` 이름과 충돌하면 예외가 발생합니다.
 
 ```csharp
 int userId = 42;
 string name = "Alice";
 
 DbResult<User?> result = await session.Default
-    .Sql($"SELECT * FROM Users WHERE Id = {userId} AND Name = {name}")
+    .SqlInterpolated($"SELECT * FROM Users WHERE Id = {userId} AND Name = {name}")
     .QuerySingleAsync<User>();
 // 실제 실행 SQL: SELECT * FROM Users WHERE Id = @p0 AND Name = @p1
 ```

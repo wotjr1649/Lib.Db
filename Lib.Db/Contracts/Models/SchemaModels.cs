@@ -135,12 +135,12 @@ public sealed record TvpSchema : SchemaBase
 /// TVP 내부 컬럼 메타데이터입니다.
 /// <para>
 /// <b>[설계 의도]</b><br/>
-/// - <b>고속 비교(Fast Compare)</b>: <see cref="NameHash"/> 필드를 미리 계산하여 저장함으로써, 대량의 컬럼 비교 시 문자열 비교 비용을 제거합니다.<br/>
+/// - <b>고속 비교(Fast Compare)</b>: <see cref="NameHash"/> 필드를 미리 계산하여 저장함으로써, 대량의 컬럼 비교에서 최종 문자열 비교 전 후보를 빠르게 선별합니다.<br/>
 /// - <b>메모리 최적화</b>: 수십~수백 개의 컬럼 정보를 힙 할당 없이 스택 기반으로 처리하기 위해 <c>readonly record struct</c>를 사용합니다.
 /// </para>
 /// </summary>
 /// <param name="Name">컬럼 이름</param>
-/// <param name="NameHash">컬럼 이름의 사전 계산된 해시 값</param>
+/// <param name="NameHash">컬럼 이름의 사전 계산된 해시 값. 실제 이름 일치 여부는 문자열 비교로 최종 확인됩니다.</param>
 /// <param name="MaxLength">최대 길이 (문자열/바이너리 계열)</param>
 /// <param name="Ordinal">컬럼 순서 (0-based)</param>
 /// <param name="SqlDbType">SQL Server 데이터 타입</param>

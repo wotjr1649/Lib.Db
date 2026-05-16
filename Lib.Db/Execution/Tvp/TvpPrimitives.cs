@@ -170,8 +170,8 @@ internal sealed class TypedColumnBuffer<T> : ColumnBuffer, ITvpColumn<T>
 /// 컬럼 기반으로 저장된 TVP 데이터를 행(Row) 단위로 읽을 수 있도록 변환하는 <see cref="DbDataReader"/> 구현체입니다.
 /// <para>
 /// <b>[사용 시나리오]</b><br/>
-/// - <see cref="System.Data.SqlClient.SqlParameter"/>의 Value로 TVP를 전달할 때 사용됩니다.<br/>
-/// - <see cref="System.Data.SqlClient.SqlBulkCopy.WriteToServerAsync"/>의 소스 데이터로 사용됩니다.<br/>
+/// - <c>SqlParameter</c>의 Value로 TVP를 전달할 때 사용됩니다.<br/>
+/// - <c>SqlBulkCopy.WriteToServerAsync</c>의 소스 데이터로 사용됩니다.<br/>
 /// </para>
 /// <para>
 /// <b>[성능 특징]</b><br/>
@@ -180,6 +180,7 @@ internal sealed class TypedColumnBuffer<T> : ColumnBuffer, ITvpColumn<T>
 /// - <b>비동기 제거:</b> 메모리상의 데이터를 읽으므로 I/O 대기가 없어 대부분의 메서드가 동기적으로 동작합니다.
 /// </para>
 /// </summary>
+#pragma warning disable CS1591 // DbDataReader-compatible members intentionally inherit framework semantics.
 public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
 {
     private readonly ColumnBuffer[] _columns;
@@ -511,4 +512,5 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 }
+#pragma warning restore CS1591
 #endregion

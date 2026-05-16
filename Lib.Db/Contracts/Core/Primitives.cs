@@ -38,14 +38,20 @@ public interface IDbObjectTrait
 /// <summary>저장 프로시저(SP) 특성 정의</summary>
 public readonly struct SpTrait : IDbObjectTrait
 {
+    /// <inheritdoc />
     public static string DisplayName => "저장 프로시저(SP)";
+
+    /// <inheritdoc />
     public static string DefaultSchema => "dbo";
 }
 
 /// <summary>테이블 값 매개변수(TVP) 특성 정의</summary>
 public readonly struct TvpTrait : IDbObjectTrait
 {
+    /// <inheritdoc />
     public static string DisplayName => "테이블 값 매개변수(TVP)";
+
+    /// <inheritdoc />
     public static string DefaultSchema => "dbo";
 }
 
@@ -189,10 +195,14 @@ public readonly record struct DbObjectName<TTrait>(string Schema, string Name)
     /// <inheritdoc />
     public string ToString(string? format, IFormatProvider? formatProvider) => FullName;
 
-    // 암시적 변환: DbObjectName -> string
+    /// <summary>
+    /// DB 객체 식별자를 전체 이름 문자열로 변환합니다.
+    /// </summary>
     public static implicit operator string(DbObjectName<TTrait> id) => id.FullName;
 
-    // 암시적 변환: string -> DbObjectName (편의성 제공, 파싱 수행)
+    /// <summary>
+    /// 문자열을 DB 객체 식별자로 변환합니다.
+    /// </summary>
     public static implicit operator DbObjectName<TTrait>(string value) => Parse(value);
 
     #endregion
@@ -234,9 +244,17 @@ public readonly record struct DbInstanceId(string Value)
     /// <summary>"Raw:" 접두사가 붙은 Ad-hoc 연결 문자열인지 확인합니다 (고속 비교).</summary>
     public bool IsRawConnectionString => Value.StartsWith("Raw:", StringComparison.Ordinal);
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 
+    /// <summary>
+    /// 인스턴스 식별자를 원본 문자열 값으로 변환합니다.
+    /// </summary>
     public static implicit operator string(DbInstanceId id) => id.Value;
+
+    /// <summary>
+    /// 문자열을 인스턴스 식별자로 변환합니다.
+    /// </summary>
     public static implicit operator DbInstanceId(string value) => new(value);
 }
 

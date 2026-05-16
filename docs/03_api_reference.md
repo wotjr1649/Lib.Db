@@ -27,10 +27,22 @@ DB 작업의 유일한 진입점입니다. DI 컨테이너에서 `Scoped`로 등
 | 멤버 | 시그니처 | 설명 |
 |---|---|---|
 | `Procedure` | `IParameterStage Procedure(string spName)` | 저장 프로시저 지정 |
-| `Sql` | `IParameterStage Sql(string sqlText)` | Raw SQL 텍스트 지정 |
-| `Sql` | `IParameterStage Sql(FormattableString sql)` | 보간 SQL (파라미터 자동 추출, Zero-Allocation) |
+| `Sql` | `IParameterStage Sql(string sqlText)` | Raw SQL 텍스트 지정. 사용자 입력은 문자열 결합하지 말고 파라미터로 전달 |
+| `Sql` | `IParameterStage Sql(FormattableString sql)` | 보간 SQL (값 인수 파라미터 자동 추출) |
+| `SqlInterpolated` | `IParameterStage SqlInterpolated(FormattableString sql)` | 보간 SQL을 명시적으로 선택하는 파라미터화 API |
 
 ---
+
+## 2-1. Raw SQL 보안 옵션
+
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `RawSqlPolicy` | `Allow` | `CommandType.Text` 실행 정책. `DenyAllText`는 모든 Raw SQL 텍스트를 차단하고, `DenyWriteText`는 쓰기/DDL/권한/EXEC 계열 첫 토큰을 차단합니다. |
+| `ConnectionSecurityProfile` | `Development` | `Production` 설정 시 암호화 비활성, `TrustServerCertificate=True`, 고권한 기본 SQL 로그인 사용을 검증합니다. |
+
+`DenyWriteText`는 SQL 파서가 아니라 첫 SQL 토큰 기반의 전환기 보조 guardrail입니다.
+`WITH ... DELETE`, `DECLARE ... UPDATE`, `SELECT ...; DROP ...`처럼 앞 토큰이 읽기/선언 계열인 복합 SQL을 완전 차단하는 보안 경계로 간주하면 안 됩니다.
+운영에서 Raw SQL 자체를 금지하려면 `DenyAllText`와 DB 권한 분리를 함께 사용하세요.
 
 ## 3. IParameterStage
 
@@ -216,6 +228,7 @@ DB 명령 실행 전후를 가로채는 사용자 수준 인터셉터입니다.
 | 속성 | 타입 | 설명 |
 |---|---|---|
 | `CommandText` | `string` (required) | SP 이름 또는 SQL 텍스트 |
+| `DiagnosticCommandText` | `string?` | 진단/로그용 명령 텍스트. Raw SQL 원문 노출을 피하려면 이 값을 우선 사용 |
 | `CommandType` | `CommandType` (required) | 명령 유형 |
 | `InstanceName` | `string` (required) | 대상 인스턴스 이름 |
 | `StartTime` | `DateTime` | 실행 시작 시각 (UTC, 기본값: UtcNow) |

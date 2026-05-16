@@ -25,10 +25,8 @@ public static class TestOptionsFactory
         {
             ConnectionStrings = new Dictionary<string, string>
             {
-                ["Default"] =
-                    "Server=127.0.0.1;Database=LIBDB_VERIFICATION_TEST;User Id=sa;Password=123456;TrustServerCertificate=True;Encrypt=False;",
-                ["Admin"] =
-                    "Server=127.0.0.1;Database=LIBDB_VERIFICATION_TEST;User Id=sa;Password=123456;TrustServerCertificate=True;Encrypt=False;"
+                ["Default"] = TestConnectionStrings.Placeholder("LIBDB_VERIFICATION_TEST"),
+                ["Admin"] = TestConnectionStrings.Placeholder("LIBDB_VERIFICATION_TEST")
             },
             EnableSharedMemoryCache = false
         };
@@ -55,8 +53,7 @@ public static class TestOptionsFactory
         {
             ConnectionStrings = new Dictionary<string, string>
             {
-                ["Default"] =
-                    "Server=127.0.0.1;Database=TEST;User Id=sa;Password=123456;TrustServerCertificate=True;Encrypt=False;"
+                ["Default"] = TestConnectionStrings.Placeholder("TEST")
             }
         };
     }

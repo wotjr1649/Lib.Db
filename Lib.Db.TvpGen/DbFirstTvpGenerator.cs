@@ -49,13 +49,107 @@ public sealed class DbFirstTvpGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    /// <summary>스키마에 TVP 이름은 있으나 컬럼 정의가 없는 경우 경고</summary>
+    private static readonly DiagnosticDescriptor EmptyTvpSchema = new(
+        "LIBDB003",
+        "빈 TVP 스키마",
+        "TVP '{0}'에 컬럼 정의가 없어 생성 코드를 만들 수 없습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
+    /// <summary>스키마 컬럼명이 같은 C# 속성명으로 변환되는 경우 경고</summary>
+    private static readonly DiagnosticDescriptor PropertyNameCollision = new(
+        "LIBDB004",
+        "TVP 속성명 충돌",
+        "TVP '{0}'의 컬럼 '{1}'이(가) 컬럼 '{2}'와 같은 C# 속성명 '{3}'로 변환되어 생성 코드를 만들 수 없습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
+    /// <summary>DB-first TVP 생성 대상이 중첩 타입인 경우 에러</summary>
+    private static readonly DiagnosticDescriptor NestedTvpTargetNotSupported = new(
+        "LIBDB005",
+        "중첩 TVP 생성 대상 미지원",
+        "GenerateTvpFromDb 대상 '{0}'은 중첩 타입이므로 DB-first TVP 생성은 최상위 partial class에만 사용할 수 있습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>스키마 파일에 요청한 TVP 항목이 없는 경우 경고</summary>
+    private static readonly DiagnosticDescriptor TvpSchemaNotFound = new(
+        "LIBDB006",
+        "TVP 스키마 항목 미발견",
+        "libdb.schema.json에서 TVP '{0}' 항목을 찾을 수 없습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
+    /// <summary>DB-first TVP 생성 대상이 제네릭 타입인 경우 에러</summary>
+    private static readonly DiagnosticDescriptor GenericTvpTargetNotSupported = new(
+        "LIBDB007",
+        "제네릭 TVP 생성 대상 미지원",
+        "GenerateTvpFromDb 대상 '{0}'은 제네릭 타입이므로 DB-first TVP 생성은 비제네릭 partial class에만 사용할 수 있습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>DB-first TVP 생성 대상이 file-local 타입인 경우 에러</summary>
+    private static readonly DiagnosticDescriptor FileLocalTvpTargetNotSupported = new(
+        "LIBDB008",
+        "file-local TVP 생성 대상 미지원",
+        "GenerateTvpFromDb 대상 '{0}'은 file-local 타입이므로 DB-first TVP 생성은 일반 최상위 partial class에만 사용할 수 있습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>DB-first TVP 생성 대상이 record class인 경우 에러</summary>
+    private static readonly DiagnosticDescriptor RecordTvpTargetNotSupported = new(
+        "LIBDB009",
+        "record TVP 생성 대상 미지원",
+        "GenerateTvpFromDb 대상 '{0}'은 record 타입이므로 DB-first TVP 생성은 일반 partial class에만 사용할 수 있습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>DB-first TVP 생성 대상에 partial 키워드가 없는 경우 에러</summary>
+    private static readonly DiagnosticDescriptor NonPartialTvpTargetNotSupported = new(
+        "LIBDB010",
+        "partial TVP 생성 대상 필요",
+        "GenerateTvpFromDb 대상 '{0}'은 partial class가 아니므로 DB-first TVP 생성은 partial class에만 사용할 수 있습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>DB-first TVP 생성 대상이 static class인 경우 에러</summary>
+    private static readonly DiagnosticDescriptor StaticTvpTargetNotSupported = new(
+        "LIBDB011",
+        "static TVP 생성 대상 미지원",
+        "GenerateTvpFromDb 대상 '{0}'은 static class이므로 DB-first TVP 생성은 인스턴스 partial class에만 사용할 수 있습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>DB-first TVP 스키마에 지원하지 않는 SQL 타입이 있는 경우 에러</summary>
+    private static readonly DiagnosticDescriptor UnsupportedSqlType = new(
+        "LIBDB012",
+        "지원하지 않는 DB-first SQL 타입",
+        "TVP '{0}'의 컬럼 '{1}' SQL 타입 '{2}'은 지원하지 않으므로 생성 코드를 만들 수 없습니다",
+        "Lib.Db.TvpGen",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>
+    /// DB-first TVP DTO 생성을 위한 incremental pipeline을 구성합니다.
+    /// </summary>
+    /// <param name="context">Roslyn incremental generator 초기화 컨텍스트</param>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // 1. [GenerateTvpFromDb]가 붙은 클래스 찾기
         IncrementalValuesProvider<INamedTypeSymbol> classes = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 AttributeMetadataName,
-                predicate: static (node, _) => node is ClassDeclarationSyntax,
+                predicate: static (node, _) => node is ClassDeclarationSyntax or RecordDeclarationSyntax,
                 transform: static (ctx, _) => (INamedTypeSymbol)ctx.TargetSymbol)
             .WithComparer(SymbolEqualityComparer.Default);
 
@@ -104,15 +198,89 @@ public sealed class DbFirstTvpGenerator : IIncrementalGenerator
             (string? tvpName, bool usePascalCase) = GetAttributeOptions(classSymbol);
             if (tvpName is null) continue;
 
+            Location targetLocation = GetDiagnosticLocation(classSymbol, spc.CancellationToken);
+            string displayName = classSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+            if (classSymbol.ContainingType is not null)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    NestedTvpTargetNotSupported,
+                    targetLocation,
+                    displayName));
+                continue;
+            }
+
+            if (classSymbol.TypeParameters.Length > 0)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    GenericTvpTargetNotSupported,
+                    targetLocation,
+                    displayName));
+                continue;
+            }
+
+            if (GeneratorSharedHelpers.IsFileLocalType(classSymbol, spc.CancellationToken))
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    FileLocalTvpTargetNotSupported,
+                    targetLocation,
+                    displayName));
+                continue;
+            }
+
+            if (classSymbol.IsRecord)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    RecordTvpTargetNotSupported,
+                    targetLocation,
+                    displayName));
+                continue;
+            }
+
+            if (classSymbol.IsStatic)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    StaticTvpTargetNotSupported,
+                    targetLocation,
+                    displayName));
+                continue;
+            }
+
+            if (!IsPartialType(classSymbol, spc.CancellationToken))
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    NonPartialTvpTargetNotSupported,
+                    targetLocation,
+                    displayName));
+                continue;
+            }
+
             if (schema.Tvps.TryGetValue(tvpName, out List<ColumnDef>? columns))
             {
+                if (columns.Count == 0)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(EmptyTvpSchema, targetLocation, tvpName));
+                    continue;
+                }
+
+                if (TryReportPropertyNameCollision(spc, targetLocation, tvpName, columns, usePascalCase))
+                {
+                    continue;
+                }
+
+                if (TryReportUnsupportedSqlType(spc, targetLocation, tvpName, columns))
+                {
+                    continue;
+                }
+
                 string code = GenerateClass(classSymbol, columns, usePascalCase);
-                spc.AddSource($"{classSymbol.Name}.Generated.cs", SourceText.From(code, Encoding.UTF8));
+                spc.AddSource(
+                    GeneratorSharedHelpers.BuildSafeHintName(classSymbol, "_DbFirstTvp.g.cs"),
+                    SourceText.From(code, Encoding.UTF8));
             }
             else
             {
-                // TVP 이름이 스키마에 없음 — 경고 발생
-                spc.ReportDiagnostic(Diagnostic.Create(SchemaNotFound, Location.None));
+                spc.ReportDiagnostic(Diagnostic.Create(TvpSchemaNotFound, targetLocation, tvpName));
             }
         }
     }
@@ -136,10 +304,95 @@ public sealed class DbFirstTvpGenerator : IIncrementalGenerator
         return (name, usePascal);
     }
 
+    private static bool TryReportPropertyNameCollision(
+        SourceProductionContext spc,
+        Location location,
+        string tvpName,
+        List<ColumnDef> columns,
+        bool usePascal)
+    {
+        Dictionary<string, string> seen = new(StringComparer.Ordinal);
+
+        foreach (ColumnDef col in columns)
+        {
+            string propName = SharedHashUtils.EscapeIdentifier(usePascal ? ToPascalCase(col.Name) : col.Name);
+            if (seen.TryGetValue(propName, out string? existingColumn))
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    PropertyNameCollision,
+                    location,
+                    tvpName,
+                    col.Name,
+                    existingColumn,
+                    propName));
+                return true;
+            }
+
+            seen[propName] = col.Name;
+        }
+
+        return false;
+    }
+
+    private static bool TryReportUnsupportedSqlType(
+        SourceProductionContext spc,
+        Location location,
+        string tvpName,
+        List<ColumnDef> columns)
+    {
+        foreach (ColumnDef col in columns)
+        {
+            if (TypeMappingRegistry.TryMapSqlTypeToCSharp(col.Type, out _))
+                continue;
+
+            spc.ReportDiagnostic(Diagnostic.Create(
+                UnsupportedSqlType,
+                location,
+                tvpName,
+                col.Name,
+                col.Type));
+            return true;
+        }
+
+        return false;
+    }
+
+    private static Location GetDiagnosticLocation(INamedTypeSymbol symbol, CancellationToken ct)
+    {
+        foreach (SyntaxReference syntaxReference in symbol.DeclaringSyntaxReferences)
+        {
+            if (syntaxReference.GetSyntax(ct) is TypeDeclarationSyntax declaration)
+                return declaration.Identifier.GetLocation();
+        }
+
+        return symbol.Locations.FirstOrDefault(static location => location != Location.None) ?? Location.None;
+    }
+
+    private static bool IsPartialType(INamedTypeSymbol symbol, CancellationToken ct)
+    {
+        bool hasDeclaration = false;
+        foreach (SyntaxReference syntaxReference in symbol.DeclaringSyntaxReferences)
+        {
+            if (syntaxReference.GetSyntax(ct) is not TypeDeclarationSyntax declaration)
+                continue;
+
+            hasDeclaration = true;
+            if (!declaration.Modifiers.Any(SyntaxKind.PartialKeyword))
+                return false;
+        }
+
+        return hasDeclaration;
+    }
+
     private static string GenerateClass(INamedTypeSymbol symbol, List<ColumnDef> columns, bool usePascal)
     {
-        string ns = symbol.ContainingNamespace.ToDisplayString();
-        string className = symbol.Name;
+        string ns = symbol.ContainingNamespace.IsGlobalNamespace
+            ? string.Empty
+            : symbol.ContainingNamespace.ToDisplayString();
+        string className = SharedHashUtils.EscapeIdentifier(symbol.Name);
+        bool hasNamespace = ns.Length > 0;
+        string typeIndent = hasNamespace ? "    " : string.Empty;
+        string memberIndent = hasNamespace ? "        " : "    ";
 
         // 선언된 접근 제한자를 그대로 반영
         string accessModifier = symbol.DeclaredAccessibility switch
@@ -155,29 +408,35 @@ public sealed class DbFirstTvpGenerator : IIncrementalGenerator
         sb.AppendLine("using System.ComponentModel.DataAnnotations.Schema;");
         sb.AppendLine("using Lib.Db.Contracts.Models;"); // TvpRowAttribute
         sb.AppendLine();
-        sb.AppendLine($"namespace {ns}");
-        sb.AppendLine("{");
-        sb.AppendLine("    /// <summary>");
-        sb.AppendLine("    /// DB 스키마 기반 자동 생성 TVP DTO");
-        sb.AppendLine("    /// </summary>");
-        sb.AppendLine($"    [TvpRow(TypeName = \"{columns[0].TvpName}\")] // 메타데이터 주입");
-        sb.AppendLine($"    {accessModifier} partial class {className}");
-        sb.AppendLine("    {");
+        if (hasNamespace)
+        {
+            sb.AppendLine($"namespace {ns}");
+            sb.AppendLine("{");
+        }
+
+        sb.AppendLine($"{typeIndent}/// <summary>");
+        sb.AppendLine($"{typeIndent}/// DB 스키마 기반 자동 생성 TVP DTO");
+        sb.AppendLine($"{typeIndent}/// </summary>");
+        sb.AppendLine($"{typeIndent}[TvpRow(TypeName = \"{SharedHashUtils.EscapeStringLiteral(columns[0].TvpName)}\")] // 메타데이터 주입");
+        sb.AppendLine($"{typeIndent}{accessModifier} partial class {className}");
+        sb.AppendLine($"{typeIndent}{{");
 
         foreach (ColumnDef col in columns)
         {
-            string propName = usePascal ? ToPascalCase(col.Name) : col.Name;
-            string typeName = TypeMappingRegistry.MapSqlTypeToCSharp(col.Type);
+            string propName = SharedHashUtils.EscapeIdentifier(usePascal ? ToPascalCase(col.Name) : col.Name);
+            _ = TypeMappingRegistry.TryMapSqlTypeToCSharp(col.Type, out string typeName);
 
-            sb.AppendLine("        /// <summary>");
-            sb.AppendLine($"        /// {col.Name} ({col.Type})");
-            sb.AppendLine("        /// </summary>");
-            sb.AppendLine($"        public {typeName} {propName} {{ get; set; }}");
+            sb.AppendLine($"{memberIndent}/// <summary>");
+            sb.AppendLine($"{memberIndent}/// {SharedHashUtils.EscapeXmlText(col.Name)} ({SharedHashUtils.EscapeXmlText(col.Type)})");
+            sb.AppendLine($"{memberIndent}/// </summary>");
+            sb.AppendLine($"{memberIndent}public {typeName} {propName} {{ get; set; }}");
             sb.AppendLine();
         }
 
-        sb.AppendLine("    }");
-        sb.AppendLine("}");
+        sb.AppendLine($"{typeIndent}}}");
+        if (hasNamespace)
+            sb.AppendLine("}");
+
         return sb.ToString();
     }
 
@@ -248,7 +507,6 @@ internal static partial class MiniJsonParser
     {
         try
         {
-            SchemaRoot root = new();
             // "Tvps": { ... } 찾기
             // 복잡한 중첩 파싱 대신, 정규식으로 "Key": [Array] 패턴을 찾습니다.
             // 1. "Tvps" 블록 추출

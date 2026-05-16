@@ -23,7 +23,7 @@ namespace Lib.Db.Core;
 /// <b>[설계 의도]</b><br/>
 /// - <b>단방향 전파</b>: AsyncLocal을 통해 호출 스택 깊숙한 곳까지 컨텍스트를 전달합니다.<br/>
 /// - <b>불변성(Immutability)</b>: 구조체가 불변이므로 멀티스레드 환경에서 안전하게 공유됩니다.<br/>
-/// - <b>관진단 용이성</b>: CorrelationId와 CommandText를 포함하여 분산 추적 및 로깅에 필수적인 정보를 제공합니다.
+/// - <b>진단 용이성</b>: 내부 실행 흐름에는 CommandText를 전달하되, 예외/로그 출력 시에는 별도 redaction 정책을 적용합니다.
 /// </para>
 /// </summary>
 internal readonly record struct DbExecutionContext(

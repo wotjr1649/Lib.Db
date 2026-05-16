@@ -6,7 +6,9 @@
 
 #nullable enable
 
+using System.Collections;
 using System.Globalization;
+using System.Reflection;
 using Lib.Db.Contracts.Core;
 using Lib.Db.Contracts.Entry;
 using Lib.Db.Contracts.Execution;
@@ -77,7 +79,7 @@ internal sealed class DbRequestBuilder : IProcedureStage, IParameterStage
     /// <summary>
     /// 실행할 인라인 SQL 쿼리를 지정합니다.
     /// </summary>
-    /// <param name="sqlText">SQL 쿼리 문장 (예: SELECT * FROM Users WHERE Id = @Id)</param>
+    /// <param name="sqlText">SQL 쿼리 문장. 사용자 입력은 문자열 결합하지 말고 파라미터로 전달해야 합니다.</param>
     /// <returns>파라미터 설정 단계로 이동</returns>
     public IParameterStage Sql(string sqlText)
     {
@@ -88,10 +90,10 @@ internal sealed class DbRequestBuilder : IProcedureStage, IParameterStage
 
     /// <summary>
     /// FormattableString(보간된 문자열)을 사용하여 SQL을 지정합니다.
-    /// <para>보간 인수는 자동으로 파라미터화되어 SQL Injection을 방지합니다.</para>
+    /// <para>보간 값 인수는 자동으로 파라미터화되어 값 기반 SQL injection 위험을 줄입니다.</para>
     /// </summary>
     /// <param name="sql">보간된 SQL 문자열</param>
-    /// <returns>파라미터 설정 단계로 이동</returns>
+    /// <returns>보간 인수로 생성된 파라미터를 유지하는 단계로 이동합니다. 추가 <c>With(...)</c> 호출은 충돌 없는 명명 파라미터를 병합합니다.</returns>
     public IParameterStage Sql(FormattableString sql)
     {
         // FormattableString에서 파라미터를 추출하여 Dictionary로 변환
@@ -111,20 +113,27 @@ internal sealed class DbRequestBuilder : IProcedureStage, IParameterStage
         _commandText = string.Format(CultureInfo.InvariantCulture, format, paramNames);
         _commandType = CommandType.Text;
 
-        // IParameterStage를 반환하되, 이미 파라미터가 확정된 ExecutionStage를 내부에서 사용
-        // With(parameters)를 통해 ExecutionStage로 전환
+        // IParameterStage를 반환하되, 보간식에서 추출한 파라미터를 보존한다.
+        // FormattableStringParameterStage는 추가 With(...) 호출 시 충돌 없는 명명 파라미터만 병합한다.
         return new FormattableStringParameterStage(
             _executor, _instanceName, _commandText, _commandType, parameters, _timeout, _schemaModeOverride);
     }
 
     /// <summary>
-    /// SqlInterpolatedStringHandler를 사용한 Zero-Allocation SQL 생성 및 자동 파라미터화
+    /// 명시적인 보간 SQL API입니다. <see cref="Sql(FormattableString)"/>와 동일하게 보간 값 인수를 파라미터화합니다.
+    /// </summary>
+    public IParameterStage SqlInterpolated(FormattableString sql)
+    {
+        return Sql(sql);
+    }
+
+    /// <summary>
+    /// SqlInterpolatedStringHandler를 사용한 SQL 생성 및 보간 값 인수 파라미터화
     /// <para>
     /// <b>[Zero-Allocation 전략]</b><br/>
     /// - ArrayPool 기반 버퍼 관리<br/>
     /// - Span&lt;char&gt; 기반 문자열 조합<br/>
-    /// - 자동 파라미터 수집 (@p0, @p1, ...)<br/>
-    /// - SQL Injection 자동 방지
+    /// - 자동 파라미터 수집 (@p0, @p1, ...)
     /// </para>
     /// </summary>
     /// <param name="handler">컴파일러가 자동 생성하는 SqlInterpolatedStringHandler</param>
@@ -214,7 +223,7 @@ internal sealed class DbRequestBuilder : IProcedureStage, IParameterStage
 
 /// <summary>
 /// FormattableString Sql() 호출 시 이미 파라미터가 확정된 상태를 나타내는 스테이지입니다.
-/// <para>IParameterStage를 구현하여 추가 With() 호출도 허용합니다.</para>
+/// <para>추가 With() 호출은 보간식에서 추출한 파라미터와 충돌하지 않는 명명 파라미터만 병합합니다.</para>
 /// </summary>
 internal sealed class FormattableStringParameterStage : IParameterStage
 {
@@ -249,7 +258,17 @@ internal sealed class FormattableStringParameterStage : IParameterStage
 
     /// <inheritdoc/>
     public IExecutionStage<TParams> With<TParams>(TParams parameters)
-        => new ExecutionStage<TParams>(_executor, _instanceName, _commandText, _commandType, parameters, _timeout, _schemaModeOverride);
+    {
+        Dictionary<string, object?> mergedParameters = MergeParameters(_parameters, parameters);
+        return new FormattableStringMergedExecutionStage<TParams>(
+            _executor,
+            _instanceName,
+            _commandText,
+            _commandType,
+            mergedParameters,
+            _timeout,
+            _schemaModeOverride);
+    }
 
     /// <inheritdoc/>
     public IParameterStage WithTimeout(int timeoutSeconds)
@@ -277,6 +296,138 @@ internal sealed class FormattableStringParameterStage : IParameterStage
     /// <inheritdoc/>
     public Task<DbResult<int>> ExecuteAsync(CancellationToken ct = default)
         => AsExecutionStage().ExecuteAsync(ct);
+
+    private static Dictionary<string, object?> MergeParameters<TParams>(
+        Dictionary<string, object?> generatedParameters,
+        TParams additionalParameters)
+    {
+        Dictionary<string, object?> merged = new(generatedParameters, StringComparer.OrdinalIgnoreCase);
+
+        if (additionalParameters is null)
+            return merged;
+
+        foreach (KeyValuePair<string, object?> parameter in EnumerateNamedParameters(additionalParameters))
+            AddParameter(merged, parameter.Key, parameter.Value);
+
+        return merged;
+    }
+
+    private static IEnumerable<KeyValuePair<string, object?>> EnumerateNamedParameters(object parameters)
+    {
+        if (parameters is IEnumerable<KeyValuePair<string, object?>> typedPairs)
+        {
+            foreach (KeyValuePair<string, object?> pair in typedPairs)
+                yield return pair;
+
+            yield break;
+        }
+
+        if (parameters is IDictionary dictionary)
+        {
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                if (entry.Key is not string key)
+                    throw new InvalidOperationException("FormattableString 기반 Sql() 뒤의 With()는 문자열 이름을 가진 파라미터만 병합할 수 있습니다.");
+
+                yield return new KeyValuePair<string, object?>(key, entry.Value);
+            }
+
+            yield break;
+        }
+
+        Type parameterType = parameters.GetType();
+        if (IsScalarParameterObject(parameterType))
+            throw new InvalidOperationException("FormattableString 기반 Sql() 뒤의 With()는 이름 있는 파라미터 객체 또는 Dictionary만 사용할 수 있습니다.");
+
+        bool hasReadableProperty = false;
+        foreach (PropertyInfo property in parameterType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!property.CanRead || property.GetIndexParameters().Length > 0)
+                continue;
+
+            hasReadableProperty = true;
+            yield return new KeyValuePair<string, object?>(property.Name, property.GetValue(parameters));
+        }
+
+        if (!hasReadableProperty)
+            throw new InvalidOperationException("FormattableString 기반 Sql() 뒤의 With()는 이름 있는 파라미터 객체 또는 Dictionary만 사용할 수 있습니다.");
+    }
+
+    private static void AddParameter(Dictionary<string, object?> parameters, string? name, object? value)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new InvalidOperationException("파라미터 이름은 비어 있을 수 없습니다.");
+
+        string candidateName = name.Trim();
+        string normalizedName = NormalizeParameterName(candidateName);
+        foreach (string existingName in parameters.Keys)
+        {
+            if (NormalizeParameterName(existingName).Equals(normalizedName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"FormattableString 기반 Sql()의 자동 파라미터와 With() 파라미터 이름이 충돌합니다: '{candidateName}'.");
+            }
+        }
+
+        parameters[candidateName] = value;
+    }
+
+    private static string NormalizeParameterName(string name)
+        => name.Trim().TrimStart('@');
+
+    private static bool IsScalarParameterObject(Type type)
+        => type.IsPrimitive
+            || type.IsEnum
+            || type == typeof(string)
+            || type == typeof(decimal)
+            || type == typeof(DateTime)
+            || type == typeof(DateTimeOffset)
+            || type == typeof(Guid)
+            || type == typeof(TimeSpan);
+}
+
+internal sealed class FormattableStringMergedExecutionStage<TParams> : IExecutionStage<TParams>
+{
+    private readonly ExecutionStage<Dictionary<string, object?>> _inner;
+
+    public FormattableStringMergedExecutionStage(
+        IDbExecutor executor,
+        string instanceName,
+        string commandText,
+        CommandType commandType,
+        Dictionary<string, object?> parameters,
+        int? timeout,
+        SchemaResolutionMode? schemaModeOverride)
+    {
+        _inner = new ExecutionStage<Dictionary<string, object?>>(
+            executor,
+            instanceName,
+            commandText,
+            commandType,
+            parameters,
+            timeout,
+            schemaModeOverride);
+    }
+
+    /// <inheritdoc/>
+    public Task<DbResult<IAsyncEnumerable<TResult>>> QueryAsync<TResult>(CancellationToken ct = default)
+        => _inner.QueryAsync<TResult>(ct);
+
+    /// <inheritdoc/>
+    public Task<DbResult<TResult?>> QuerySingleAsync<TResult>(CancellationToken ct = default)
+        => _inner.QuerySingleAsync<TResult>(ct);
+
+    /// <inheritdoc/>
+    public Task<DbResult<TScalar?>> ExecuteScalarAsync<TScalar>(CancellationToken ct = default)
+        => _inner.ExecuteScalarAsync<TScalar>(ct);
+
+    /// <inheritdoc/>
+    public Task<DbResult<IMultipleResultReader>> QueryMultipleAsync(CancellationToken ct = default)
+        => _inner.QueryMultipleAsync(ct);
+
+    /// <inheritdoc/>
+    public Task<DbResult<int>> ExecuteAsync(CancellationToken ct = default)
+        => _inner.ExecuteAsync(ct);
 }
 
 #endregion

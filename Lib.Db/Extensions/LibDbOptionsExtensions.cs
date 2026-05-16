@@ -95,6 +95,14 @@ public static class LibDbOptionsExtensions
             options.SchemaRefreshIntervalSeconds = sris;
         if (bool.TryParse(section["EnableDryRun"], out bool edr))
             options.EnableDryRun = edr;
+        if (Enum.TryParse(section["RawSqlPolicy"], ignoreCase: true, out RawSqlPolicy rawSqlPolicy))
+            options.RawSqlPolicy = rawSqlPolicy;
+        if (Enum.TryParse(section["ConnectionSecurityProfile"], ignoreCase: true, out ConnectionSecurityProfile securityProfile))
+            options.ConnectionSecurityProfile = securityProfile;
+        if (bool.TryParse(section["AllowProductionTrustServerCertificateWaiver"], out bool allowTrustWaiver))
+            options.AllowProductionTrustServerCertificateWaiver = allowTrustWaiver;
+        if (bool.TryParse(section["AllowProductionSaLoginWaiver"], out bool allowSaWaiver))
+            options.AllowProductionSaLoginWaiver = allowSaWaiver;
 
         // ConnectionStringNames (List)
         IConfigurationSection connNamesSection = section.GetSection("ConnectionStringNames");

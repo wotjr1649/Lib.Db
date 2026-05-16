@@ -68,6 +68,20 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     #endregion
 
+    #region 진단 상태
+
+    /// <summary>
+    /// 공유 메모리 초기화 실패 등으로 폴백 캐시만 사용하는 상태인지 여부입니다.
+    /// </summary>
+    public bool IsFallbackMode => _isFallbackMode;
+
+    /// <summary>
+    /// 현재 캐시 동작 모드입니다.
+    /// </summary>
+    public string CacheMode => _isFallbackMode ? "fallback" : "shared-memory";
+
+    #endregion
+
     #region 내부 구조
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -141,6 +155,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     #region IDistributedCache 구현 - Get
 
+    /// <inheritdoc />
     public byte[]? Get(string key)
     {
         using Activity? activity = s_activitySource.StartActivity("CacheGet");
@@ -237,8 +252,12 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
     }
 
+    /// <inheritdoc />
     public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return Task.FromCanceled<byte[]?>(token);
+
         // IPC Mutex는 비동기를 지원하지 않으므로 동기 호출 위임 (Task.Run 불필요 in fast path)
         return Task.FromResult(Get(key));
     }
@@ -247,6 +266,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     #region IDistributedCache 구현 - Set
 
+    /// <inheritdoc />
     public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
     {
         using Activity? activity = s_activitySource.StartActivity("CacheSet");
@@ -332,8 +352,12 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
     }
 
+    /// <inheritdoc />
     public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return Task.FromCanceled(token);
+
         Set(key, value, options);
         return Task.CompletedTask;
     }
@@ -342,6 +366,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     #region IDistributedCache 구현 - Remove & Refresh
 
+    /// <inheritdoc />
     public void Remove(string key)
     {
         // [Fallback 모드] _mutexStripes.Value가 빈 배열이므로 인덱싱 시 IndexOutOfRangeException 방지
@@ -382,8 +407,12 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
     }
 
+    /// <inheritdoc />
     public Task RemoveAsync(string key, CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return Task.FromCanceled(token);
+
         Remove(key);
         return Task.CompletedTask;
     }
@@ -402,6 +431,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     /// </summary>
     public Task RefreshAsync(string key, CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return Task.FromCanceled(token);
+
         /* Sliding Expiration 미지원 — 의도적 no-op */
         return Task.CompletedTask;
     }
@@ -410,9 +442,6 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     #region 유지보수
 
-    /// <summary>
-    /// 만료된 캐시/용량 초과 정리 (동기)
-    /// </summary>
     /// <summary>
     /// 만료된 캐시/용량 초과 정리 (동기)
     /// </summary>
@@ -529,6 +558,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
     #region IDisposable
 
+    /// <inheritdoc />
     public void Dispose()
     {
         _disposed = true;

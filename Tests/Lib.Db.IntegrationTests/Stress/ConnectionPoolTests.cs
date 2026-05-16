@@ -20,6 +20,8 @@ public sealed class ConnectionPoolTests(MultiDbFixture fixture)
 
     private readonly IProcedureStage _db = fixture.Verification;
     private readonly IDbSession _session = fixture.Session;
+    private readonly string _limitedPoolConnectionString =
+        TestConnectionStrings.WithMaxPoolSize(fixture.GetConnectionString(TestConnectionStrings.Verification), 5);
 
     #endregion
 
@@ -88,13 +90,11 @@ public sealed class ConnectionPoolTests(MultiDbFixture fixture)
     [Fact]
     public async Task CP03_ExceedMaxPoolSize_ShouldWaitAndSucceed()
     {
-        // Arrange — Max Pool Size=5 연결 문자열
-        string cs = "Server=127.0.0.1;Database=LIBDB_VERIFICATION_TEST;User Id=sa;Password=123456;TrustServerCertificate=True;Encrypt=False;Max Pool Size=5;Connection Timeout=30;";
-
+        // Arrange
         List<Task<DbResult<int>>> tasks = [];
         for (int i = 0; i < 10; i++)
         {
-            tasks.Add(_session.UseConnectionString(cs)
+            tasks.Add(_session.UseConnectionString(_limitedPoolConnectionString)
                 .Sql("WAITFOR DELAY '00:00:01'; SELECT 1 AS Val")
                 .ExecuteScalarAsync<int>());
         }

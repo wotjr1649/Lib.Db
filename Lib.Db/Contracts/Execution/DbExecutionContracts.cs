@@ -21,7 +21,7 @@ namespace Lib.Db.Contracts.Execution;
 /// 데이터베이스 실행기의 최상위 진입점입니다.
 /// <para>
 /// <b>[설계 의도]</b><br/>
-/// - <b>추상화 & 캡슐화</b>: 복잡한 실행 세부 사항(전략, 로깅, 재시도, 커넥션 관리)을 숨기고, 일관된 호출 방식을 제공합니다.<br/>
+/// - <b>추상화 &amp; 캡슐화</b>: 복잡한 실행 세부 사항(전략, 로깅, 재시도, 커넥션 관리)을 숨기고, 일관된 호출 방식을 제공합니다.<br/>
 /// - <b>유연성</b>: <see cref="DbExecutionOptions"/>를 통해 실행별 동작을 미세 조정할 수 있습니다.<br/>
 /// - <b>확장성</b>: 표준 쿼리뿐만 아니라 Bulk, Pipeline, Resumable 등 다양한 워크로드를 단일 인터페이스로 지원합니다.
 /// </para>
@@ -196,7 +196,7 @@ public enum SchemaResolutionMode
 /// 개별 DB 명령 실행 시 적용되는 내부 실행 옵션입니다.
 /// <para>
 /// <b>[설계 의도]</b><br/>
-/// - <b>불변성(Immutability) & 성능</b>: <c>readonly record struct</c>로 정의하여 값 복사 비용을 줄이고 스레드 안전성을 보장합니다.<br/>
+/// - <b>불변성(Immutability) &amp; 성능</b>: <c>readonly record struct</c>로 정의하여 값 복사 비용을 줄이고 스레드 안전성을 보장합니다.<br/>
 /// - <b>세밀한 제어</b>: 전역 설정 대신, 특정 쿼리에 대해서만 타임아웃이나 스키마 모드를 변경해야 할 때 사용합니다.
 /// </para>
 /// <para>

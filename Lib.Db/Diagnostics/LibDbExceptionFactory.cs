@@ -74,10 +74,10 @@ internal static class LibDbExceptionFactory
             $"TVP(사용자 정의 테이블 타입) '{udtName}' 검증에 실패했습니다. 원인: {reason}");
     }
 
-    public static Exception CreateCommandExecutionFailed(string commandText, Exception inner)
+    public static Exception CreateCommandExecutionFailed(Exception inner)
     {
         return new InvalidOperationException(
-            $"명령 실행 중 오류가 발생했습니다. (Target: {Truncate(commandText, 50)})", inner);
+            "명령 실행 중 오류가 발생했습니다. 자세한 SQL 원문은 보안상 예외 메시지에 포함하지 않습니다.", inner);
     }
 
     public static Exception CreateSchemaMismatch(string spName, int errorCode)
@@ -85,13 +85,6 @@ internal static class LibDbExceptionFactory
         return new InvalidOperationException(
             $"저장 프로시저 '{spName}'의 스키마 불일치(Error: {errorCode})가 감지되었습니다. " +
             "스키마 캐시가 만료되었거나 파라미터 정의가 DB와 다릅니다.");
-    }
-
-    private static string Truncate(string s, int max)
-    {
-        if (string.IsNullOrEmpty(s))
-            return "";
-        return s.Length <= max ? s : s[..max] + "...";
     }
 
     #endregion

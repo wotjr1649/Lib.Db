@@ -112,15 +112,16 @@ public partial class AppJsonContext : JsonSerializerContext;
 
 ## 3. 성능 최적화
 
-### 3-1. Zero-Allocation SQL 처리
+### 3-1. 보간 SQL 파라미터 처리
 
-`SqlInterpolatedStringHandler`가 보간 문자열을 처리합니다.
+공개 Fluent API의 `SqlInterpolated(FormattableString)` 경로는 보간 값 인수를 `@pN` 파라미터로 수집합니다.
+SQL 구조 자체를 검증하는 파서는 아니므로 식별자와 절 이름은 allow-list로 선택하세요.
 
 ```csharp
 int id = 42;
-// ArrayPool 버퍼 사용, 힙 할당 0, 파라미터 자동 수집
+// 보간 값은 @p0 파라미터로 바인딩됨
 DbResult<User?> result = await session.Default
-    .Sql($"SELECT * FROM Users WHERE Id = {id}")
+    .SqlInterpolated($"SELECT * FROM Users WHERE Id = {id}")
     .QuerySingleAsync<User>();
 ```
 
@@ -148,7 +149,7 @@ public sealed class UserRepository(IDbSession session)
 
 | 항목 | 권장 | 비권장 |
 |---|---|---|
-| SQL 파라미터 | `Sql($"...{value}")` 보간 | 문자열 연결 |
+| SQL 파라미터 | `SqlInterpolated($"...{value}")` 보간 | 문자열 연결 |
 | DTO 타입 | `[DbResult] partial record` | 리플렉션 매핑 |
 | TVP 전송 | `[TvpRow]` Source Generator | DataTable 수동 구성 |
 | 클래스 선언 | `sealed class` | 비sealed |
@@ -267,7 +268,7 @@ Column Encryption Setting=Enabled
 ```json
 {
   "ConnectionStrings": {
-    "Default": "Server=localhost;Database=MyDb;User Id=sa;Password=***;Column Encryption Setting=Enabled;TrustServerCertificate=True"
+    "Default": "Server=localhost;Database=MyDb;User Id=app_user;Password=***;Encrypt=True;TrustServerCertificate=False;Column Encryption Setting=Enabled"
   }
 }
 ```

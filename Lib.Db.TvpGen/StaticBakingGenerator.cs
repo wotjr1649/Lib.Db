@@ -58,10 +58,12 @@ public sealed class StaticBakingGenerator : IIncrementalGenerator
         // 2차 정밀 필터: 심볼 확인 (실제 확장 메서드인지)
         var invocation = (InvocationExpressionSyntax)context.Node;
         var symbol = context.SemanticModel.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+        var method = symbol?.ReducedFrom ?? symbol;
 
-        return symbol != null && 
-               symbol.Name == "AddLibDbHybridCache" &&
-               symbol.ContainingType.Name == "HybridCacheExtensions";
+        return method != null &&
+               method.Name == "AddLibDbHybridCache" &&
+               method.ContainingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+                   == "global::Lib.Db.Extensions.HybridCacheExtensions";
     }
 
     /// <summary>

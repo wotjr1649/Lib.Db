@@ -161,11 +161,17 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 - [ ] `EnableSchemaCaching = true`, `SchemaRefreshIntervalSeconds`: 60~300
 - [ ] `PrewarmExcludePatterns`: `*_Test*`, `*_Legacy*` 등 제외
 - [ ] `DefaultCommandTimeoutSeconds`: 30 (OLTP), 120+ (배치)
+- [ ] 사용자 지정 cache key에는 비밀값, PII, 원문 SQL, 조건값 원문을 넣지 않음
+  - cache key는 Activity/log 태그로 전달될 수 있으므로 안정적인 non-sensitive 식별자 또는 해시 사용
 
 ### 4-4. HealthCheck
 
 - [ ] `HealthCheckThrottleSeconds`: 1~10 (기본값: 1초)
   - v2.2부터 이 설정이 실제로 적용됩니다 (이전 버전에서는 1초 하드코딩)
+- [ ] HealthCheck 응답의 캐시 진단 데이터 확인
+  - `libdb.cache.mode`: `shared-memory`, `fallback`, `unregistered` 중 하나
+  - `libdb.cache.fallback_active`: SharedMemory 사용이 기대되는 환경에서 `true`면 degraded 상태로 취급
+  - HealthCheck를 외부 공개 엔드포인트로 노출하는 경우 내부 캐시 모드가 운영 정보가 될 수 있으므로 접근 제어를 적용
 
 ---
 

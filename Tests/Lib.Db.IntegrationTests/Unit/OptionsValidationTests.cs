@@ -214,6 +214,67 @@ public sealed class OptionsValidationTests
     }
 
     [Fact]
+    public void ProductionSecurityProfile_TrustServerCertificate_ShouldFailValidation()
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionSecurityProfile = ConnectionSecurityProfile.Production;
+        options.ConnectionStrings["Default"] =
+            "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        Assert.True(result.Failed, "운영 프로필에서는 TrustServerCertificate=True를 기본 차단해야 합니다.");
+        Assert.Contains("TrustServerCertificate", string.Join("; ", result.Failures!));
+    }
+
+    [Fact]
+    public void ProductionSecurityProfile_WeakEncryption_ShouldFailValidation()
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionSecurityProfile = ConnectionSecurityProfile.Production;
+        options.ConnectionStrings["Default"] =
+            "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=False;TrustServerCertificate=False";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        Assert.True(result.Failed, "운영 프로필에서는 암호화 비활성 연결을 차단해야 합니다.");
+        Assert.Contains("Encrypt", string.Join("; ", result.Failures!));
+    }
+
+    [Fact]
+    public void ProductionSecurityProfile_SaLogin_ShouldFailValidation()
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionSecurityProfile = ConnectionSecurityProfile.Production;
+        options.ConnectionStrings["Default"] =
+            "Server=localhost;Database=TEST;User Id=sa;Password=placeholder;Encrypt=True;TrustServerCertificate=False";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        Assert.True(result.Failed, "운영 프로필에서는 sa 로그인을 기본 차단해야 합니다.");
+        Assert.Contains("privileged SQL login", string.Join("; ", result.Failures!));
+    }
+
+    [Fact]
+    public void ProductionSecurityProfile_ExplicitWaivers_ShouldPassValidation()
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionSecurityProfile = ConnectionSecurityProfile.Production;
+        options.AllowProductionTrustServerCertificateWaiver = true;
+        options.AllowProductionSaLoginWaiver = true;
+        options.ConnectionStrings["Default"] =
+            "Server=localhost;Database=TEST;User Id=sa;Password=placeholder;Encrypt=True;TrustServerCertificate=True";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        Assert.False(result.Failed, string.Join("; ", result.Failures ?? []));
+    }
+
+    [Fact]
     public void ConnectionStringNames_FirstItem_ShouldBeDefaultInstance()
     {
         LibDbOptions options = TestOptionsFactory.CreateValidOptions();

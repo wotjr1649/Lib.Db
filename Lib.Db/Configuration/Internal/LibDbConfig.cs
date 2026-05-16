@@ -13,13 +13,17 @@ namespace Lib.Db.Configuration.Internal;
 /// <para>
 /// <b>[설계의도]</b><br/>
 /// C# 14 'field' 키워드를 사용하여 바인딩 시점부터 엄격한 유효성 검사(Self-Validation)를 수행합니다.
-/// 잘못된 설정값 유입을 원천 차단하여 시스템 안정성을 높입니다.
+/// 잘못된 설정값 유입을 사전에 줄여 시스템 안정성을 높입니다.
 /// </para>
 /// </summary>
 internal sealed class LibDbConfig
 {
     // [1] 연결 문자열 이름 목록 (Bind() 시 Add로 추가되므로 빈 리스트 초기화)
     public List<string> ConnectionStringNames { get; set; } = [];
+
+    public ConnectionSecurityProfile ConnectionSecurityProfile { get; set; } = ConnectionSecurityProfile.Development;
+    public bool AllowProductionTrustServerCertificateWaiver { get; set; } = false;
+    public bool AllowProductionSaLoginWaiver { get; set; } = false;
 
     // [3] 스키마 캐싱
     public bool EnableSchemaCaching { get; set; } = true;
@@ -42,6 +46,7 @@ internal sealed class LibDbConfig
 
     // [3] 쿼리 실행 정책
     public bool EnableDryRun { get; set; } = false;
+    public RawSqlPolicy RawSqlPolicy { get; set; } = RawSqlPolicy.Allow;
     public bool StrictRequiredParameterCheck { get; set; } = true;
 
     // [4] 데이터 직렬화 및 검증
@@ -235,6 +240,10 @@ internal sealed class LibDbConfig
             options.ConnectionStringNames = this.ConnectionStringNames;
         }
 
+        options.ConnectionSecurityProfile = this.ConnectionSecurityProfile;
+        options.AllowProductionTrustServerCertificateWaiver = this.AllowProductionTrustServerCertificateWaiver;
+        options.AllowProductionSaLoginWaiver = this.AllowProductionSaLoginWaiver;
+
         // [3]
         options.EnableSchemaCaching = this.EnableSchemaCaching;
         options.SchemaRefreshIntervalSeconds = this.SchemaRefreshIntervalSeconds;
@@ -245,6 +254,7 @@ internal sealed class LibDbConfig
 
         // [3]
         options.EnableDryRun = this.EnableDryRun;
+        options.RawSqlPolicy = this.RawSqlPolicy;
         options.StrictRequiredParameterCheck = this.StrictRequiredParameterCheck;
 
         // [4]

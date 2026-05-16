@@ -7,6 +7,7 @@
 
 #nullable enable
 
+using System.Collections.Generic;
 using System.Text;
 
 namespace Lib.Db.TvpGen;
@@ -28,6 +29,22 @@ namespace Lib.Db.TvpGen;
 /// </summary>
 internal static class SharedHashUtils
 {
+    private static readonly HashSet<string> s_csharpKeywords = new(StringComparer.Ordinal)
+    {
+        "abstract", "as", "base", "bool", "break", "byte", "case", "catch",
+        "char", "checked", "class", "const", "continue", "decimal", "default",
+        "delegate", "do", "double", "else", "enum", "event", "explicit",
+        "extern", "false", "finally", "fixed", "float", "for", "foreach",
+        "goto", "if", "implicit", "in", "int", "interface", "internal", "is",
+        "lock", "long", "namespace", "new", "null", "object", "operator",
+        "out", "override", "params", "private", "protected", "public",
+        "readonly", "record", "ref", "return", "sbyte", "sealed", "short",
+        "sizeof", "stackalloc", "static", "string", "struct", "switch",
+        "this", "throw", "true", "try", "typeof", "uint", "ulong",
+        "unchecked", "unsafe", "ushort", "using", "virtual", "void",
+        "volatile", "while"
+    };
+
     #region FNV-1a 해시 (ASCII IgnoreCase, Generator-Side)
 
     /// <summary>
@@ -54,6 +71,30 @@ internal static class SharedHashUtils
                 char c = s[i];
                 if ((uint)(c - 'A') <= 25u) c = (char)(c | 0x20);
                 h ^= c;
+                h *= prime;
+            }
+
+            return h;
+        }
+    }
+
+    /// <summary>
+    /// Ordinal FNV-1a 해시를 계산합니다.
+    /// <para>대소문자와 구분자를 포함한 원본 식별자 충돌 방지용 결정론적 해시입니다.</para>
+    /// </summary>
+    /// <param name="s">해시할 문자열</param>
+    /// <returns>FNV-1a 해시값 (uint)</returns>
+    public static uint HashOrdinalFnv1a(string s)
+    {
+        unchecked
+        {
+            const uint offset = 2166136261u;
+            const uint prime = 16777619u;
+            uint h = offset;
+
+            for (int i = 0; i < s.Length; i++)
+            {
+                h ^= s[i];
                 h *= prime;
             }
 
@@ -94,6 +135,96 @@ internal static class SharedHashUtils
 
         return sb.ToString();
     }
+
+    #endregion
+
+    #region 생성 코드 Escape
+
+    /// <summary>
+    /// 원본 이름을 C# 식별자로 정리하고, C# 예약어인 경우 verbatim 식별자로 escape합니다.
+    /// </summary>
+    /// <param name="s">원본 이름</param>
+    /// <returns>생성 코드에서 사용할 수 있는 C# 식별자</returns>
+    public static string EscapeIdentifier(string s)
+    {
+        string sanitized = SanitizeIdentifier(s);
+        return s_csharpKeywords.Contains(sanitized) ? "@" + sanitized : sanitized;
+    }
+
+    /// <summary>
+    /// 생성 코드의 C# 문자열 리터럴 내부에 삽입할 텍스트를 escape합니다.
+    /// </summary>
+    /// <param name="s">원본 텍스트</param>
+    /// <returns>C# 문자열 리터럴 본문으로 안전한 텍스트</returns>
+    public static string EscapeStringLiteral(string s)
+    {
+        if (string.IsNullOrEmpty(s))
+            return string.Empty;
+
+        StringBuilder sb = new(s.Length);
+        foreach (char ch in s)
+        {
+            sb.Append(ch switch
+            {
+                '\\' => "\\\\",
+                '"' => "\\\"",
+                '\0' => "\\0",
+                '\a' => "\\a",
+                '\b' => "\\b",
+                '\f' => "\\f",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                '\v' => "\\v",
+                '\u0085' => "\\u0085",
+                '\u2028' => "\\u2028",
+                '\u2029' => "\\u2029",
+                _ when char.IsSurrogate(ch) => "\\u" + ((int)ch).ToString("x4"),
+                _ when char.IsControl(ch) => "\\u" + ((int)ch).ToString("x4"),
+                _ => ch.ToString()
+            });
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 생성 코드의 XML 문서 주석 텍스트에 삽입할 값을 escape합니다.
+    /// </summary>
+    /// <param name="s">원본 텍스트</param>
+    /// <returns>XML 텍스트 노드로 안전한 텍스트</returns>
+    public static string EscapeXmlText(string s)
+    {
+        if (string.IsNullOrEmpty(s))
+            return string.Empty;
+
+        StringBuilder sb = new(s.Length);
+        foreach (char ch in s)
+        {
+            sb.Append(ch switch
+            {
+                '&' => "&amp;",
+                '<' => "&lt;",
+                '>' => "&gt;",
+                '"' => "&quot;",
+                '\'' => "&apos;",
+                '\n' => "&#xA;",
+                '\r' => "&#xD;",
+                '\u0085' => "&#x85;",
+                '\u2028' => "&#x2028;",
+                '\u2029' => "&#x2029;",
+                _ when !IsXmlTextChar(ch) => "&#xFFFD;",
+                _ => ch.ToString()
+            });
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool IsXmlTextChar(char ch)
+        => ch == '\t'
+           || (ch >= ' ' && ch <= '\uD7FF')
+           || (ch >= '\uE000' && ch <= '\uFFFD');
 
     #endregion
 }

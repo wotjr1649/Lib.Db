@@ -52,6 +52,293 @@ internal static class SchemaInitializer
 
     #endregion
 
+    #region Sorter 테스트 스키마
+
+    /// <summary>
+    /// Sorter 테스트가 기대하는 조회 테이블과 로그/흐름 SP를 멱등 생성한다.
+    /// </summary>
+    /// <param name="db">Sorter DB에 연결된 <see cref="IProcedureStage"/></param>
+    public static async Task EnsureSorterSchemaAsync(IProcedureStage db)
+    {
+        await db.Sql("""
+            IF OBJECT_ID('[dbo].[IF_CHUTE_INFO]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[IF_CHUTE_INFO] (
+                    CHUTE_NO INT NOT NULL PRIMARY KEY,
+                    CHUTE_NAME NVARCHAR(100) NOT NULL,
+                    STATUS NVARCHAR(20) NOT NULL
+                );
+            END;
+
+            IF NOT EXISTS (SELECT 1 FROM [dbo].[IF_CHUTE_INFO])
+            BEGIN
+                INSERT INTO [dbo].[IF_CHUTE_INFO] (CHUTE_NO, CHUTE_NAME, STATUS)
+                VALUES (1, N'CHUTE-001', N'OPEN'), (2, N'CHUTE-002', N'CLOSED');
+            END;
+
+            IF OBJECT_ID('[dbo].[IF_BRAND_MASTER]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[IF_BRAND_MASTER] (
+                    BRAND_CD NVARCHAR(20) NOT NULL PRIMARY KEY,
+                    BRAND_NM NVARCHAR(100) NOT NULL
+                );
+            END;
+
+            IF (SELECT COUNT(*) FROM [dbo].[IF_BRAND_MASTER]) <> 7
+            BEGIN
+                DELETE FROM [dbo].[IF_BRAND_MASTER];
+                INSERT INTO [dbo].[IF_BRAND_MASTER] (BRAND_CD, BRAND_NM)
+                VALUES
+                    (N'B01', N'Brand 01'), (N'B02', N'Brand 02'),
+                    (N'B03', N'Brand 03'), (N'B04', N'Brand 04'),
+                    (N'B05', N'Brand 05'), (N'B06', N'Brand 06'),
+                    (N'B07', N'Brand 07');
+            END;
+
+            IF OBJECT_ID('[dbo].[IF_BOX_LIST]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[IF_BOX_LIST] (
+                    BOX_ID INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    BIZ_DAY CHAR(8) NOT NULL,
+                    BOX_NO NVARCHAR(50) NOT NULL
+                );
+            END;
+
+            IF NOT EXISTS (SELECT 1 FROM [dbo].[IF_BOX_LIST] WHERE BIZ_DAY = '20260309')
+            BEGIN
+                INSERT INTO [dbo].[IF_BOX_LIST] (BIZ_DAY, BOX_NO)
+                VALUES ('20260309', N'BOX-001'), ('20260309', N'BOX-002');
+            END;
+
+            IF OBJECT_ID('[dbo].[USR_INFO]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[USR_INFO] (
+                    USER_ID NVARCHAR(50) NOT NULL PRIMARY KEY,
+                    USER_NM NVARCHAR(100) NOT NULL
+                );
+            END;
+
+            IF (SELECT COUNT(*) FROM [dbo].[USR_INFO]) <> 3
+            BEGIN
+                DELETE FROM [dbo].[USR_INFO];
+                INSERT INTO [dbo].[USR_INFO] (USER_ID, USER_NM)
+                VALUES (N'u01', N'User 01'), (N'u02', N'User 02'), (N'u03', N'User 03');
+            END;
+
+            IF OBJECT_ID('[dbo].[MENU_INFO]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[MENU_INFO] (
+                    MENU_ID INT NOT NULL PRIMARY KEY,
+                    MENU_NM NVARCHAR(100) NOT NULL
+                );
+            END;
+
+            IF (SELECT COUNT(*) FROM [dbo].[MENU_INFO]) <> 18
+            BEGIN
+                DELETE FROM [dbo].[MENU_INFO];
+                INSERT INTO [dbo].[MENU_INFO] (MENU_ID, MENU_NM)
+                SELECT v.Id, CONCAT(N'Menu ', FORMAT(v.Id, '00'))
+                FROM (VALUES
+                    (1), (2), (3), (4), (5), (6),
+                    (7), (8), (9), (10), (11), (12),
+                    (13), (14), (15), (16), (17), (18)
+                ) AS v(Id);
+            END;
+
+            IF OBJECT_ID('[dbo].[TS_TILT_LOG]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[TS_TILT_LOG] (
+                    Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    PLC_SEQ INT NOT NULL,
+                    CHUTE_NO INT NOT NULL,
+                    TRAY_NO INT NOT NULL,
+                    CreatedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+                );
+            END;
+
+            IF OBJECT_ID('[dbo].[TS_CHUTE_BTN_LOG]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[TS_CHUTE_BTN_LOG] (
+                    Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    CHUTE_NO NVARCHAR(20) NOT NULL,
+                    STATUS NVARCHAR(20) NOT NULL,
+                    CreatedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+                );
+            END;
+
+            IF OBJECT_ID('[dbo].[TS_EMR_LOG]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[TS_EMR_LOG] (
+                    Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    EMR_NO INT NOT NULL,
+                    CreatedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+                );
+            END;
+
+            IF OBJECT_ID('[dbo].[TS_ERROR_LOG]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[TS_ERROR_LOG] (
+                    Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    CLASS INT NOT NULL,
+                    COMPUTER NVARCHAR(100) NOT NULL,
+                    EVENT_ID INT NOT NULL,
+                    MSG NVARCHAR(4000) NOT NULL,
+                    MUSTCON NVARCHAR(10) NOT NULL,
+                    STATE INT NOT NULL,
+                    SOURCE NVARCHAR(100) NOT NULL,
+                    PLCSEQ BIGINT NOT NULL,
+                    CreatedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+                );
+            END;
+
+            IF OBJECT_ID('[dbo].[TS_TRAY_FLOW]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [dbo].[TS_TRAY_FLOW] (
+                    Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    EventName NVARCHAR(50) NOT NULL,
+                    Payload NVARCHAR(4000) NULL,
+                    CreatedAt DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+                );
+            END;
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [dbo].[IF_SP_TILT_LOG]
+                @V_PLC_SEQ INT,
+                @V_CHUTE_NO INT,
+                @V_TRAY_NO INT
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                INSERT INTO [dbo].[TS_TILT_LOG] (PLC_SEQ, CHUTE_NO, TRAY_NO)
+                VALUES (@V_PLC_SEQ, @V_CHUTE_NO, @V_TRAY_NO);
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [dbo].[IF_SP_CHUTE_BTN_LOG]
+                @V_CHUTE_NO NVARCHAR(20),
+                @V_STATUS NVARCHAR(20)
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                INSERT INTO [dbo].[TS_CHUTE_BTN_LOG] (CHUTE_NO, STATUS)
+                VALUES (@V_CHUTE_NO, @V_STATUS);
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [dbo].[IF_SP_EMR_LOG]
+                @V_EMR_NO INT
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                INSERT INTO [dbo].[TS_EMR_LOG] (EMR_NO) VALUES (@V_EMR_NO);
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [dbo].[IF_SP_ERROR_LOG]
+                @V_CLASS INT,
+                @V_COMPUTER NVARCHAR(100),
+                @V_EVENT_ID INT,
+                @V_MSG NVARCHAR(4000),
+                @V_MUSTCON NVARCHAR(10),
+                @V_STATE INT,
+                @V_SOURCE NVARCHAR(100),
+                @V_PLCSEQ BIGINT
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                INSERT INTO [dbo].[TS_ERROR_LOG] (CLASS, COMPUTER, EVENT_ID, MSG, MUSTCON, STATE, SOURCE, PLCSEQ)
+                VALUES (@V_CLASS, @V_COMPUTER, @V_EVENT_ID, @V_MSG, @V_MUSTCON, @V_STATE, @V_SOURCE, @V_PLCSEQ);
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [dbo].[IF_SP_TRAY_IN]
+                @V_INDUCTION INT,
+                @V_TRAY_NO INT,
+                @V_BARCODE NVARCHAR(100),
+                @V_DELIVERY NVARCHAR(20)
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                INSERT INTO [dbo].[TS_TRAY_FLOW] (EventName, Payload)
+                VALUES (N'TRAY_IN', CONCAT(@V_INDUCTION, N'|', @V_TRAY_NO, N'|', @V_BARCODE, N'|', @V_DELIVERY));
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [dbo].[IF_SP_BARCODE]
+                @SCAN_SEQ INT,
+                @V_INDUCTION INT,
+                @V_DELIVERY NVARCHAR(20),
+                @V_INVOICE NVARCHAR(100),
+                @V_BARCODE NVARCHAR(100),
+                @V_INPUT_STATUS NVARCHAR(20),
+                @O_T_OQTY INT OUTPUT,
+                @O_T_WQTY INT OUTPUT,
+                @O_T_RQTY INT OUTPUT,
+                @O_ITEM_CD NVARCHAR(50) OUTPUT,
+                @O_ITEM_STYLE NVARCHAR(50) OUTPUT,
+                @O_ITEM_COLOR NVARCHAR(50) OUTPUT,
+                @O_ITEM_SIZE NVARCHAR(50) OUTPUT,
+                @O_ITEM_NM NVARCHAR(100) OUTPUT,
+                @O_SORT_TYPE NVARCHAR(50) OUTPUT,
+                @O_SKU_OQTY INT OUTPUT,
+                @O_SKU_WQTY INT OUTPUT,
+                @O_SKU_RQTY INT OUTPUT,
+                @ERROR_NO INT OUTPUT
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                SET @O_T_OQTY = ISNULL(@O_T_OQTY, 0);
+                SET @O_T_WQTY = ISNULL(@O_T_WQTY, 0);
+                SET @O_T_RQTY = ISNULL(@O_T_RQTY, 0);
+                SET @O_ITEM_CD = N'TEST_ITEM';
+                SET @O_ITEM_STYLE = N'TEST_STYLE';
+                SET @O_ITEM_COLOR = N'TEST_COLOR';
+                SET @O_ITEM_SIZE = N'TEST_SIZE';
+                SET @O_ITEM_NM = N'Test Item';
+                SET @O_SORT_TYPE = N'TEST';
+                SET @O_SKU_OQTY = 0;
+                SET @O_SKU_WQTY = 0;
+                SET @O_SKU_RQTY = 0;
+                SET @ERROR_NO = 0;
+
+                INSERT INTO [dbo].[TS_TRAY_FLOW] (EventName, Payload)
+                VALUES (N'BARCODE', CONCAT(@SCAN_SEQ, N'|', @V_INDUCTION, N'|', @V_DELIVERY, N'|', @V_INVOICE, N'|', @V_BARCODE, N'|', @V_INPUT_STATUS));
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [dbo].[IF_SP_DAS_SELECT]
+                @V_BIZ_DAY CHAR(8),
+                @V_DISP_YN NVARCHAR(1)
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                INSERT INTO [dbo].[TS_TRAY_FLOW] (EventName, Payload)
+                VALUES (N'DAS_SELECT', CONCAT(@V_BIZ_DAY, N'|', @V_DISP_YN));
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [dbo].[IF_SP_TILT_STOP]
+                @V_CHUTE_NO INT,
+                @V_BOXYN NVARCHAR(1)
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                INSERT INTO [dbo].[TS_TRAY_FLOW] (EventName, Payload)
+                VALUES (N'TILT_STOP', CONCAT(@V_CHUTE_NO, N'|', @V_BOXYN));
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+    }
+
+    #endregion
+
     #region [test] 스키마 (추가 SP 15개 + 테이블 2개)
 
     /// <summary>

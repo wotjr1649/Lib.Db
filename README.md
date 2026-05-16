@@ -1,4 +1,4 @@
-# Lib.Db v2.2.0
+# Lib.Db v2.2.1
 
 **Extreme Performance Data Access Library for .NET 10+**
 
@@ -9,14 +9,14 @@
 
 ---
 
-## v2.2.0 소개
+## v2.2.1 소개
 
-`Lib.Db` v2.2.0는 .NET 10 애플리케이션을 위한 **고성능 SQL Server 데이터 액세스 라이브러리**입니다.
+`Lib.Db` v2.2.1은 .NET 10 애플리케이션을 위한 **고성능 SQL Server 데이터 액세스 라이브러리**입니다.
 
 - **Fluent API Only**: `IDbSession` 단일 진입점에서 3-Stage Fluent API로 모든 쿼리를 실행합니다
 - **DbResult\<T>**: 예외 대신 결과 타입으로 성공/실패를 구분합니다 (패턴 매칭 지원)
 - **멀티 DB**: `ConnectionStringNames` 리스트로 N개 DB를 동시 지원합니다
-- **Zero-Allocation**: `Span<T>`, `ArrayPool`, `SqlInterpolatedStringHandler`로 힙 할당을 최소화합니다
+- **Low-Allocation**: `Span<T>`, `ArrayPool`, Source Generator 기반 경로로 힙 할당을 줄입니다
 - **AOT-First**: Source Generator 기반으로 리플렉션 없이 Native AOT를 완벽 지원합니다
 - **Resilience**: Polly v8 파이프라인 내장으로 자동 재시도 및 Circuit Breaker를 제공합니다
 
@@ -29,10 +29,12 @@
 ```json
 {
   "ConnectionStrings": {
-    "Default": "Server=localhost;Database=MyDb;User Id=app_user;Password=***;TrustServerCertificate=True;"
+    "Default": "Server=localhost;Database=MyDb;User Id=app_user;Password=***;Encrypt=True;TrustServerCertificate=False;"
   },
   "LibDb": {
     "ConnectionStringNames": ["Default"],
+    "ConnectionSecurityProfile": "Production",
+    "RawSqlPolicy": "DenyWriteText",
     "Mars": "ForceEnable",
     "EnableSchemaCaching": true,
     "EnableResilience": true,
@@ -75,8 +77,9 @@ public sealed class UserRepository(IDbSession session)
 
     public async Task<int> RegisterAsync(string name, string email)
     {
-        DbResult<int> result = await session.Default
-            .Sql($"INSERT INTO Users (Name, Email) VALUES ({name}, {email}); SELECT SCOPE_IDENTITY();")
+        DbResult<int?> result = await session.Default
+            .Procedure("dbo.usp_RegisterUser")
+            .With(new { Name = name, Email = email })
             .ExecuteScalarAsync<int>();
 
         return result.IsSuccess ? result.Value ?? 0 : -1;
@@ -94,7 +97,7 @@ public sealed class UserRepository(IDbSession session)
 | **DbResult\<T>** | 예외 없이 성공/실패를 구분하는 불변 결과 타입 (Deconstruct, 패턴 매칭) |
 | **멀티 DB** | `session.Use("DB1")` / `session.Use("DB2")` 병렬 실행 |
 | **트랜잭션** | `BeginTransactionAsync` -> CommitAsync/RollbackAsync (자동 롤백) |
-| **Zero-Allocation SQL** | `SqlInterpolatedStringHandler`로 힙 할당 0, SQL Injection 자동 방지 |
+| **보간 SQL 파라미터화** | `SqlInterpolated(...)`로 보간 값 인수를 `@pN` 파라미터로 바인딩 |
 | **Source Generator** | `[TvpRow]`, `[DbResult]` 어노테이션으로 컴파일 타임 코드 생성 |
 | **Native AOT** | 리플렉션 제로, Shadow DTO 패턴으로 AOT 완벽 호환 |
 | **Polly v8 Resilience** | 자동 재시도, Circuit Breaker, Deadlock 처리 내장 |
@@ -102,6 +105,8 @@ public sealed class UserRepository(IDbSession session)
 | **스키마 워밍업** | 앱 시작 시 SP 메타데이터 사전 로딩 (Include/Exclude 패턴) |
 | **OpenTelemetry** | ActivitySource/Meter 통합 메트릭 수집 |
 | **MARS 정책** | `MarsPolicy` (Disabled/Auto/ForceEnable) — ConnectionString 자동 보정 |
+| **Raw SQL 정책** | `RawSqlPolicy`로 Text 명령 전체 차단 또는 첫 토큰 기반 쓰기 계열 guardrail 적용 |
+| **연결 보안 프로필** | `ConnectionSecurityProfile.Production`으로 암호화, 인증서 검증, 고권한 로그인 사용 검증 |
 
 ---
 

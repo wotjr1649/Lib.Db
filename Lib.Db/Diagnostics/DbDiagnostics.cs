@@ -46,7 +46,7 @@ public readonly record struct DbRequestInfo(
     /// </param>
     /// <param name="target">
     /// 대상 테이블/뷰/TVP/프로시저 이름 등.
-    /// null 이면 <see cref="DbExecutionContext.CommandText"/> 를 사용합니다.
+    /// null 이면 SQL 원문 노출 방지를 위해 대상 태그를 생략합니다.
     /// </param>
     internal static DbRequestInfo FromExecutionContext(
         DbExecutionContext? context,
@@ -75,10 +75,10 @@ public readonly record struct DbRequestInfo(
                 _ => value.CommandType.ToString()
             };
 
-        // 2) Target: 명시값 없으면 CommandText 사용
-        string tgt = !string.IsNullOrWhiteSpace(target)
+        // 2) Target: 명시값 없으면 SQL 원문 노출 방지를 위해 생략
+        string? tgt = !string.IsNullOrWhiteSpace(target)
             ? target
-            : value.CommandText;
+            : null;
 
         // 3) CommandKind: CommandType 자체를 의미 있게 구분
         string cmdKind = value.CommandType switch
@@ -90,7 +90,7 @@ public readonly record struct DbRequestInfo(
         };
 
         return new DbRequestInfo(
-            InstanceId: value.InstanceName,
+            InstanceId: DbDiagnosticRedactor.RedactInstanceId(value.InstanceName),
             DbSystem: "mssql",
             DbName: null, // DbExecutionContext에 DatabaseName을 추가하면 여기에서 채웁니다.
             DbUser: null,
@@ -132,6 +132,11 @@ public readonly record struct DbRequestInfo(
 /// </summary>
 public static class FastLogger
 {
+    /// <summary>
+    /// <see cref="LogLevel.Debug"/> 가 활성화된 경우에만 보간 문자열을 평가하여 디버그 로그를 기록합니다.
+    /// </summary>
+    /// <param name="logger">로그를 기록할 <see cref="ILogger"/> 인스턴스입니다.</param>
+    /// <param name="handler">컴파일러가 생성하는 보간 문자열 핸들러입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void LogFastDebug(this ILogger logger, [InterpolatedStringHandlerArgument("logger")] ref FastDebugLogHandler handler)
     {
@@ -139,6 +144,11 @@ public static class FastLogger
             logger.LogDebug(handler.GetFormattedText());
     }
 
+    /// <summary>
+    /// <see cref="LogLevel.Information"/> 이 활성화된 경우에만 보간 문자열을 평가하여 정보 로그를 기록합니다.
+    /// </summary>
+    /// <param name="logger">로그를 기록할 <see cref="ILogger"/> 인스턴스입니다.</param>
+    /// <param name="handler">컴파일러가 생성하는 보간 문자열 핸들러입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void LogFastInfo(this ILogger logger, [InterpolatedStringHandlerArgument("logger")] ref FastInfoLogHandler handler)
     {
@@ -146,6 +156,12 @@ public static class FastLogger
             logger.LogInformation(handler.GetFormattedText());
     }
 
+    /// <summary>
+    /// <see cref="LogLevel.Warning"/> 이 활성화된 경우에만 보간 문자열을 평가하여 경고 로그를 기록합니다.
+    /// </summary>
+    /// <param name="logger">로그를 기록할 <see cref="ILogger"/> 인스턴스입니다.</param>
+    /// <param name="ex">로그에 첨부할 예외입니다.</param>
+    /// <param name="handler">컴파일러가 생성하는 보간 문자열 핸들러입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void LogFastWarn(this ILogger logger, Exception? ex, [InterpolatedStringHandlerArgument("logger", "ex")] ref FastWarnLogHandler handler)
     {
@@ -161,8 +177,19 @@ public static class FastLogger
 public ref struct FastDebugLogHandler
 {
     private DefaultInterpolatedStringHandler _inner;
+
+    /// <summary>
+    /// 디버그 로그 레벨이 활성화되어 보간 문자열을 구성해야 하는지 나타냅니다.
+    /// </summary>
     public bool IsEnabled { get; }
 
+    /// <summary>
+    /// <see cref="LogLevel.Debug"/> 활성 상태에 따라 보간 문자열 핸들러를 초기화합니다.
+    /// </summary>
+    /// <param name="literalLength">보간 문자열의 리터럴 문자 길이입니다.</param>
+    /// <param name="formattedCount">보간 문자열에 포함된 형식 지정 값 개수입니다.</param>
+    /// <param name="logger">로그 레벨 확인에 사용할 로거입니다.</param>
+    /// <param name="isEnabled">디버그 로그 활성 여부입니다.</param>
     public FastDebugLogHandler(int literalLength, int formattedCount, ILogger logger, out bool isEnabled)
     {
         isEnabled = logger.IsEnabled(LogLevel.Debug);
@@ -170,18 +197,31 @@ public ref struct FastDebugLogHandler
         _inner = isEnabled ? new(literalLength, formattedCount) : default;
     }
 
+    /// <summary>
+    /// 로그 레벨이 활성화된 경우 리터럴 문자열을 버퍼에 추가합니다.
+    /// </summary>
+    /// <param name="s">추가할 리터럴 문자열입니다.</param>
     public void AppendLiteral(string s)
     {
         if (IsEnabled)
             _inner.AppendLiteral(s);
     }
 
+    /// <summary>
+    /// 로그 레벨이 활성화된 경우 형식 지정 값을 버퍼에 추가합니다.
+    /// </summary>
+    /// <typeparam name="T">형식 지정 값의 타입입니다.</typeparam>
+    /// <param name="value">추가할 값입니다.</param>
     public void AppendFormatted<T>(T value)
     {
         if (IsEnabled)
             _inner.AppendFormatted(value);
     }
 
+    /// <summary>
+    /// 구성된 로그 메시지를 반환하고 내부 버퍼를 비웁니다.
+    /// </summary>
+    /// <returns>로그 레벨이 활성화된 경우 구성된 메시지, 그렇지 않으면 빈 문자열입니다.</returns>
     public string GetFormattedText()
         => IsEnabled ? _inner.ToStringAndClear() : string.Empty;
 }
@@ -193,8 +233,19 @@ public ref struct FastDebugLogHandler
 public ref struct FastInfoLogHandler
 {
     private DefaultInterpolatedStringHandler _inner;
+
+    /// <summary>
+    /// 정보 로그 레벨이 활성화되어 보간 문자열을 구성해야 하는지 나타냅니다.
+    /// </summary>
     public bool IsEnabled { get; }
 
+    /// <summary>
+    /// <see cref="LogLevel.Information"/> 활성 상태에 따라 보간 문자열 핸들러를 초기화합니다.
+    /// </summary>
+    /// <param name="literalLength">보간 문자열의 리터럴 문자 길이입니다.</param>
+    /// <param name="formattedCount">보간 문자열에 포함된 형식 지정 값 개수입니다.</param>
+    /// <param name="logger">로그 레벨 확인에 사용할 로거입니다.</param>
+    /// <param name="isEnabled">정보 로그 활성 여부입니다.</param>
     public FastInfoLogHandler(int literalLength, int formattedCount, ILogger logger, out bool isEnabled)
     {
         isEnabled = logger.IsEnabled(LogLevel.Information);
@@ -202,18 +253,31 @@ public ref struct FastInfoLogHandler
         _inner = isEnabled ? new(literalLength, formattedCount) : default;
     }
 
+    /// <summary>
+    /// 로그 레벨이 활성화된 경우 리터럴 문자열을 버퍼에 추가합니다.
+    /// </summary>
+    /// <param name="s">추가할 리터럴 문자열입니다.</param>
     public void AppendLiteral(string s)
     {
         if (IsEnabled)
             _inner.AppendLiteral(s);
     }
 
+    /// <summary>
+    /// 로그 레벨이 활성화된 경우 형식 지정 값을 버퍼에 추가합니다.
+    /// </summary>
+    /// <typeparam name="T">형식 지정 값의 타입입니다.</typeparam>
+    /// <param name="value">추가할 값입니다.</param>
     public void AppendFormatted<T>(T value)
     {
         if (IsEnabled)
             _inner.AppendFormatted(value);
     }
 
+    /// <summary>
+    /// 구성된 로그 메시지를 반환하고 내부 버퍼를 비웁니다.
+    /// </summary>
+    /// <returns>로그 레벨이 활성화된 경우 구성된 메시지, 그렇지 않으면 빈 문자열입니다.</returns>
     public string GetFormattedText()
         => IsEnabled ? _inner.ToStringAndClear() : string.Empty;
 }
@@ -225,27 +289,53 @@ public ref struct FastInfoLogHandler
 public ref struct FastWarnLogHandler
 {
     private DefaultInterpolatedStringHandler _inner;
+
+    /// <summary>
+    /// 경고 로그 레벨이 활성화되어 보간 문자열을 구성해야 하는지 나타냅니다.
+    /// </summary>
     public bool IsEnabled { get; }
 
+    /// <summary>
+    /// <see cref="LogLevel.Warning"/> 활성 상태에 따라 보간 문자열 핸들러를 초기화합니다.
+    /// </summary>
+    /// <param name="literalLength">보간 문자열의 리터럴 문자 길이입니다.</param>
+    /// <param name="formattedCount">보간 문자열에 포함된 형식 지정 값 개수입니다.</param>
+    /// <param name="logger">로그 레벨 확인에 사용할 로거입니다.</param>
+    /// <param name="ex">경고 로그에 첨부할 예외입니다. 레벨 확인에는 사용하지 않습니다.</param>
+    /// <param name="isEnabled">경고 로그 활성 여부입니다.</param>
     public FastWarnLogHandler(int literalLength, int formattedCount, ILogger logger, Exception? ex, out bool isEnabled)
     {
+        _ = ex;
         isEnabled = logger.IsEnabled(LogLevel.Warning);
         IsEnabled = isEnabled;
         _inner = isEnabled ? new(literalLength, formattedCount) : default;
     }
 
+    /// <summary>
+    /// 로그 레벨이 활성화된 경우 리터럴 문자열을 버퍼에 추가합니다.
+    /// </summary>
+    /// <param name="s">추가할 리터럴 문자열입니다.</param>
     public void AppendLiteral(string s)
     {
         if (IsEnabled)
             _inner.AppendLiteral(s);
     }
 
+    /// <summary>
+    /// 로그 레벨이 활성화된 경우 형식 지정 값을 버퍼에 추가합니다.
+    /// </summary>
+    /// <typeparam name="T">형식 지정 값의 타입입니다.</typeparam>
+    /// <param name="value">추가할 값입니다.</param>
     public void AppendFormatted<T>(T value)
     {
         if (IsEnabled)
             _inner.AppendFormatted(value);
     }
 
+    /// <summary>
+    /// 구성된 로그 메시지를 반환하고 내부 버퍼를 비웁니다.
+    /// </summary>
+    /// <returns>로그 레벨이 활성화된 경우 구성된 메시지, 그렇지 않으면 빈 문자열입니다.</returns>
     public string GetFormattedText()
         => IsEnabled ? _inner.ToStringAndClear() : string.Empty;
 }
@@ -376,7 +466,7 @@ public static class DbMetrics
     {
         // 1. 필수 식별자
         if (info.InstanceId is { Length: > 0 })
-            tags.Add(AttrInstanceId, info.InstanceId);
+            tags.Add(AttrInstanceId, DbDiagnosticRedactor.RedactInstanceId(info.InstanceId));
         if (info.Operation is { Length: > 0 })
             tags.Add(AttrDbOperation, info.Operation);
 
@@ -410,6 +500,9 @@ public static class DbMetrics
 
     #region Scope 기반 편의 API - Connection / Duration
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 활성 DB 연결 수를 증가시킵니다.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionOpen()
     {
@@ -417,10 +510,16 @@ public static class DbMetrics
         TrackConnectionOpen(in info);
     }
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 활성 DB 연결 수를 증가시킵니다.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionOpenFromScope()
         => TrackConnectionOpen();
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 활성 DB 연결 수를 감소시킵니다.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionClose()
     {
@@ -428,6 +527,9 @@ public static class DbMetrics
         TrackConnectionClose(in info);
     }
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 활성 DB 연결 수를 감소시킵니다.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionCloseFromScope()
         => TrackConnectionClose();
@@ -443,6 +545,10 @@ public static class DbMetrics
         TrackDuration(elapsed, in info);
     }
 
+    /// <summary>
+    /// 현재 스코프의 DB 요청 컨텍스트를 사용하여 쿼리 실행 시간을 기록합니다.
+    /// </summary>
+    /// <param name="elapsed">쿼리 실행 소요 시간</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackDurationFromScope(TimeSpan elapsed)
         => TrackDuration(elapsed);
@@ -451,6 +557,10 @@ public static class DbMetrics
 
     #region Scope 기반 편의 API - Retry / Bulk / Schema / Cache / TVP
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 재시도 발생 횟수를 기록합니다.
+    /// </summary>
+    /// <param name="reason">재시도 사유 태그 값입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackRetry(string reason)
     {
@@ -458,10 +568,19 @@ public static class DbMetrics
         TrackRetry(reason, in info);
     }
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 재시도 발생 횟수를 기록합니다.
+    /// </summary>
+    /// <param name="reason">재시도 사유 태그 값입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackRetryFromScope(string reason)
         => TrackRetry(reason);
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 벌크 삽입 행 수를 기록합니다.
+    /// </summary>
+    /// <param name="rows">벌크 삽입된 행 수입니다.</param>
+    /// <param name="tableName">대상 테이블 이름입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackBulkRows(long rows, string tableName)
     {
@@ -469,10 +588,20 @@ public static class DbMetrics
         TrackBulkRows(rows, tableName, in info);
     }
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 벌크 삽입 행 수를 기록합니다.
+    /// </summary>
+    /// <param name="rows">벌크 삽입된 행 수입니다.</param>
+    /// <param name="tableName">대상 테이블 이름입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackBulkRowsFromScope(long rows, string tableName)
         => TrackBulkRows(rows, tableName);
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 스키마 갱신 시도를 기록합니다.
+    /// </summary>
+    /// <param name="success">스키마 갱신 성공 여부입니다.</param>
+    /// <param name="kind">스키마 갱신 종류 태그 값입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackSchemaRefresh(bool success, string kind)
     {
@@ -480,10 +609,19 @@ public static class DbMetrics
         TrackSchemaRefresh(success, kind, in info);
     }
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 스키마 갱신 시도를 기록합니다.
+    /// </summary>
+    /// <param name="success">스키마 갱신 성공 여부입니다.</param>
+    /// <param name="kind">스키마 갱신 종류 태그 값입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackSchemaRefreshFromScope(bool success, string kind)
         => TrackSchemaRefresh(success, kind);
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 스키마 캐시 적중을 기록합니다.
+    /// </summary>
+    /// <param name="kind">캐시 종류 태그 값입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackCacheHit(string kind)
     {
@@ -491,10 +629,19 @@ public static class DbMetrics
         TrackCacheHit(kind, in info);
     }
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 스키마 캐시 적중을 기록합니다.
+    /// </summary>
+    /// <param name="kind">캐시 종류 태그 값입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackCacheHitFromScope(string kind)
         => TrackCacheHit(kind);
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 TVP 전송 바이트 수를 기록합니다.
+    /// </summary>
+    /// <param name="bytes">전송된 TVP 바이트 수입니다.</param>
+    /// <param name="tvpName">TVP 타입 이름입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackTvpUsage(long bytes, string tvpName)
     {
@@ -502,6 +649,11 @@ public static class DbMetrics
         TrackTvpUsage(bytes, tvpName, in info);
     }
 
+    /// <summary>
+    /// 현재 실행 스코프를 사용하여 TVP 전송 바이트 수를 기록합니다.
+    /// </summary>
+    /// <param name="bytes">전송된 TVP 바이트 수입니다.</param>
+    /// <param name="tvpName">TVP 타입 이름입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackTvpUsageFromScope(long bytes, string tvpName)
         => TrackTvpUsage(bytes, tvpName);
@@ -512,6 +664,10 @@ public static class DbMetrics
     // 2.6. 명시적 DbRequestInfo 기반 코어 API
     // =========================================================================
 
+    /// <summary>
+    /// 지정한 DB 요청 컨텍스트로 활성 DB 연결 수를 증가시킵니다.
+    /// </summary>
+    /// <param name="info">메트릭 태그로 사용할 DB 요청 컨텍스트입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionOpen(in DbRequestInfo info)
     {
@@ -523,6 +679,10 @@ public static class DbMetrics
         s_connActive.Add(1, tags);
     }
 
+    /// <summary>
+    /// 지정한 DB 요청 컨텍스트로 활성 DB 연결 수를 감소시킵니다.
+    /// </summary>
+    /// <param name="info">메트릭 태그로 사용할 DB 요청 컨텍스트입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackConnectionClose(in DbRequestInfo info)
     {
@@ -534,6 +694,11 @@ public static class DbMetrics
         s_connActive.Add(-1, tags);
     }
 
+    /// <summary>
+    /// 지정한 DB 요청 컨텍스트로 쿼리 실행 시간을 기록합니다.
+    /// </summary>
+    /// <param name="elapsed">쿼리 실행 소요 시간입니다.</param>
+    /// <param name="info">메트릭 태그로 사용할 DB 요청 컨텍스트입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackDuration(TimeSpan elapsed, in DbRequestInfo info)
     {
@@ -545,6 +710,11 @@ public static class DbMetrics
         s_queryDuration.Record(elapsed.TotalMilliseconds, tags);
     }
 
+    /// <summary>
+    /// 지정한 DB 요청 컨텍스트로 재시도 발생 횟수를 기록합니다.
+    /// </summary>
+    /// <param name="reason">재시도 사유 태그 값입니다.</param>
+    /// <param name="info">메트릭 태그로 사용할 DB 요청 컨텍스트입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackRetry(string reason, in DbRequestInfo info)
     {
@@ -556,6 +726,12 @@ public static class DbMetrics
         s_retries.Add(1, tags);
     }
 
+    /// <summary>
+    /// 지정한 DB 요청 컨텍스트로 벌크 삽입 행 수를 기록합니다.
+    /// </summary>
+    /// <param name="rows">벌크 삽입된 행 수입니다.</param>
+    /// <param name="tableName">대상 테이블 이름입니다.</param>
+    /// <param name="info">메트릭 태그로 사용할 DB 요청 컨텍스트입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackBulkRows(long rows, string tableName, in DbRequestInfo info)
     {
@@ -571,6 +747,12 @@ public static class DbMetrics
         s_bulkRows.Add(rows, tags);
     }
 
+    /// <summary>
+    /// 지정한 DB 요청 컨텍스트로 스키마 갱신 시도를 기록합니다.
+    /// </summary>
+    /// <param name="success">스키마 갱신 성공 여부입니다.</param>
+    /// <param name="kind">스키마 갱신 종류 태그 값입니다.</param>
+    /// <param name="info">메트릭 태그로 사용할 DB 요청 컨텍스트입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackSchemaRefresh(bool success, string kind, in DbRequestInfo info)
     {
@@ -587,6 +769,11 @@ public static class DbMetrics
         s_schemaRefresh.Add(1, tags);
     }
 
+    /// <summary>
+    /// 지정한 DB 요청 컨텍스트로 스키마 캐시 적중을 기록합니다.
+    /// </summary>
+    /// <param name="kind">캐시 종류 태그 값입니다.</param>
+    /// <param name="info">메트릭 태그로 사용할 DB 요청 컨텍스트입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackCacheHit(string kind, in DbRequestInfo info)
     {
@@ -603,6 +790,12 @@ public static class DbMetrics
         s_cacheHits.Add(1, tags);
     }
 
+    /// <summary>
+    /// 지정한 DB 요청 컨텍스트로 TVP 전송 바이트 수를 기록합니다.
+    /// </summary>
+    /// <param name="bytes">전송된 TVP 바이트 수입니다.</param>
+    /// <param name="tvpName">TVP 타입 이름입니다.</param>
+    /// <param name="info">메트릭 태그로 사용할 DB 요청 컨텍스트입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackTvpUsage(long bytes, string tvpName, in DbRequestInfo info)
     {
@@ -614,12 +807,22 @@ public static class DbMetrics
         s_tvpBytes.Add(bytes, tags);
     }
 
+    /// <summary>
+    /// 컨텍스트 태그 없이 스키마 캐시 적중 카운터를 증가시킵니다.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void IncrementCacheHit() => s_cacheHits.Add(1);
 
+    /// <summary>
+    /// 컨텍스트 태그 없이 스키마 캐시 미스 카운터를 증가시킵니다.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void IncrementCacheMiss() => s_cacheMisses.Add(1);
 
+    /// <summary>
+    /// 캐시 정리로 반환된 바이트 수를 기록합니다.
+    /// </summary>
+    /// <param name="bytes">반환된 바이트 수입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void TrackCacheBytesFreed(long bytes) => s_cacheBytesFreed.Add(bytes);
 }

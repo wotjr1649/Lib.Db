@@ -17,9 +17,11 @@ using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Text.Json;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
@@ -178,11 +180,12 @@ internal sealed class SchemaService(
         {
             // [Negative Cache] 기록 - 두 번째 호출부터는 즉시 예외 throw
             NegativeCache.RecordMissing(instanceHash, normalized, "StoredProcedure");
+            string safeInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
 
             throw new InvalidOperationException(
                 $"[스키마 조회 실패] 저장 프로시저 '{normalized}'을(를) 데이터베이스에서 찾을 수 없습니다. " +
                 $"프로시저가 존재하는지, 사용 권한이 있는지 확인하십시오. " +
-                $"(인스턴스: {instanceHash}, Normalized: {normalized})");
+                $"(인스턴스: {safeInstance}, Normalized: {normalized})");
         }
 
         _snapshot.UpsertSp(instanceHash, schema);
@@ -227,11 +230,12 @@ internal sealed class SchemaService(
         {
             // [Negative Cache] 기록 - 두 번째 호출부터는 즉시 예외 throw
             NegativeCache.RecordMissing(instanceHash, normalized, "TvpType");
+            string safeInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
 
             throw new InvalidOperationException(
                 $"[스키마 조회 실패] TVP(사용자 정의 테이블 타입) '{normalized}'을(를) 데이터베이스에서 찾을 수 없습니다. " +
                 $"타입이 존재하는지, 사용 권한이 있는지, 스키마(dbo 등)가 올바른지 확인하십시오. " +
-                $"(인스턴스: {instanceHash}, Normalized: {normalized})");
+                $"(인스턴스: {safeInstance}, Normalized: {normalized})");
         }
 
         _snapshot.UpsertTvp(instanceHash, schema);
@@ -269,17 +273,33 @@ internal sealed class SchemaService(
     {
         string[] tags = [Tag(instanceHash), Tag(instanceHash, kind)];
 
-        TSchema schema = await cache.GetOrCreateAsync(
-            key,
-            async token =>
-            {
-                TSchema loaded = await loadFromDb(normalized, instanceHash, token).ConfigureAwait(false);
-                await UpdateCacheAsync(key, loaded, instanceHash, kind, token).ConfigureAwait(false);
-                return loaded;
-            },
-            _baseCacheOptions,
-            tags,
-            ct).ConfigureAwait(false);
+        TSchema schema;
+        try
+        {
+            schema = await cache.GetOrCreateAsync(
+                key,
+                async token =>
+                {
+                    TSchema loaded = await loadFromDb(normalized, instanceHash, token).ConfigureAwait(false);
+                    await UpdateCacheAsync(key, loaded, instanceHash, kind, token).ConfigureAwait(false);
+                    return loaded;
+                },
+                _baseCacheOptions,
+                tags,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            logger.LogWarning(ex,
+                "[스키마 캐시 복구] {Kind} 캐시 페이로드를 역직렬화할 수 없어 키 제거 후 DB에서 재로딩합니다. 인스턴스: {Instance}, 이름: {Name}",
+                kind,
+                DbDiagnosticRedactor.RedactInstanceId(instanceHash),
+                normalized);
+
+            await cache.RemoveAsync(key, ct).ConfigureAwait(false);
+            schema = await loadFromDb(normalized, instanceHash, ct).ConfigureAwait(false);
+            await UpdateCacheAsync(key, schema, instanceHash, kind, ct).ConfigureAwait(false);
+        }
 
         if (IsStale(schema.LastCheckedAt))
         {
@@ -320,7 +340,7 @@ internal sealed class SchemaService(
         }
 
         logger.LogInformation("[스키마 워밍업] 시작: 스키마 '{Schema}', 인스턴스 '{Instance}'",
-            schemaLogStr, instanceHash);
+            schemaLogStr, DbDiagnosticRedactor.RedactInstanceId(instanceHash));
 
         SchemaBulkData bulkData = await repo.GetAllSchemaMetadataAsync(
             schemaList,
@@ -422,7 +442,8 @@ internal sealed class SchemaService(
     /// <inheritdoc />
     public async Task FlushSchemaAsync(string instanceHash, CancellationToken ct)
     {
-        logger.LogInformation("[스키마 초기화] 인스턴스 '{Instance}' 캐시 및 스냅샷 전체 삭제", instanceHash);
+        logger.LogInformation("[스키마 초기화] 인스턴스 '{Instance}' 캐시 및 스냅샷 전체 삭제",
+            DbDiagnosticRedactor.RedactInstanceId(instanceHash));
 
         await cache.RemoveByTagAsync(Tag(instanceHash), ct).ConfigureAwait(false);
 
@@ -460,7 +481,7 @@ internal sealed class SchemaService(
         _snapshot.RemoveSp(instanceHash, normalized);
 
         logger.LogWarning("[스키마 강제 무효화] SP: {SpName}, 인스턴스: {Instance}",
-            normalized, instanceHash);
+            normalized, DbDiagnosticRedactor.RedactInstanceId(instanceHash));
     }
 
     /// <summary>
@@ -684,9 +705,12 @@ internal sealed class SchemaService(
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string Tag(string hash, string? type = null)
-        => type is null
-            ? $"Schema:{hash}"
-            : $"Schema:{hash}:{type}";
+    {
+        string cacheHash = SchemaCacheIdentity.ForCache(hash);
+        return type is null
+            ? $"Schema:{cacheHash}"
+            : $"Schema:{cacheHash}:{type}";
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool IsStale(DateTime lastChecked)
@@ -699,7 +723,7 @@ internal sealed class SchemaService(
     private static DbRequestInfo BuildSchemaInfo(string instanceHash, string operation, string target)
         => new()
         {
-            InstanceId = instanceHash,
+            InstanceId = DbDiagnosticRedactor.RedactInstanceId(instanceHash),
             Operation = operation,
             Target = target,
             DbSystem = "mssql"
@@ -847,7 +871,7 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     /// </summary>
     public void Clear(string instanceHash)
     {
-        string prefix = instanceHash + ":";
+        string prefix = SchemaCacheIdentity.ForCache(instanceHash) + ":";
 
         // L2에서 해당 인스턴스의 모든 항목 제거
         // [최적화] ToArray() 없이 KeyValuePair<> 스냅샷으로 순회 — Keys.ToArray()는 키만 복사하나 동일 비용이므로
@@ -1042,9 +1066,11 @@ internal sealed class TvpSchemaValidator(
     private static readonly FrozenDictionary<Type, SqlDbType[]> s_typeMap =
         new Dictionary<Type, SqlDbType[]>
         {
+            { typeof(byte),           [SqlDbType.TinyInt] },
+            { typeof(short),          [SqlDbType.SmallInt] },
             { typeof(int),            [SqlDbType.Int, SqlDbType.SmallInt, SqlDbType.TinyInt] },
             { typeof(long),           [SqlDbType.BigInt, SqlDbType.Int] },
-            { typeof(string),         [SqlDbType.NVarChar, SqlDbType.VarChar, SqlDbType.Char, SqlDbType.NChar, SqlDbType.Text, SqlDbType.Xml] },
+            { typeof(string),         [SqlDbType.NVarChar, SqlDbType.VarChar, SqlDbType.Char, SqlDbType.NChar, SqlDbType.Text, SqlDbType.NText, SqlDbType.Xml] },
             { typeof(decimal),        [SqlDbType.Decimal, SqlDbType.Money, SqlDbType.SmallMoney] },
             { typeof(bool),           [SqlDbType.Bit] },
             { typeof(DateTime),       [SqlDbType.DateTime, SqlDbType.DateTime2, SqlDbType.Date, SqlDbType.SmallDateTime] },
@@ -1053,7 +1079,10 @@ internal sealed class TvpSchemaValidator(
             { typeof(double),         [SqlDbType.Float] },
             { typeof(float),          [SqlDbType.Real] },
             { typeof(TimeSpan),       [SqlDbType.Time] },
-            { typeof(DateTimeOffset), [SqlDbType.DateTimeOffset] }
+            { typeof(DateTimeOffset), [SqlDbType.DateTimeOffset] },
+            { typeof(DateOnly),       [SqlDbType.Date] },
+            { typeof(TimeOnly),       [SqlDbType.Time] },
+            { typeof(Half),           [SqlDbType.Real] }
         }.ToFrozenDictionary();
 
     #endregion
@@ -1067,7 +1096,7 @@ internal sealed class TvpSchemaValidator(
         string instanceHash,
         CancellationToken ct)
     {
-        if (options.TvpValidationMode == TvpValidationMode.None || accessors.IsValidated)
+        if (options.TvpValidationMode == TvpValidationMode.None)
             return;
 
         string name = TvpName.Parse(tvpTypeName).FullName;
@@ -1076,10 +1105,17 @@ internal sealed class TvpSchemaValidator(
         {
             TvpSchema schema = await service.GetTvpSchemaAsync(name, instanceHash, ct)
                                       .ConfigureAwait(false);
+            string validationIdentity = BuildValidationIdentity(name, instanceHash, schema);
 
-            ValidateStructure(accessors.Properties.AsSpan(), schema.Columns.AsSpan(), name);
+            if (accessors.IsValidatedFor(validationIdentity))
+                return;
 
-            accessors.IsValidated = true;
+            if (accessors.StaticValidator is not null)
+                accessors.StaticValidator.ValidateStatic(schema);
+            else
+                ValidateStructure(accessors.Properties.AsSpan(), schema.Columns.AsSpan(), name);
+
+            accessors.MarkValidated(validationIdentity);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1090,7 +1126,7 @@ internal sealed class TvpSchemaValidator(
             // 메트릭: TVP 검증 실패 (Strict / LogOnly 공통)
             DbRequestInfo info = new DbRequestInfo
             {
-                InstanceId = instanceHash,
+                InstanceId = DbDiagnosticRedactor.RedactInstanceId(instanceHash),
                 Operation = "schema.tvp.validate",
                 Target = name,
                 DbSystem = "mssql"
@@ -1102,7 +1138,7 @@ internal sealed class TvpSchemaValidator(
                 if (ex is SqlException sqlEx)
                 {
                     throw new InvalidOperationException(
-                        $"[TVP 검증 실패] Schema 조회 중 SQL 오류 발생: {sqlEx.Message}", sqlEx);
+                        "[TVP 검증 실패] Schema 조회 중 SQL 오류가 발생했습니다.", sqlEx);
                 }
                 throw;
             }
@@ -1111,7 +1147,7 @@ internal sealed class TvpSchemaValidator(
                 "[TVP 검증 실패] {Name} (사유: {Reason}) - LogOnly 모드로 계속 진행",
                 name, reason);
 
-            accessors.IsValidated = true;
+            accessors.MarkValidated(BuildFallbackValidationIdentity(name, instanceHash));
         }
     }
 
@@ -1133,9 +1169,9 @@ internal sealed class TvpSchemaValidator(
     /// </para>
     /// </summary>
     /// <remarks>
-    /// <b>시간 복잡도</b>: O(N/8) for SIMD path, O(N) for scalar fallback<br/>
+    /// <b>시간 복잡도</b>: O(N). SIMD path는 이름 해시 사전 비교를 8개 단위로 수행한 뒤 각 컬럼의 상세 검증을 수행합니다.<br/>
     /// <b>공간 복잡도</b>: O(1) - 스택에 64바이트(int[8] × 2)만 사용<br/>
-    /// <b>성능</b>: 8개 이상 컬럼에서 기존 대비 2-3배 향상
+    /// <b>성능</b>: 컬럼 수가 많은 TVP에서 이름 해시 비교 비용을 줄입니다.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void ValidateStructure(
@@ -1164,9 +1200,7 @@ internal sealed class TvpSchemaValidator(
                 // 1. 프로퍼티 이름 해시 8개를 Span에 채움 (재사용)
                 for (int j = 0; j < 8; j++)
                 {
-                    propHashes[j] = string.GetHashCode(
-                        props[i + j].Name,
-                        StringComparison.OrdinalIgnoreCase);
+                    propHashes[j] = TvpNameHash.Compute(props[i + j].Name);
                 }
 
                 // 2. Vector256<int>로 로드
@@ -1199,6 +1233,13 @@ internal sealed class TvpSchemaValidator(
                     {
                         CheckSingle(props[i + j], cols[i + j], tvpName);
                     }
+                    continue;
+                }
+
+                for (int j = 0; j < 8; j++)
+                {
+                    CheckColumnNameText(props[i + j], cols[i + j], tvpName);
+                    CheckColumnDetails(props[i + j], cols[i + j], tvpName);
                 }
             }
         }
@@ -1220,15 +1261,50 @@ internal sealed class TvpSchemaValidator(
         string tvpName)
     {
         // 1. 이름 해시 비교
-        int propHash = string.GetHashCode(prop.Name, StringComparison.OrdinalIgnoreCase);
+        int propHash = TvpNameHash.Compute(prop.Name);
         if (propHash != col.NameHash)
         {
             Throw(tvpName, SchemaConstants.ErrNameMismatch,
                 $"컬럼 이름 불일치: 앱({prop.Name}) != DB({col.Name})");
         }
 
+        CheckColumnNameText(prop, col, tvpName);
+        CheckColumnDetails(prop, col, tvpName);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void CheckColumnNameText(
+        PropertyInfo prop,
+        TvpColumnMetadata col,
+        string tvpName)
+    {
+        if (!string.Equals(prop.Name, col.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            Throw(tvpName, SchemaConstants.ErrNameMismatch,
+                $"컬럼 이름 불일치: 앱({prop.Name}) != DB({col.Name})");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void CheckColumnDetails(
+        PropertyInfo prop,
+        TvpColumnMetadata col,
+        string tvpName)
+    {
+        if (col.IsIdentity)
+        {
+            Throw(tvpName, SchemaConstants.ErrIdentityComputed,
+                $"쓰기 금지 컬럼: {prop.Name} - Identity 컬럼은 TVP에서 값을 제공할 수 없습니다.");
+        }
+
+        if (col.IsComputed)
+        {
+            Throw(tvpName, SchemaConstants.ErrIdentityComputed,
+                $"쓰기 금지 컬럼: {prop.Name} - Computed 컬럼은 TVP에서 값을 제공할 수 없습니다.");
+        }
+
         // 2. SQL 타입 비교
-        Type propType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+        Type propType = GetMappedClrType(prop.PropertyType);
 
         // 타입 맵핑 검증 (기존 로직 유지)
         if (s_typeMap.TryGetValue(propType, out SqlDbType[]? validTypes) &&
@@ -1249,6 +1325,59 @@ internal sealed class TvpSchemaValidator(
             //     $"Nullable 불일치: {prop.Name} - 앱({propIsNullable}) != DB({col.IsNullable})");
         }
     }
+
+    private static Type GetMappedClrType(Type propertyType)
+    {
+        Type propType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+        return propType.IsEnum ? Enum.GetUnderlyingType(propType) : propType;
+    }
+
+    private static string BuildValidationIdentity(string tvpName, string instanceHash, TvpSchema schema)
+    {
+        StringBuilder builder = new(128 + (schema.Columns.Length * 96));
+        AppendIdentityField(builder, SchemaCacheIdentity.ForCache(instanceHash));
+        AppendIdentityField(builder, tvpName.ToUpperInvariant());
+        AppendIdentityField(builder, schema.VersionToken.ToString(CultureInfo.InvariantCulture));
+        AppendIdentityField(builder, schema.Columns.Length.ToString(CultureInfo.InvariantCulture));
+
+        foreach (TvpColumnMetadata column in schema.Columns)
+        {
+            AppendIdentityField(builder, column.Ordinal.ToString(CultureInfo.InvariantCulture));
+            AppendIdentityField(builder, column.Name);
+            AppendIdentityField(builder, column.NameHash.ToString(CultureInfo.InvariantCulture));
+            AppendIdentityField(builder, column.SqlDbType.ToString());
+            AppendIdentityField(builder, column.MaxLength.ToString(CultureInfo.InvariantCulture));
+            AppendIdentityField(builder, column.Precision.ToString(CultureInfo.InvariantCulture));
+            AppendIdentityField(builder, column.Scale.ToString(CultureInfo.InvariantCulture));
+            AppendIdentityField(builder, column.IsIdentity ? "1" : "0");
+            AppendIdentityField(builder, column.IsComputed ? "1" : "0");
+            AppendIdentityField(builder, column.IsNullable ? "1" : "0");
+        }
+
+        return builder.ToString();
+    }
+
+    private static void AppendIdentityField(StringBuilder builder, string? value)
+    {
+        if (value is null)
+        {
+            builder.Append("-1:|");
+            return;
+        }
+
+        builder
+            .Append(value.Length.ToString(CultureInfo.InvariantCulture))
+            .Append(':')
+            .Append(value)
+            .Append('|');
+    }
+
+    private static string BuildFallbackValidationIdentity(string tvpName, string instanceHash)
+        => string.Concat(
+            SchemaCacheIdentity.ForCache(instanceHash),
+            "|",
+            tvpName.ToUpperInvariant(),
+            "|logonly-failed");
 
     [DoesNotReturn]
     private static void Throw(string tvpName, string reason, string message)
@@ -1281,7 +1410,7 @@ file static class SchemaMapper
     public static TvpColumnMetadata MapToTvpColumn(TvpColumnInfo info)
         => new(
             Name: info.Name,
-            NameHash: string.GetHashCode(info.Name, StringComparison.OrdinalIgnoreCase),
+            NameHash: TvpNameHash.Compute(info.Name),
             MaxLength: (short)info.MaxLength,
             Ordinal: info.Ordinal,
             SqlDbType: MapToSql(info.TypeName),
@@ -1312,8 +1441,8 @@ file static class SchemaMapper
 /// </summary>
 file static class KeyHelper
 {
-    // Snapshot Key : "{InstanceHash}:{Name}" (Lowercase)
-    // Cache Key    : "Sch:{InstanceHash}:{Type}:{Name}" (Lowercase)
+    // Snapshot Key : "{InstanceIdentity}:{Name}" (Lowercase)
+    // Cache Key    : "Sch:v2:{InstanceIdentity}:{Type}:{Name}" (Lowercase)
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static SpSchema? LookupSp(
@@ -1352,13 +1481,13 @@ file static class KeyHelper
     /// 스냅샷 키를 위해 문자열 키를 생성합니다.
     /// </summary>
     public static string BuildSnapshotKey(string hash, string name)
-        => $"{hash}:{name}";
+        => $"{SchemaCacheIdentity.ForCache(hash)}:{name}";
 
     /// <summary>
     /// HybridCache용 문자열 키를 생성합니다.
     /// </summary>
     public static string BuildStringKey(string hash, string type, string name)
-        => $"Sch:{hash}:{type}:{name}";
+        => $"Sch:v2:{SchemaCacheIdentity.ForCache(hash)}:{type}:{name}";
 
     /// <summary>
     /// Span 버퍼에 Snapshot 키를 조합합니다. (성공 시 GC 0)
@@ -1370,14 +1499,15 @@ file static class KeyHelper
         out int written)
     {
         written = 0;
+        string cacheHash = SchemaCacheIdentity.ForCache(hash);
 
-        int required = hash.Length + 1 + name.Length;
+        int required = cacheHash.Length + 1 + name.Length;
         if (dest.Length < required)
             return false;
 
-        hash.AsSpan().CopyTo(dest);
-        dest[hash.Length] = ':';
-        name.AsSpan().CopyTo(dest.Slice(hash.Length + 1));
+        cacheHash.AsSpan().CopyTo(dest);
+        dest[cacheHash.Length] = ':';
+        name.AsSpan().CopyTo(dest.Slice(cacheHash.Length + 1));
 
         written = required;
         return true;
@@ -1385,3 +1515,17 @@ file static class KeyHelper
 }
 
 #endregion
+
+internal static class SchemaCacheIdentity
+{
+    public static string ForCache(string instanceHash)
+    {
+        if (!instanceHash.StartsWith("Raw:", StringComparison.Ordinal))
+            return instanceHash;
+
+        byte[] digest = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(instanceHash));
+
+        return "raw-sha256-" + Convert.ToHexString(digest);
+    }
+}

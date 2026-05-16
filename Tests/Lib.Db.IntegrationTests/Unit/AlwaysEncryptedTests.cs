@@ -19,7 +19,8 @@ public sealed class AlwaysEncryptedTests
     [Fact]
     public void AE_ConnString_WithColumnEncryption_ShouldDetect()
     {
-        string connectionString = "Server=localhost;Database=TestDb;User Id=sa;Password=Test1234!;Column Encryption Setting=Enabled;";
+        string connectionString =
+            "Server=localhost;Database=TestDb;Integrated Security=True;Column Encryption Setting=Enabled;";
 
         bool result = LibDbOptions.IsAlwaysEncryptedEnabled(connectionString);
 
@@ -33,7 +34,7 @@ public sealed class AlwaysEncryptedTests
     [Fact]
     public void AE_ConnString_Without_ShouldReturnFalse()
     {
-        string connectionString = "Server=localhost;Database=TestDb;User Id=sa;Password=Test1234!;";
+        string connectionString = "Server=localhost;Database=TestDb;Integrated Security=True;";
 
         bool result = LibDbOptions.IsAlwaysEncryptedEnabled(connectionString);
 

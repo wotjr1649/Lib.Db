@@ -7,6 +7,7 @@
 using System.Data;
 using System.Data.Common;
 using Lib.Db.Core;
+using Lib.Db.IntegrationTests.Infrastructure;
 using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.VerificationDb.Resilience;
@@ -29,9 +30,8 @@ public sealed class IT07_TimeBasedResiliencyTests
         // 1. Setup Isolated Service Container
         ServiceCollection services = new();
         RetryCountingInterceptor_IT07 interceptor = new();
-
-        string dbName = "LIBDB_VERIFICATION_TEST";
-        string connString = $"Server=127.0.0.1,1433;Database={dbName};User ID=sa;Password=123456;Integrated Security=false;TrustServerCertificate=true;MultipleActiveResultSets=true";
+        IConfiguration configuration = TestConnectionStrings.CreateConfiguration();
+        string connString = TestConnectionStrings.Require(configuration, TestConnectionStrings.Verification);
 
         services.AddSingleton<IDbCommandInterceptor>(interceptor);
         services.AddLogging();

@@ -34,24 +34,14 @@ public static class LibDbServiceCollectionExtensions
     #region [확장 메서드] 서비스 등록 - 통합
 
     /// <summary>
-    /// 고성능 DB 라이브러리의 모든 서비스를 한 번에 등록합니다. (기본 사용자용)
+    /// <see cref="IConfiguration"/>을 통해 Lib.Db 필수 서비스를 일괄 등록합니다.
     /// <para>
-    /// 내부적으로 다음을 순차 호출합니다:<br/>
-    /// - <see cref="LibDbOptionsExtensions.AddLibDbOptions"/><br/>
-    /// - <see cref="RegisterLibDbCoreServices"/><br/>
-    /// - <see cref="AddLibDbResilience"/><br/>
-    /// - <see cref="AddLibDbHostedServices"/>
+    /// appsettings.json의 "LibDb" 섹션과 최상위 "ConnectionStrings" 섹션 바인딩을 처리합니다.
     /// </para>
     /// </summary>
     /// <param name="services">서비스 컬렉션</param>
-    /// <param name="configure">LibDbOptions 설정 델리게이트</param>
-    /// <returns>체이닝을 위한 IServiceCollection</returns>
-    /// <summary>
-    /// [권장] IConfiguration을 통해 Lib.Db 필수 서비스를 일괄 등록합니다.
-    /// <para>
-    /// appsettings.json의 "LibDb" 섹션 바인딩을 자동으로 처리합니다.
-    /// </para>
-    /// </summary>
+    /// <param name="configuration">Lib.Db 설정을 포함한 애플리케이션 구성</param>
+    /// <returns>체이닝을 위한 <see cref="IServiceCollection"/></returns>
     public static IServiceCollection AddLibDb(this IServiceCollection services, IConfiguration configuration)
     {
         return services.AddHighPerformanceDb(options =>
@@ -216,7 +206,7 @@ public static class LibDbServiceCollectionExtensions
     }
 
     /// <summary>
-    /// v9 FINAL+: Epoch 기반 분산 스키마 캐시 조정 서비스를 조건부로 등록합니다.
+    /// v9 FINAL+: Epoch 기반 분산 스키마 캐시 조정 서비스를 등록합니다.
     /// <para>
     /// <b>[플랫폼 자동 감지]</b><br/>
     /// <see cref="LibDbOptions.EnableEpochCoordination"/>가 <c>null</c>이면:<br/>
@@ -227,7 +217,7 @@ public static class LibDbServiceCollectionExtensions
     /// <b>[등록 서비스]</b><br/>
     /// - <see cref="EpochStore"/> (Singleton)<br/>
     /// - <see cref="ISchemaFlushCoordinator"/> → <see cref="SchemaFlushService"/><br/>
-    /// - <see cref="EpochWatcherService"/> (조건부: WatchedInstances 설정 시)
+    /// - <see cref="EpochWatcherService"/> (등록은 항상 수행, 감시 대상이 없으면 실행 시 종료)
     /// </para>
     /// </summary>
     /// <param name="services">서비스 컬렉션</param>
@@ -244,7 +234,7 @@ public static class LibDbServiceCollectionExtensions
         string? epochBasePath = null)
     {
         // [Anti-pattern 제거] BuildServiceProvider() 호출 없이 팩토리 람다에서 런타임 옵션 확인
-        // 1. EpochStore — 팩토리 내부에서 EnableEpochCoordination 판정 후 조건부 생성
+        // 1. EpochStore - 팩토리 내부에서 EnableEpochCoordination 판정 후 실제/Noop 동작을 결정
         services.TryAddSingleton(sp =>
         {
             LibDbOptions options = sp.GetRequiredService<LibDbOptions>();
@@ -261,8 +251,10 @@ public static class LibDbServiceCollectionExtensions
             if (!enableEpoch)
             {
                 logger.LogInformation(
-                    "[Epoch] 비활성화됨 - EpochStore를 Noop 모드로 생성합니다 (명시적 설정: {ExplicitSetting})",
+                    "[Epoch] 비활성화됨 - EpochStore를 파일 시스템 없는 Noop 모드로 생성합니다 (명시적 설정: {ExplicitSetting})",
                     options.EnableEpochCoordination?.ToString() ?? "null (auto-detect)");
+
+                return EpochStore.Disabled(logger);
             }
             else if (!enableSharedMemory)
             {
@@ -282,7 +274,7 @@ public static class LibDbServiceCollectionExtensions
         services.TryAddSingleton<ISchemaFlushCoordinator, SchemaFlushService>();
 
         // 3. EpochWatcherService 등록
-        // (EpochWatcherService.ExecuteAsync는 WatchedInstances가 비어있으면 즉시 종료)
+        // (EpochWatcherService.ExecuteAsync는 비활성 옵션 또는 WatchedInstances 공백 시 즉시 종료)
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, EpochWatcherService>());
 

@@ -68,10 +68,16 @@ public sealed class DbInterceptionContext
     /// <summary>실행할 명령 텍스트 (SP 이름 또는 SQL)</summary>
     public required string CommandText { get; init; }
 
+    /// <summary>
+    /// 로그/추적에 사용할 진단용 명령 텍스트입니다.
+    /// <para>기본 설정에서는 Raw SQL 원문 대신 명령 종류만 제공되어 민감한 SQL 리터럴 노출을 줄입니다.</para>
+    /// </summary>
+    public string DiagnosticCommandText { get; init; } = string.Empty;
+
     /// <summary>명령 유형</summary>
     public required System.Data.CommandType CommandType { get; init; }
 
-    /// <summary>대상 인스턴스 이름</summary>
+    /// <summary>대상 인스턴스의 진단용 식별자. Raw 연결 문자열 기반 값은 redaction 처리됩니다.</summary>
     public required string InstanceName { get; init; }
 
     /// <summary>실행 시작 시각 (UTC)</summary>

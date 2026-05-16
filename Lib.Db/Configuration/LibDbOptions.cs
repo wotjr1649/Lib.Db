@@ -27,7 +27,7 @@ namespace Lib.Db.Configuration;
 /// <para>
 /// <b>[주요 특징]</b>
 /// <list type="bullet">
-/// <item><b>Hot Reload 지원</b>: <see cref="IOptionsMonitor{TOptions}"/>와 연동하여 런타임 설정 변경을 반영하도록 설계되었습니다.</item>
+/// <item><b>Hot Reload 지원</b>: <see cref="Microsoft.Extensions.Options.IOptionsMonitor{TOptions}"/>와 연동하여 런타임 설정 변경을 반영하도록 설계되었습니다.</item>
 /// <item><b>Self-Validation</b>: C# 14 <c>field</c> 키워드를 활용하여 잘못된 설정값이 주입되는 것을 원천적으로 방지합니다.</item>
 /// <item><b>AOT Compatibility</b>: <see cref="JsonIgnoreAttribute"/>를 적절히 배치하여 트리밍 경고를 방지하고 Native AOT 빌드를 지원합니다.</item>
 /// </list>
@@ -62,6 +62,27 @@ public sealed class LibDbOptions
     /// </para>
     /// </summary>
     public MarsPolicy Mars { get; set; } = MarsPolicy.Auto;
+
+    /// <summary>
+    /// 연결 문자열 보안 검증 프로필입니다. (기본값: <see cref="ConnectionSecurityProfile.Development"/>)
+    /// <para>
+    /// <see cref="ConnectionSecurityProfile.Production"/> 설정 시 암호화 비활성 연결,
+    /// <c>TrustServerCertificate=True</c>, 고권한 기본 SQL 로그인 사용을 기본 차단합니다.
+    /// </para>
+    /// </summary>
+    public ConnectionSecurityProfile ConnectionSecurityProfile { get; set; } = ConnectionSecurityProfile.Development;
+
+    /// <summary>
+    /// 운영 프로필에서 <c>TrustServerCertificate=True</c>를 예외적으로 허용할지 여부입니다.
+    /// <para>인증서 체인 검증을 우회하므로, 통제된 전환 기간에만 사용하세요.</para>
+    /// </summary>
+    public bool AllowProductionTrustServerCertificateWaiver { get; set; } = false;
+
+    /// <summary>
+    /// 운영 프로필에서 고권한 기본 SQL 로그인을 예외적으로 허용할지 여부입니다.
+    /// <para>운영 환경에서는 최소 권한 전용 계정을 권장합니다.</para>
+    /// </summary>
+    public bool AllowProductionSaLoginWaiver { get; set; } = false;
 
     #endregion
 
@@ -197,6 +218,15 @@ public sealed class LibDbOptions
     /// <para>true 설정 시: DB 연결은 수행하지만, INSERT/UPDATE/DELETE 등의 변경 쿼리는 실제 실행하지 않고 로그만 남깁니다.</para>
     /// </summary>
     public bool EnableDryRun { get; set; } = false;
+
+    /// <summary>
+    /// <see cref="System.Data.CommandType.Text"/> 기반 Raw SQL 실행 정책입니다.
+    /// <para>
+    /// 기본값은 <see cref="RawSqlPolicy.Allow"/>로 기존 동작을 유지합니다.
+    /// 운영 환경에서 저장 프로시저 중심 경계를 강제하려면 <see cref="RawSqlPolicy.DenyAllText"/>를 사용하세요.
+    /// </para>
+    /// </summary>
+    public RawSqlPolicy RawSqlPolicy { get; set; } = RawSqlPolicy.Allow;
 
     /// <summary>
     /// SP 파라미터의 Required/Default 정책을 엄격하게 검사할지 여부 (기본값: true)
@@ -668,8 +698,8 @@ public sealed class LibDbOptions
     }
 
     /// <summary>
-    /// SQL 쿼리 파라미터를 추적(Trace)에 포함할지 여부 (기본값: false)
-    /// <para>보안상 중요하므로, 개발 환경에서만 true로 설정하는 것이 좋습니다.</para>
+    /// SQL 원문이 포함될 수 있는 명령 텍스트를 추적/진단 로그에 포함할지 여부입니다. (기본값: false)
+    /// <para>보안상 중요하므로, 로컬 개발 또는 통제된 진단 환경에서만 true로 설정하는 것이 좋습니다.</para>
     /// </summary>
     public bool IncludeParametersInTrace { get; set; } = false;
 

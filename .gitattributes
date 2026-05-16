@@ -2,14 +2,15 @@
 * text=auto
 
 # Custom for Visual Studio
-*.cs     text diff=csharp
-*.sln    text merge=union
-*.csproj text merge=union
-*.slnx   text merge=union
-*.xml    text
-*.json   text
-*.md     text
-*.sql    text
+.gitattributes text eol=lf
+*.cs     text eol=lf diff=csharp
+*.sln    text eol=lf merge=union
+*.csproj text eol=lf merge=union
+*.slnx   text eol=lf merge=union
+*.xml    text eol=lf
+*.json   text eol=lf
+*.md     text eol=lf
+*.sql    text eol=lf
 
 # Binary files
 *.dll binary

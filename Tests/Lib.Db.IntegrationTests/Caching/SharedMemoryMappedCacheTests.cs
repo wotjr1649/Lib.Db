@@ -140,6 +140,9 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
             Options.Create(options),
             NullLogger<SharedMemoryCache>.Instance);
 
+        Assert.True(cache.IsFallbackMode);
+        Assert.Equal("fallback", cache.CacheMode);
+
         string key = "fallback-key";
         byte[] val = [0x99];
 
@@ -148,5 +151,30 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
 
         Assert.NotNull(res);
         Assert.Equal(val, res);
+    }
+
+    [Fact]
+    public async Task SM06_AsyncMethods_ShouldReturnCanceledTask_ForPreCanceledToken()
+    {
+        using SharedMemoryCache cache = CreateCache();
+        using CancellationTokenSource cts = new();
+        await cts.CancelAsync();
+        CancellationToken token = cts.Token;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => cache.GetAsync("sm06-key", token));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => cache.SetAsync(
+                "sm06-key",
+                [1, 2, 3],
+                new DistributedCacheEntryOptions(),
+                token));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => cache.RemoveAsync("sm06-key", token));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => cache.RefreshAsync("sm06-key", token));
     }
 }

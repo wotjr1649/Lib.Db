@@ -461,9 +461,9 @@ Express의 제한은 CPU(4코어), 메모리(1,410MB), DB크기(10GB)뿐이며, 
 
 ### 7.4 성능 기술
 
-- Span<T> / stackalloc — 힙 할당 0
+- Span<T> / stackalloc — 할당 절감형 경로
 - ArrayPool<T> — GC 압박 제거
-- InterpolatedStringHandler (ref struct) — Zero-Alloc SQL
+- InterpolatedStringHandler (ref struct) — 보간 SQL 파라미터화 지원
 - [SkipLocalsInit] — 로컬 초기화 비용 제거
 - TieredPGO — 런타임 최적화
 - Source Generator 전면 — 리플렉션 0

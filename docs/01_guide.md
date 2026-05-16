@@ -47,11 +47,13 @@ IProcedureStage → IParameterStage → IExecutionStage<T> → DbResult<T>
 ```json
 {
   "ConnectionStrings": {
-    "Default": "Server=localhost;Database=MyDb;User Id=sa;Password=***;TrustServerCertificate=True;",
-    "LogDb": "Server=localhost;Database=LogDb;User Id=sa;Password=***;TrustServerCertificate=True;"
+    "Default": "Server=localhost;Database=MyDb;User Id=app_user;Password=***;Encrypt=True;TrustServerCertificate=False;",
+    "LogDb": "Server=localhost;Database=LogDb;User Id=log_user;Password=***;Encrypt=True;TrustServerCertificate=False;"
   },
   "LibDb": {
     "ConnectionStringNames": ["Default", "LogDb"],
+    "ConnectionSecurityProfile": "Production",
+    "RawSqlPolicy": "DenyWriteText",
     "Mars": "ForceEnable",
     "EnableSchemaCaching": true,
     "SchemaRefreshIntervalSeconds": 60,
@@ -129,18 +131,21 @@ DbResult<IAsyncEnumerable<User>> result = await session.Default
     .QueryAsync<User>();
 ```
 
-### 3-3. 보간 SQL (Zero-Allocation, SQL Injection 방지)
+### 3-3. 보간 SQL (값 인수 파라미터화)
 
 ```csharp
 int userId = 42;
 string name = "Alice";
 
 DbResult<User?> result = await session.Default
-    .Sql($"SELECT * FROM Users WHERE Id = {userId} AND Name = {name}")
+    .SqlInterpolated($"SELECT * FROM Users WHERE Id = {userId} AND Name = {name}")
     .QuerySingleAsync<User>();
 
 // 실제 실행: SELECT * FROM Users WHERE Id = @p0 AND Name = @p1
 ```
+
+보간된 값 인수는 파라미터로 바인딩되어 값 기반 SQL injection 위험을 줄입니다.
+테이블명, 컬럼명, 정렬 방향 같은 SQL 구조는 파라미터화되지 않으므로 사용자 입력을 직접 조립하지 말고 allow-list로 선택하세요.
 
 ### 3-4. 타임아웃 설정
 
@@ -259,7 +264,8 @@ public sealed class MultiDbService(IDbSession session)
 
         // LogDb에 기록
         DbResult<int> logResult = await session.Use("LogDb")
-            .Sql($"INSERT INTO Logs (Message) VALUES ({"주문 처리 시작"})")
+            .Procedure("dbo.usp_WriteLog")
+            .With(new { Message = "주문 처리 시작" })
             .ExecuteAsync();
     }
 }

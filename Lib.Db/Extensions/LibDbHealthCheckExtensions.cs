@@ -6,7 +6,9 @@
 
 #nullable enable
 
+using Lib.Db.Caching;
 using Lib.Db.Contracts.Infrastructure;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -43,34 +45,37 @@ public static class LibDbHealthCheckExtensions
     /// </para>
     /// <para>
     /// <b>[설계 의도]</b> 이전 구현에서 static 필드를 사용하면 여러 인스턴스가 DI에 등록될 경우
-    /// 인스턴스 Lock이 static 상태를 보호하지 못하는 문제가 있었습니다.
+    /// 인스턴스별 동기화 상태가 공유 결과를 보호하지 못하는 문제가 있었습니다.
     /// 모든 상태를 인스턴스 필드로 변경하여 각 인스턴스가 독립적인 스로틀링 상태를 유지합니다.
     /// 스로틀 간격은 <see cref="LibDbOptions.HealthCheckThrottleSeconds"/>에서 읽어 설정에 따라 동적으로 결정됩니다.
     /// </para>
     /// </summary>
     private sealed class ThrottledDbHealthCheck : IHealthCheck
     {
-        // 인스턴스 필드로 변경: static → instance (동시 다중 인스턴스 시 Lock이 상태를 올바르게 보호)
+        // 인스턴스 필드로 변경: static → instance (동시 다중 인스턴스 시 상태를 독립적으로 유지)
         // [BUG-12 수정] HealthCheckResult는 struct이므로 volatile 적용 불가(CS0677).
         // 스로틀 경로의 stale read는 HealthCheck 캐싱 특성상 허용 가능하며,
-        // 쓰기는 _lock 내에서만 수행하여 일관성을 보장합니다.
-        private HealthCheckResult _lastResult =
-            HealthCheckResult.Healthy("Initial State");
+        // 쓰기는 _checkGate 내에서만 수행하여 일관성을 보장합니다.
+        private HealthCheckResult _lastResult;
         private long _lastCheckTick;
         private readonly long _throttleTicks;
 
         private readonly IDbConnectionFactory _connFactory;
         private readonly LibDbOptions _options;
-        private readonly Lock _lock = new();
+        private readonly IDistributedCache? _cache;
+        private readonly SemaphoreSlim _checkGate = new(1, 1);
 
         public ThrottledDbHealthCheck(
             IDbConnectionFactory connFactory,
-            LibDbOptions options)
+            LibDbOptions options,
+            IServiceProvider services)
         {
             _connFactory = connFactory;
             _options = options;
+            _cache = services.GetService<IDistributedCache>();
             // LibDbOptions.HealthCheckThrottleSeconds 설정값 반영 (기본 1초)
             _throttleTicks = TimeSpan.FromSeconds(options.HealthCheckThrottleSeconds).Ticks;
+            _lastResult = HealthCheckResult.Healthy("Initial State", GetCacheDiagnosticData());
         }
 
         public async Task<HealthCheckResult> CheckHealthAsync(
@@ -86,8 +91,8 @@ public static class LibDbHealthCheckExtensions
                 return _lastResult;
             }
 
-            // 2. 실제 DB 검사 (Lock을 통해 중복 실행 방지)
-            if (_lock.TryEnter())
+            // 2. 실제 DB 검사 (SemaphoreSlim을 통해 async 경로에서 중복 실행 방지)
+            if (await _checkGate.WaitAsync(0, ct).ConfigureAwait(false))
             {
                 try
                 {
@@ -95,9 +100,7 @@ public static class LibDbHealthCheckExtensions
                     if (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastCheckTick) < _throttleTicks)
                         return _lastResult;
 
-                    // 첫 번째 연결 문자열 사용
-                    string? firstInstance = _options.ConnectionStrings.Keys.FirstOrDefault()
-                        ?? throw new InvalidOperationException("HealthCheck: 설정된 DB 인스턴스가 없습니다.");
+                    string firstInstance = GetDefaultInstanceName();
 
                     await using SqlConnection conn = await _connFactory.CreateConnectionAsync(firstInstance, ct).ConfigureAwait(false);
                     await using SqlCommand cmd = conn.CreateCommand();
@@ -105,21 +108,54 @@ public static class LibDbHealthCheckExtensions
                     cmd.CommandTimeout = _options.HealthCheckTimeoutSeconds;
                     await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
 
-                    _lastResult = HealthCheckResult.Healthy("DB Connection OK");
+                    _lastResult = HealthCheckResult.Healthy("DB Connection OK", GetCacheDiagnosticData());
                     Interlocked.Exchange(ref _lastCheckTick, DateTime.UtcNow.Ticks);
                 }
-                catch (Exception ex)
+                catch
                 {
-                    _lastResult = HealthCheckResult.Unhealthy($"DB Connection Failed: {ex.Message}", ex);
+                    _lastResult = HealthCheckResult.Unhealthy("DB Connection Failed", data: GetCacheDiagnosticData());
                     Interlocked.Exchange(ref _lastCheckTick, DateTime.UtcNow.Ticks);
                 }
                 finally
                 {
-                    _lock.Exit();
+                    _checkGate.Release();
                 }
             }
 
             return _lastResult;
+        }
+
+        private IReadOnlyDictionary<string, object> GetCacheDiagnosticData()
+        {
+            if (_cache is SharedMemoryCache sharedMemoryCache)
+            {
+                return new Dictionary<string, object>
+                {
+                    ["libdb.cache.mode"] = sharedMemoryCache.CacheMode,
+                    ["libdb.cache.fallback_active"] = sharedMemoryCache.IsFallbackMode
+                };
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["libdb.cache.mode"] = _cache?.GetType().Name ?? "unregistered",
+                ["libdb.cache.fallback_active"] = false
+            };
+        }
+
+        private string GetDefaultInstanceName()
+        {
+            if (_options.ConnectionStringNames is not { Count: > 0 })
+                throw new InvalidOperationException("HealthCheck: LibDbOptions.ConnectionStringNames에 기본 인스턴스 이름이 등록되지 않았습니다.");
+
+            string firstInstance = _options.ConnectionStringNames[0];
+            if (string.IsNullOrWhiteSpace(firstInstance))
+                throw new InvalidOperationException("HealthCheck: LibDbOptions.ConnectionStringNames[0]이 비어있습니다.");
+
+            if (_options.ConnectionStrings is null || !_options.ConnectionStrings.ContainsKey(firstInstance))
+                throw new InvalidOperationException($"HealthCheck: 기본 인스턴스 '{firstInstance}'의 연결 문자열이 없습니다.");
+
+            return firstInstance;
         }
     }
 }

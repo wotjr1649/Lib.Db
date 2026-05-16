@@ -138,6 +138,50 @@ internal static class TypeMappingRegistry
         };
     }
 
+    /// <summary>
+    /// 런타임 TVP 스키마 검증기와 동일한 호환 SQL Server 타입 목록을 반환합니다.
+    /// </summary>
+    /// <param name="type">C# 타입 심볼</param>
+    /// <returns>
+    /// 호환 가능한 <see cref="System.Data.SqlDbType"/> 이름 목록입니다.
+    /// 빈 배열은 런타임 검증기도 해당 CLR 타입을 엄격히 검증하지 않는다는 뜻입니다.
+    /// </returns>
+    public static string[] GetCompatibleSqlDbTypeNames(ITypeSymbol type)
+    {
+        type = UnwrapNullable(type);
+        type = UnwrapEnumUnderlying(type);
+
+        if (type is IArrayTypeSymbol arr && arr.ElementType.SpecialType == SpecialType.System_Byte)
+            return ["VarBinary", "Binary", "Image", "Timestamp"];
+
+        return type.SpecialType switch
+        {
+            SpecialType.System_Byte => ["TinyInt"],
+            SpecialType.System_Int16 => ["SmallInt"],
+            SpecialType.System_Int32 => ["Int", "SmallInt", "TinyInt"],
+            SpecialType.System_Int64 => ["BigInt", "Int"],
+            SpecialType.System_String => ["NVarChar", "VarChar", "Char", "NChar", "Text", "NText", "Xml"],
+            SpecialType.System_Decimal => ["Decimal", "Money", "SmallMoney"],
+            SpecialType.System_Boolean => ["Bit"],
+            SpecialType.System_DateTime => ["DateTime", "DateTime2", "Date", "SmallDateTime"],
+            SpecialType.System_Double => ["Float"],
+            SpecialType.System_Single => ["Real"],
+            _ => GetCompatibleSqlDbTypeNamesByFullName(type)
+        };
+    }
+
+    private static string[] GetCompatibleSqlDbTypeNamesByFullName(ITypeSymbol type)
+        => type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) switch
+        {
+            "global::System.Guid" => ["UniqueIdentifier"],
+            "global::System.TimeSpan" => ["Time"],
+            "global::System.DateTimeOffset" => ["DateTimeOffset"],
+            "global::System.DateOnly" => ["Date"],
+            "global::System.TimeOnly" => ["Time"],
+            "global::System.Half" => ["Real"],
+            _ => []
+        };
+
     private static bool TryGetSpecialTypeSqlName(SpecialType specialType, bool useDatetime2, out string sqlName)
     {
         sqlName = specialType switch
@@ -257,29 +301,42 @@ internal static class TypeMappingRegistry
     /// <param name="sqlType">SQL Server 타입 이름 (예: "int", "nvarchar", "datetime2")</param>
     /// <returns>C# 타입 키워드 또는 전역 한정 타입명 (예: "int", "string", "global::System.DateTime")</returns>
     public static string MapSqlTypeToCSharp(string sqlType)
+        => TryMapSqlTypeToCSharp(sqlType, out string csharpType)
+            ? csharpType
+            : "object";
+
+    /// <summary>
+    /// SQL Server 타입 이름을 C# 타입으로 변환합니다.
+    /// </summary>
+    /// <param name="sqlType">SQL Server 타입 이름</param>
+    /// <param name="csharpType">변환된 C# 타입</param>
+    /// <returns>지원 타입이면 <c>true</c>, 알 수 없는 타입이면 <c>false</c></returns>
+    public static bool TryMapSqlTypeToCSharp(string sqlType, out string csharpType)
     {
-        return sqlType.ToLowerInvariant() switch
+        csharpType = sqlType.ToLowerInvariant() switch
         {
             "bigint"         => "long",
             "int"            => "int",
             "smallint"       => "short",
             "tinyint"        => "byte",
             "bit"            => "bool",
-            "decimal" or "numeric" or "money" => "decimal",
+            "decimal" or "numeric" or "money" or "smallmoney" => "decimal",
             "float"          => "double",
             "real"           => "float",
             // ✅ T1-2: date는 DateOnly로 분리 (DateTime 오역 수정)
-            "datetime" or "datetime2" => "global::System.DateTime",
+            "datetime" or "datetime2" or "smalldatetime" => "global::System.DateTime",
             "date"           => "global::System.DateOnly",
             // ✅ T1-11: FullyQualified 형식으로 변경 (using System; 의존 제거)
             "datetimeoffset" => "global::System.DateTimeOffset",
-            "varchar" or "nvarchar" or "char" or "nchar" or "text" or "ntext" => "string",
+            "varchar" or "nvarchar" or "char" or "nchar" or "text" or "ntext" or "xml" => "string",
             "uniqueidentifier" => "global::System.Guid",
-            "binary" or "varbinary" or "image" => "byte[]",
+            "binary" or "varbinary" or "image" or "timestamp" or "rowversion" => "byte[]",
             // ✅ T1-2: time은 TimeOnly로 변경 (TimeSpan 오역 수정)
             "time"           => "global::System.TimeOnly",
-            _                => "object"
+            _                => ""
         };
+
+        return csharpType.Length > 0;
     }
 
     #endregion
