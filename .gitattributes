@@ -3,6 +3,7 @@
 
 # Custom for Visual Studio
 .gitattributes text eol=lf
+.gitignore text eol=lf
 *.cs     text eol=lf diff=csharp
 *.sln    text eol=lf merge=union
 *.csproj text eol=lf merge=union
@@ -19,3 +20,4 @@
 *.nupkg binary
 *.snupkg binary
 *.zip binary
+*.bak binary

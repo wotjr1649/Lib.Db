@@ -147,6 +147,8 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 
 - [ ] `ConnectionStringNames`에 사용할 모든 DB 키 나열
 - [ ] 각 키에 대응하는 `ConnectionStrings` 값 존재
+- [ ] 운영 서비스는 `ConnectionSecurityProfile = Production` 또는 `UseProductionSecurityDefaults()` 적용
+- [ ] Raw SQL Text가 필요한 경우에도 운영 기본값은 `RawSqlPolicy = DenyWriteText`, 보안 경계가 필요하면 `DenyAllText`
 - [ ] `Encrypt=True;TrustServerCertificate=False` (프로덕션)
 - [ ] sa 계정 대신 최소 권한 Application User 사용
 - [ ] **MARS 정책 설정**: `"Mars": "ForceEnable"` (권장) 또는 `"Mars": "Auto"` (기본값)

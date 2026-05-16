@@ -37,11 +37,11 @@ DB 작업의 유일한 진입점입니다. DI 컨테이너에서 `Scoped`로 등
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `RawSqlPolicy` | `Allow` | `CommandType.Text` 실행 정책. `DenyAllText`는 모든 Raw SQL 텍스트를 차단하고, `DenyWriteText`는 쓰기/DDL/권한/EXEC 계열 첫 토큰을 차단합니다. |
+| `RawSqlPolicy` | `Allow` | `CommandType.Text` 실행 정책. `DenyAllText`는 모든 Raw SQL 텍스트를 차단하고, `DenyWriteText`는 주석/문자열/식별자를 건너뛰며 쓰기/DDL/권한/운영 계열 위험 토큰을 차단합니다. |
 | `ConnectionSecurityProfile` | `Development` | `Production` 설정 시 암호화 비활성, `TrustServerCertificate=True`, 고권한 기본 SQL 로그인 사용을 검증합니다. |
 
-`DenyWriteText`는 SQL 파서가 아니라 첫 SQL 토큰 기반의 전환기 보조 guardrail입니다.
-`WITH ... DELETE`, `DECLARE ... UPDATE`, `SELECT ...; DROP ...`처럼 앞 토큰이 읽기/선언 계열인 복합 SQL을 완전 차단하는 보안 경계로 간주하면 안 됩니다.
+`DenyWriteText`는 SQL 파서가 아니라 전환기 보조 guardrail입니다.
+복잡한 T-SQL 문법 전체를 증명하는 보안 경계로 간주하면 안 됩니다.
 운영에서 Raw SQL 자체를 금지하려면 `DenyAllText`와 DB 권한 분리를 함께 사용하세요.
 
 ## 3. IParameterStage

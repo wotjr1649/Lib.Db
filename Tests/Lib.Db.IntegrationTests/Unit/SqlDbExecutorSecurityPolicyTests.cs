@@ -55,6 +55,14 @@ public sealed class SqlDbExecutorSecurityPolicyTests
     [InlineData("/* outer /* inner */ SELECT */ DELETE FROM dbo.Users")]
     [InlineData("; /* outer /* inner */ SELECT */ DROP TABLE dbo.Users")]
     [InlineData("EXEC dbo.usp_DoWork")]
+    [InlineData("WITH cte AS (SELECT Id FROM dbo.Users) DELETE FROM cte")]
+    [InlineData("SELECT * INTO #Users FROM dbo.Users")]
+    [InlineData("DECLARE @sql nvarchar(max) = N'DELETE FROM dbo.Users'; EXEC(@sql)")]
+    [InlineData("BACKUP DATABASE AppDb TO DISK = N'C:\\temp\\app.bak'")]
+    [InlineData("RESTORE DATABASE AppDb FROM DISK = N'C:\\temp\\app.bak'")]
+    [InlineData("DBCC CHECKDB")]
+    [InlineData("USE master")]
+    [InlineData("BULK INSERT dbo.Users FROM N'C:\\temp\\users.csv'")]
     public async Task RawSqlPolicy_DenyWriteText_ShouldBlockMutatingText(string sql)
     {
         // Arrange
@@ -79,6 +87,40 @@ public sealed class SqlDbExecutorSecurityPolicyTests
             It.IsAny<DbRequest<object>>(),
             It.IsAny<Func<SqlConnection, CancellationToken, Task<int>>>(),
             It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("SELECT 'DELETE FROM dbo.Users' AS LiteralValue")]
+    [InlineData("SELECT [DROP] FROM dbo.AuditLog")]
+    [InlineData("SELECT * FROM dbo.IntoTable WHERE Name = @Name")]
+    public async Task RawSqlPolicy_DenyWriteText_ShouldAllowReadOnlyTextWithUnsafeWordsInLiteralsOrIdentifiers(string sql)
+    {
+        // Arrange
+        Mock<IDbExecutionStrategy> strategy = CreateStrategy();
+        strategy
+            .Setup(x => x.ExecuteAsync<int, object>(
+                It.IsAny<DbRequest<object>>(),
+                It.IsAny<Func<SqlConnection, CancellationToken, Task<int>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+
+        SqlDbExecutor executor = CreateExecutor(strategy.Object, RawSqlPolicy.DenyWriteText);
+
+        // Act
+        int result = await executor.ExecuteNonQueryAsync(
+            sql,
+            new object(),
+            "Verification",
+            CommandType.Text,
+            new DbExecutionOptions(),
+            TestContext.Current.CancellationToken);
+
+        // Assert
+        result.Should().Be(1);
+        strategy.Verify(x => x.ExecuteAsync<int, object>(
+            It.IsAny<DbRequest<object>>(),
+            It.IsAny<Func<SqlConnection, CancellationToken, Task<int>>>(),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

@@ -94,7 +94,7 @@ public sealed class MultiSchemaPreloadTests
         catch (Exception ex)
         {
             _output.WriteLine($"[TEST ERROR] {ex.GetType().Name}: {ex.Message}");
-            _output.WriteLine(ex.StackTrace);
+            _output.WriteLine(ex.StackTrace ?? string.Empty);
             throw;
         }
         finally

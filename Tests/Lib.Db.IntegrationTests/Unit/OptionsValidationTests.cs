@@ -275,6 +275,55 @@ public sealed class OptionsValidationTests
     }
 
     [Fact]
+    public void ProductionSecurityDefaults_ShouldEnableProductionProfileAndSafeRawSqlPolicy()
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.IncludeParametersInTrace = true;
+        options.AllowProductionTrustServerCertificateWaiver = true;
+        options.AllowProductionSaLoginWaiver = true;
+
+        LibDbOptions returned = options.UseProductionSecurityDefaults();
+
+        returned.Should().BeSameAs(options);
+        options.ConnectionSecurityProfile.Should().Be(ConnectionSecurityProfile.Production);
+        options.RawSqlPolicy.Should().Be(RawSqlPolicy.DenyWriteText);
+        options.IncludeParametersInTrace.Should().BeFalse();
+        options.AllowProductionTrustServerCertificateWaiver.Should().BeFalse();
+        options.AllowProductionSaLoginWaiver.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ProductionSecurityDefaults_ShouldNotWeakenDenyAllText()
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.RawSqlPolicy = RawSqlPolicy.DenyAllText;
+
+        options.UseProductionSecurityDefaults();
+
+        options.RawSqlPolicy.Should().Be(RawSqlPolicy.DenyAllText);
+    }
+
+    [Fact]
+    public void ProductionSecurityDefaults_OptionsBuilder_ShouldApplyAtResolution()
+    {
+        ServiceCollection services = new();
+        services
+            .AddLibDbOptions(options =>
+            {
+                options.ConnectionStringNames = ["Default"];
+                options.ConnectionStrings["Default"] =
+                    "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=False";
+            })
+            .UseProductionSecurityDefaults();
+
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        LibDbOptions options = provider.GetRequiredService<IOptions<LibDbOptions>>().Value;
+        options.ConnectionSecurityProfile.Should().Be(ConnectionSecurityProfile.Production);
+        options.RawSqlPolicy.Should().Be(RawSqlPolicy.DenyWriteText);
+    }
+
+    [Fact]
     public void ConnectionStringNames_FirstItem_ShouldBeDefaultInstance()
     {
         LibDbOptions options = TestOptionsFactory.CreateValidOptions();

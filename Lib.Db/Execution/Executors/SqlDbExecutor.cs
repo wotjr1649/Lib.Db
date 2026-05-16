@@ -891,27 +891,14 @@ internal sealed partial class SqlDbExecutor(
     }
 
     /// <summary>
-    /// 텍스트 기반 쓰기 명령(INSERT/UPDATE/DELETE/MERGE) 여부를 판별합니다.
+    /// 텍스트 기반 쓰기/권한/운영 명령 여부를 보수적으로 판별합니다.
     /// </summary>
     private static bool IsWriteOperation(string cmdText, CommandType commandType)
     {
         if (commandType != CommandType.Text)
             return false;
 
-        string token = GetFirstSqlToken(cmdText);
-        return token.Equals("INSERT", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("DELETE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("MERGE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("TRUNCATE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("CREATE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("ALTER", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("DROP", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("EXEC", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("EXECUTE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("GRANT", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("REVOKE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("DENY", StringComparison.OrdinalIgnoreCase);
+        return ContainsBlockedRawSqlToken(cmdText.AsSpan());
     }
 
     private void EnsureRawSqlAllowed(string commandText, CommandType commandType)
@@ -935,48 +922,166 @@ internal sealed partial class SqlDbExecutor(
         }
     }
 
-    private static string GetFirstSqlToken(string sql)
+    private static bool ContainsBlockedRawSqlToken(ReadOnlySpan<char> sql)
     {
-        ReadOnlySpan<char> span = sql.AsSpan().TrimStart();
+        ReadOnlySpan<char> span = sql;
+        int position = 0;
 
-        while (!span.IsEmpty)
+        while (position < span.Length)
         {
-            if (span[0] == ';')
+            char ch = span[position];
+
+            if (char.IsWhiteSpace(ch) || ch == ';')
             {
-                span = span[1..].TrimStart();
+                position++;
                 continue;
             }
 
-            if (span.StartsWith("--", StringComparison.Ordinal))
+            ReadOnlySpan<char> remaining = span[position..];
+            if (remaining.StartsWith("--", StringComparison.Ordinal))
             {
-                int lineBreak = span.IndexOfAny('\r', '\n');
+                int lineBreak = remaining.IndexOfAny('\r', '\n');
                 if (lineBreak < 0)
-                    return string.Empty;
+                    return false;
 
-                span = span[(lineBreak + 1)..].TrimStart();
+                position += lineBreak + 1;
                 continue;
             }
 
-            if (span.StartsWith("/*", StringComparison.Ordinal))
+            if (remaining.StartsWith("/*", StringComparison.Ordinal))
             {
-                int commentLength = GetBlockCommentLength(span);
+                int commentLength = GetBlockCommentLength(remaining);
                 if (commentLength < 0)
-                    return string.Empty;
+                    return true;
 
-                span = span[commentLength..].TrimStart();
+                position += commentLength;
                 continue;
             }
 
-            break;
+            if (ch == '\'')
+            {
+                position = SkipSingleQuotedLiteral(span, position + 1);
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                position = SkipBracketIdentifier(span, position + 1);
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                position = SkipDoubleQuotedIdentifierOrLiteral(span, position + 1);
+                continue;
+            }
+
+            if (char.IsLetter(ch))
+            {
+                int tokenStart = position;
+                position++;
+                while (position < span.Length &&
+                       (char.IsLetterOrDigit(span[position]) || span[position] == '_'))
+                {
+                    position++;
+                }
+
+                if (IsBlockedRawSqlToken(span[tokenStart..position]))
+                    return true;
+
+                continue;
+            }
+
+            position++;
         }
 
-        int tokenLength = 0;
-        while (tokenLength < span.Length && char.IsLetter(span[tokenLength]))
+        return false;
+    }
+
+    private static bool IsBlockedRawSqlToken(ReadOnlySpan<char> token)
+    {
+        return token.Equals("INSERT", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DELETE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("MERGE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("TRUNCATE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("CREATE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("ALTER", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DROP", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("EXEC", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("EXECUTE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("GRANT", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("REVOKE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DENY", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("BACKUP", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("RESTORE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DBCC", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("BULK", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("USE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("INTO", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int SkipSingleQuotedLiteral(ReadOnlySpan<char> span, int position)
+    {
+        while (position < span.Length)
         {
-            tokenLength++;
+            if (span[position] == '\'')
+            {
+                if (position + 1 < span.Length && span[position + 1] == '\'')
+                {
+                    position += 2;
+                    continue;
+                }
+
+                return position + 1;
+            }
+
+            position++;
         }
 
-        return tokenLength == 0 ? string.Empty : span[..tokenLength].ToString();
+        return span.Length;
+    }
+
+    private static int SkipBracketIdentifier(ReadOnlySpan<char> span, int position)
+    {
+        while (position < span.Length)
+        {
+            if (span[position] == ']')
+            {
+                if (position + 1 < span.Length && span[position + 1] == ']')
+                {
+                    position += 2;
+                    continue;
+                }
+
+                return position + 1;
+            }
+
+            position++;
+        }
+
+        return span.Length;
+    }
+
+    private static int SkipDoubleQuotedIdentifierOrLiteral(ReadOnlySpan<char> span, int position)
+    {
+        while (position < span.Length)
+        {
+            if (span[position] == '"')
+            {
+                if (position + 1 < span.Length && span[position + 1] == '"')
+                {
+                    position += 2;
+                    continue;
+                }
+
+                return position + 1;
+            }
+
+            position++;
+        }
+
+        return span.Length;
     }
 
     private static int GetBlockCommentLength(ReadOnlySpan<char> span)

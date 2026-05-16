@@ -55,6 +55,18 @@ IHost host = builder.Build();
 await host.RunAsync();
 ```
 
+코드 기반 설정을 사용하는 운영 서비스는 보안 기본값 프리셋을 함께 적용할 수 있습니다.
+
+```csharp
+builder.Services
+    .AddLibDbOptions(options =>
+    {
+        options.ConnectionStringNames = ["Default"];
+        options.ConnectionStrings["Default"] = builder.Configuration.GetConnectionString("Default")!;
+    })
+    .UseProductionSecurityDefaults();
+```
+
 ### 3. 사용
 
 ```csharp
@@ -105,7 +117,7 @@ public sealed class UserRepository(IDbSession session)
 | **스키마 워밍업** | 앱 시작 시 SP 메타데이터 사전 로딩 (Include/Exclude 패턴) |
 | **OpenTelemetry** | ActivitySource/Meter 통합 메트릭 수집 |
 | **MARS 정책** | `MarsPolicy` (Disabled/Auto/ForceEnable) — ConnectionString 자동 보정 |
-| **Raw SQL 정책** | `RawSqlPolicy`로 Text 명령 전체 차단 또는 첫 토큰 기반 쓰기 계열 guardrail 적용 |
+| **Raw SQL 정책** | `RawSqlPolicy`로 Text 명령 전체 차단 또는 위험 토큰 기반 쓰기/권한/운영 계열 guardrail 적용 |
 | **연결 보안 프로필** | `ConnectionSecurityProfile.Production`으로 암호화, 인증서 검증, 고권한 로그인 사용 검증 |
 
 ---

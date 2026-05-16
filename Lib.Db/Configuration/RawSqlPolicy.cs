@@ -24,9 +24,9 @@ public enum RawSqlPolicy
     DenyAllText = 1,
 
     /// <summary>
-    /// 쓰기 또는 권한/스키마 변경으로 분류되는 Raw SQL 텍스트만 차단합니다.
+    /// 쓰기, 권한, 스키마 변경, DB 운영 계열로 분류되는 Raw SQL 텍스트만 차단합니다.
     /// <para>
-    /// 첫 SQL 토큰 기반의 보수적 정책이며 완전한 SQL 파서가 아닙니다.
+    /// 주석과 문자열/식별자 리터럴을 건너뛴 뒤 위험 토큰을 보수적으로 탐지하지만 완전한 SQL 파서가 아닙니다.
     /// 복합 SQL 차단을 보안 경계로 요구하는 운영 환경에는 <see cref="DenyAllText"/>를 권장합니다.
     /// </para>
     /// </summary>
