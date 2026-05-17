@@ -20,13 +20,19 @@ namespace Lib.Db.Schema;
 /// v9 FINAL: 프로세스 간 Epoch 동기화로 분산 환경에서 스키마 일관성 보장
 /// </para>
 /// </summary>
-public sealed class SchemaFlushService : ISchemaFlushCoordinator
+public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
 {
     private readonly EpochStore _epochStore;
     private readonly ISchemaService _schemaService;
     private readonly ILogger<SchemaFlushService> _logger;
     private readonly MemoryCache _lastKnownEpochs;
 
+    /// <summary>
+    /// 스키마 플러시 서비스를 초기화합니다.
+    /// </summary>
+    /// <param name="epochStore">프로세스 간 Epoch 저장소</param>
+    /// <param name="schemaService">스키마 캐시 플러시 대상 서비스</param>
+    /// <param name="logger">로그 기록기</param>
     public SchemaFlushService(
         EpochStore epochStore,
         ISchemaService schemaService,
@@ -47,7 +53,8 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
     public async Task FlushAsync(string instanceHash, CancellationToken ct = default)
     {
         using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("Flush");
-        activity?.SetTag("instance", instanceHash);
+        string diagnosticInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
+        activity?.SetTag("instance", diagnosticInstance);
 
         Stopwatch sw = Stopwatch.StartNew();
 
@@ -61,13 +68,14 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
 
             _logger.LogInformation(
                 "[SchemaFlush] Epoch 증가: {Instance} → {Epoch}",
-                instanceHash, newEpoch);
+                diagnosticInstance, newEpoch);
 
             // 3. 로컬 스키마 캐시 무효화
             await _schemaService.FlushSchemaAsync(instanceHash, ct).ConfigureAwait(false);
 
             // 4. 로컬 Epoch 업데이트
-            _lastKnownEpochs.Set(instanceHash, newEpoch, new MemoryCacheEntryOptions
+            string epochCacheKey = SchemaCacheIdentity.ForCache(instanceHash);
+            _lastKnownEpochs.Set(epochCacheKey, newEpoch, new MemoryCacheEntryOptions
             {
                 Size = 1,
                 SlidingExpiration = TimeSpan.FromHours(1)
@@ -81,14 +89,14 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
 
             _logger.LogInformation(
                 "[SchemaFlush] 완료: {Instance}, Epoch={Epoch}, Duration={Ms}ms",
-                instanceHash, newEpoch, sw.ElapsedMilliseconds);
+                diagnosticInstance, newEpoch, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
             activity?.SetTag("error", ex.GetType().Name);
             _logger.LogError(ex,
                 "[SchemaFlush] 오류 발생: {Instance}",
-                instanceHash);
+                diagnosticInstance);
             throw;
         }
     }
@@ -103,13 +111,15 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
     public async Task<bool> CheckAndSyncEpochAsync(string instanceHash, CancellationToken ct = default)
     {
         using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("CheckEpoch");
-        activity?.SetTag("instance", instanceHash);
+        string diagnosticInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
+        activity?.SetTag("instance", diagnosticInstance);
 
         // 현재 Epoch 읽기
         long currentEpoch = _epochStore.GetEpoch(instanceHash);
 
         // 마지막으로 알려진 Epoch
-        long lastKnown = _lastKnownEpochs.TryGetValue<long>(instanceHash, out long cached)
+        string epochCacheKey = SchemaCacheIdentity.ForCache(instanceHash);
+        long lastKnown = _lastKnownEpochs.TryGetValue<long>(epochCacheKey, out long cached)
             ? cached
             : 0;
 
@@ -117,7 +127,7 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
         {
             _logger.LogWarning(
                 "[SchemaFlush] Epoch 변경 감지: {Instance}, {Old} → {New}. 로컬 캐시 무효화 중...",
-                instanceHash, lastKnown, currentEpoch);
+                diagnosticInstance, lastKnown, currentEpoch);
 
             // 메트릭: Epoch 동기화 추적
             DbMetrics.TrackSchemaRefreshFromScope(true, "EpochSync");
@@ -126,7 +136,7 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
             await _schemaService.FlushSchemaAsync(instanceHash, ct).ConfigureAwait(false);
 
             // 로컬 Epoch 업데이트
-            _lastKnownEpochs.Set(instanceHash, currentEpoch, new MemoryCacheEntryOptions
+            _lastKnownEpochs.Set(epochCacheKey, currentEpoch, new MemoryCacheEntryOptions
             {
                 Size = 1,
                 SlidingExpiration = TimeSpan.FromHours(1)
@@ -145,6 +155,12 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator
         activity?.SetTag("synced", false);
         return false;  // 변경 없음
     }
+
+    /// <summary>
+    /// 프로세스 로컬 Epoch 상태 캐시를 해제합니다.
+    /// </summary>
+    public void Dispose()
+        => _lastKnownEpochs.Dispose();
 }
 
 /// <summary>
@@ -160,6 +176,12 @@ public sealed class EpochWatcherService : BackgroundService
     private readonly string[] _instanceHashes;
     private readonly TimeSpan _checkInterval;
 
+    /// <summary>
+    /// Epoch 감시 서비스를 초기화합니다.
+    /// </summary>
+    /// <param name="coordinator">스키마 플러시 조정자</param>
+    /// <param name="options">Lib.Db 옵션</param>
+    /// <param name="logger">로그 기록기</param>
     public EpochWatcherService(
         ISchemaFlushCoordinator coordinator,
         LibDbOptions options,
@@ -167,10 +189,23 @@ public sealed class EpochWatcherService : BackgroundService
     {
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(options);
+
+        _checkInterval = TimeSpan.FromSeconds(options.EpochCheckIntervalSeconds);
+        bool enableSharedMemory = options.EnableSharedMemoryCache
+            ?? System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.Windows);
+        bool enableEpoch = options.EnableEpochCoordination ?? enableSharedMemory;
+
+        if (!enableEpoch)
+        {
+            _instanceHashes = [];
+            _logger.LogInformation("[EpochWatcher] Epoch 조정이 비활성화되어 서비스를 실행하지 않습니다.");
+            return;
+        }
 
         // 감시할 인스턴스 목록 (LibDbOptions에서)
         _instanceHashes = options.WatchedInstances?.ToArray() ?? [];
-        _checkInterval = TimeSpan.FromSeconds(options.EpochCheckIntervalSeconds);
 
         if (_instanceHashes.Length == 0)
         {
@@ -178,6 +213,7 @@ public sealed class EpochWatcherService : BackgroundService
         }
     }
 
+    /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (_instanceHashes.Length == 0)
@@ -204,7 +240,7 @@ public sealed class EpochWatcherService : BackgroundService
                     {
                         _logger.LogInformation(
                             "[EpochWatcher] {Instance} 동기화 완료",
-                            instanceHash);
+                            DbDiagnosticRedactor.RedactInstanceId(instanceHash));
                     }
                 }
             }

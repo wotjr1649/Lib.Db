@@ -17,6 +17,7 @@
 TestResults/
 *.trdx
 *.coverage
+*.bak
 
 ## OS specific
 .DS_Store

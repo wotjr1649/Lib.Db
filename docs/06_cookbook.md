@@ -56,22 +56,22 @@ if (result.IsSuccess)
 
 ---
 
-## 레시피 3: 보간 SQL (파라미터 자동화)
+## 레시피 3: 보간 SQL (값 인수 파라미터화)
 
-**상황**: 간단한 조건 조회를 인라인 SQL로 처리하되, SQL Injection을 방지합니다.
+**상황**: 간단한 조건 조회를 인라인 SQL로 처리하되, 값 인수를 파라미터로 바인딩합니다.
 
 ```csharp
 int deptId = 10;
 string status = "Active";
 
 DbResult<IAsyncEnumerable<EmployeeDto>> result = await session.Default
-    .Sql($"SELECT Id, Name, DeptId FROM Employees WHERE DeptId = {deptId} AND Status = {status}")
+    .SqlInterpolated($"SELECT Id, Name, DeptId FROM Employees WHERE DeptId = {deptId} AND Status = {status}")
     .QueryAsync<EmployeeDto>();
 // 실제 실행: SELECT Id, Name, DeptId FROM Employees WHERE DeptId = @p0 AND Status = @p1
 ```
 
 **결과 타입**: `DbResult<IAsyncEnumerable<EmployeeDto>>`
-**주의사항**: `FormattableString` 오버로드가 자동 선택됩니다. 일반 `string`을 전달하면 Raw SQL로 처리되므로, 변수는 반드시 보간 구문(`$""`) 안에 넣어야 합니다.
+**주의사항**: 보간 SQL은 `SqlInterpolated(...)`를 우선 사용하세요. 일반 `Sql(string)`은 Raw SQL로 처리되므로, 사용자 입력 값은 문자열 결합하지 말고 보간 값 또는 `.With(...)` 파라미터로 전달해야 합니다. 보간 SQL 뒤의 `.With(...)`는 추가 명명 파라미터 병합 용도이며, 자동 생성된 `@pN` 이름과 충돌하면 예외가 발생합니다.
 
 ---
 
@@ -81,7 +81,7 @@ DbResult<IAsyncEnumerable<EmployeeDto>> result = await session.Default
 
 ```csharp
 DbResult<int?> countResult = await session.Default
-    .Sql($"SELECT COUNT(*) FROM Orders WHERE Status = {"PENDING"}")
+    .SqlInterpolated($"SELECT COUNT(*) FROM Orders WHERE Status = {"PENDING"}")
     .ExecuteScalarAsync<int>();
 
 if (countResult.IsSuccess)
@@ -191,7 +191,7 @@ await using IDbTransactionScope tx = await session.BeginTransactionAsync(
     System.Data.IsolationLevel.Serializable);
 
 DbResult<int?> stock = await tx
-    .Sql($"SELECT Stock FROM Products WHERE Id = {productId}")
+    .SqlInterpolated($"SELECT Stock FROM Products WHERE Id = {productId}")
     .ExecuteScalarAsync<int>();
 
 if (stock is { IsSuccess: true, Value: > 0 })
@@ -225,7 +225,8 @@ DbResult<IAsyncEnumerable<OrderDto>> orders = await session.Use("SalesDb")
     .QueryAsync<OrderDto>();
 
 DbResult<int> logResult = await session.Use("LogDb")
-    .Sql($"INSERT INTO AuditLogs (Message, CreatedAt) VALUES ({"주문 조회 실행"}, {DateTime.UtcNow})")
+    .Procedure("dbo.usp_WriteAuditLog")
+    .With(new { Message = "주문 조회 실행", CreatedAt = DateTime.UtcNow })
     .ExecuteAsync();
 ```
 
@@ -688,7 +689,8 @@ public sealed class OrderService(
 
         // 3. 감사 로그 (LogDb, 트랜잭션 외부)
         DbResult<int> logResult = await session.Use("LogDb")
-            .Sql($"INSERT INTO AuditLogs (Action, EntityId) VALUES ({"OrderCreated"}, {orderId})")
+            .Procedure("dbo.usp_WriteAuditLog")
+            .With(new { Action = "OrderCreated", EntityId = orderId })
             .ExecuteAsync();
 
         logResult.LogIfFailed(logger, "감사 로그");

@@ -196,10 +196,7 @@ internal static class ServiceRegistrationHelpers
             }
 
             // IsolationKey 생성 (DI를 통한 서비스 사용)
-            string targetName = options.ConnectionStringNames.Count > 0 ? options.ConnectionStringNames[0] : "Default";
-            string? connectionString = options.ConnectionStrings?.TryGetValue(targetName, out string? cs) == true
-                ? cs
-                : GetFirstConnectionStringOrThrow(options, "ProcessSlotAllocator");
+            string connectionString = GetPrimaryConnectionStringOrThrow(options, "ProcessSlotAllocator");
 
             string isolationKey = keyGenerator.Generate(connectionString) ?? "Shared";
 
@@ -230,10 +227,7 @@ internal static class ServiceRegistrationHelpers
             }
 
             // 공유 메모리 활성화 - IsolationKey 생성 (DI 사용)
-            string targetName = options.ConnectionStringNames.Count > 0 ? options.ConnectionStringNames[0] : "Default";
-            string? connectionString = options.ConnectionStrings?.TryGetValue(targetName, out string? cs) == true
-                ? cs
-                : GetFirstConnectionStringOrThrow(options, "SharedMemoryCache");
+            string connectionString = GetPrimaryConnectionStringOrThrow(options, "SharedMemoryCache");
 
             string? isolationKey = keyGenerator.Generate(connectionString);
             string basePath = Path.Combine(Path.GetTempPath(), "LibDbCache");
@@ -260,130 +254,41 @@ internal static class ServiceRegistrationHelpers
 
     #endregion
 
-    #region [헬퍼] IsolationKey 생성 (DEPRECATED)
-    // ========================================
-    // [v3 -> v4] GenerateIsolationKey 메서드 제거됨
-    // ========================================
-    // 이전 로직은 Lib.Db.Caching.IsolationKeyGenerator로 이동되었습니다.
-    // DI를 통해 IIsolationKeyGenerator를 주입받아 사용하십시오.
-
-    /// <summary>
-    /// Connection String을 정규화하고 XxHash128로 해싱하여 IsolationKey를 생성합니다.
-    /// </summary>
-    /// <param name="options">LibDbOptions</param>
-    /// <param name="logger">로거</param>
-    /// <returns>
-    /// 32자 Hex 문자열 (XxHash128) 또는 null (ConnectionStrings 없음)
-    /// </returns>
-    /// <remarks>
-    /// <para><b>[동작 흐름]</b></para>
-    /// <list type="number">
-    ///   <item>
-    ///     <description>
-    ///       <b>Step 1</b>: ConnectionStrings["Default"] 또는 첫 번째 값 가져오기
-    ///     </description>
-    ///   </item>
-    ///   <item>
-    ///     <description>
-    ///       <b>Step 2</b>: <see cref="SqlConnectionStringBuilder"/>로 정규화 (대소문자/공백 제거)
-    ///     </description>
-    ///   </item>
-    ///   <item>
-    ///     <description>
-    ///       <b>Step 3</b>: <c>XxHash128</c>로 해싱 (32자 hex)
-    ///     </description>
-    ///   </item>
-    ///   <item>
-    ///     <description>
-    ///       <b>폴백</b>: SqlConnectionStringBuilder 파싱 실패 시 원본 문자열 해싱
-    ///       <br/>(PostgreSQL, MySQL 등 다른 DB 지원)
-    ///     </description>
-    ///   </item>
-    /// </list>
-    ///
-    /// <para><b>[예시]</b></para>
-    /// <code>
-    /// // Input: "Server=localhost;Database=Test;User=sa;Password=pass"
-    /// // Normalized: "Data Source=localhost;Initial Catalog=Test;User ID=sa;Password=pass"
-    /// // Hash: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6" (32자)
-    /// </code>
-    /// </remarks>
-    private static string? GenerateIsolationKey(LibDbOptions options, ILogger logger)
-    {
-        if (options.ConnectionStrings == null || options.ConnectionStrings.Count == 0)
-        {
-            logger.LogWarning("[IsolationKey] ConnectionStrings가 비어있습니다. 기본 키(Shared) 사용");
-            return null;
-        }
-
-        // ====================================================================
-        // Step 1: "Default" 키로 Connection String 가져오기
-        // ====================================================================
-        string defaultConnString = options.ConnectionStrings.TryGetValue("Default", out string? cs)
-            ? cs
-            : GetFirstConnectionStringOrThrow(options, "IsolationKey");
-
-        try
-        {
-            // ================================================================
-            // Step 2: Connection String 정규화 (대소문자/공백 차이 제거)
-            // ================================================================
-            SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder(defaultConnString);
-            string canonical = builder.ConnectionString;
-
-            // ================================================================
-            // Step 3: XxHash128로 해싱 (32자, EpochStore와 동일)
-            // ================================================================
-            byte[] hash = System.IO.Hashing.XxHash128.Hash(
-                Encoding.UTF8.GetBytes(canonical));
-
-            string key = Convert.ToHexString(hash).ToLowerInvariant();
-
-            logger.LogInformation("[IsolationKey] 생성 완료: {Key} (정규화됨)", key);
-            return key;
-        }
-        catch (ArgumentException ex)
-        {
-            // ================================================================
-            // 폴백: PostgreSQL, MySQL 등 다른 DB 사용 시 파싱 실패
-            // ================================================================
-            logger.LogWarning(ex,
-                "[IsolationKey] SqlConnectionStringBuilder 파싱 실패. " +
-                "원본 문자열 해싱으로 폴백합니다.");
-
-            // 폴백: 원본 문자열 그대로 해싱 (정규화 없이)
-            byte[] hash = System.IO.Hashing.XxHash128.Hash(
-                Encoding.UTF8.GetBytes(defaultConnString));
-
-            string key = Convert.ToHexString(hash).ToLowerInvariant();
-
-            logger.LogInformation("[IsolationKey] 생성 완료: {Key} (비정규화)", key);
-            return key;
-        }
-    }
-
-    #endregion
-
     #region [헬퍼] 내부 유틸리티 메서드
 
     /// <summary>
-    /// ConnectionStrings의 첫 번째 값을 반환합니다.
+    /// <see cref="LibDbOptions.ConnectionStringNames"/>의 첫 번째 키에 해당하는 연결 문자열을 반환합니다.
     /// <para>
-    /// <b>[최적화]</b> LINQ 없이 열거자로 직접 접근
+    /// 명시된 기본 인스턴스 키가 <see cref="LibDbOptions.ConnectionStrings"/>에 없으면 다른 연결 문자열로
+    /// 폴백하지 않고 실패합니다. 이는 multi-instance 환경에서 잘못된 DB 인스턴스의 격리 키가 사용되는 것을
+    /// 방지하기 위한 fail-closed 정책입니다.
     /// </para>
     /// </summary>
     /// <param name="options">LibDbOptions 인스턴스</param>
     /// <param name="context">컨텍스트 정보 (예외 메시지용)</param>
-    /// <returns>첫 번째 연결 문자열</returns>
-    /// <exception cref="InvalidOperationException">연결 문자열이 없을 때</exception>
-    private static string GetFirstConnectionStringOrThrow(LibDbOptions options, string context)
+    /// <returns>명시된 기본 인스턴스의 연결 문자열</returns>
+    /// <exception cref="InvalidOperationException">기본 인스턴스 이름 또는 연결 문자열이 유효하지 않을 때</exception>
+    private static string GetPrimaryConnectionStringOrThrow(LibDbOptions options, string context)
     {
+        if (options.ConnectionStringNames is not { Count: > 0 })
+            throw new InvalidOperationException($"{context}: LibDbOptions.ConnectionStringNames에 기본 인스턴스 이름이 등록되지 않았습니다.");
+
+        string targetName = options.ConnectionStringNames[0];
+        if (string.IsNullOrWhiteSpace(targetName))
+            throw new InvalidOperationException($"{context}: LibDbOptions.ConnectionStringNames[0]이 비어있습니다.");
+
         if (options.ConnectionStrings == null || options.ConnectionStrings.Count == 0)
             throw new InvalidOperationException($"{context}: LibDbOptions.ConnectionStrings에 연결 문자열이 등록되지 않았습니다.");
 
-        using Dictionary<string, string>.ValueCollection.Enumerator enumerator = options.ConnectionStrings.Values.GetEnumerator();
-        enumerator.MoveNext();
-        return enumerator.Current;
+        if (!options.ConnectionStrings.TryGetValue(targetName, out string? connectionString)
+            || string.IsNullOrWhiteSpace(connectionString))
+        {
+            string registeredKeys = string.Join(", ", options.ConnectionStrings.Keys);
+            throw new InvalidOperationException(
+                $"{context}: 기본 인스턴스 '{targetName}'이(가) ConnectionStrings에 없거나 비어있습니다. 등록된 키: [{registeredKeys}]");
+        }
+
+        return connectionString;
     }
 
     #endregion

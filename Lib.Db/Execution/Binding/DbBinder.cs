@@ -22,6 +22,7 @@ using System.Runtime.InteropServices; // [Zero-Copy] CollectionsMarshal
 using System.Text.Json;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
+using Lib.Db.Diagnostics;
 using Lib.Db.Execution.Tvp;
 
 namespace Lib.Db.Execution.Binding;
@@ -52,7 +53,7 @@ namespace Lib.Db.Execution.Binding;
 /// <list type="bullet">
 /// <item><strong>메모리 할당</strong>: Columnar TVP Reader로 Zero-Allocation 패턴 구현</item>
 /// <item><strong>시간 복잡도</strong>: O(1) 바인딩, O(N) TVP 변환</item>
-/// <item><strong>Bounded Cache</strong>: TVP Reader Factory 및 Validation State를 최대 10,000개까지 캐싱</item>
+/// <item><strong>Bounded Cache</strong>: TVP Reader Factory를 최대 10,000개까지 캐싱</item>
 /// <item><strong>Columnar 레이아웃</strong>: 행 기반이 아닌 열 기반 메모리 레이아웃으로 캐시 친화적</item>
 /// <item><strong>AggressiveOptimization</strong>: 핵심 메서드에 적용하여 JIT 최적화</item>
 /// </list>
@@ -61,7 +62,7 @@ namespace Lib.Db.Execution.Binding;
 /// <list type="bullet">
 /// <item><strong>NOT NULL 검증</strong>: Strict 모드에서 NOT NULL 위반 시 예외 발생</item>
 /// <item><strong>오버플로우 사전 검증</strong>: Decimal(precision, scale), TinyInt/SmallInt/Int 범위, DateTime 범위</item>
-/// <item><strong>SQL Injection 방어</strong>: 문자열 전처리로 제어문자 제거</item>
+/// <item><strong>값 검증/전처리</strong>: 문자열 정규화, 제어문자 제거, 파라미터 바인딩 보조</item>
 /// <item><strong>TVP 스키마 검증</strong>: ValidatorCallback으로 DTO 타입과 TVP 타입명 일치 확인</item>
 /// </list>
 /// 
@@ -70,14 +71,14 @@ namespace Lib.Db.Execution.Binding;
 /// <item><strong>ArgumentException</strong>: NOT NULL 위반, 필수 파라미터 누락</item>
 /// <item><strong>ArgumentOutOfRangeException</strong>: Overflow(오버플로우), DateTime 범위 초과</item>
 /// <item><strong>InvalidOperationException</strong>: TVP 리더 생성 실패, 지원되지 않는 컬렉션 타입</item>
-/// <item><strong>상세 컨텍스트</strong>: 파라미터 이름, 현재 값, 허용 범위, SQL 타입, Precision/Scale, SP 이름 포함</item>
+/// <item><strong>상세 컨텍스트</strong>: 파라미터 이름, 허용 범위, SQL 타입, Precision/Scale, 명령 유형 포함. 입력값과 SQL 원문은 기본적으로 포함하지 않습니다.</item>
 /// </list>
 /// 
 /// <para><strong>🛡️ 스레드 안전성 (Thread Safety)</strong></para>
 /// <list type="bullet">
 /// <item><strong>Thread-Safe</strong>: 모든 public 메서드는 동시 호출 가능 (static class)</item>
-/// <item><strong>ConcurrentDictionary</strong>: TVP Reader Cache 및 Validation Cache는 동시성 안전</item>
-/// <item><strong>Stateless</strong>: 모든 상태는 캐시에만 저장, 메서드 호출은 순수 함수형</item>
+/// <item><strong>ConcurrentDictionary</strong>: TVP Reader Cache는 동시성 안전</item>
+/// <item><strong>호출별 상태 격리</strong>: 호출별 mutable state는 두지 않고, 전역 설정과 캐시는 thread-safe static 상태로 관리</item>
 /// </list>
 /// 
 /// <para><strong>🛠️ 유지보수 및 확장성 (Maintenance)</strong></para>
@@ -100,6 +101,8 @@ namespace Lib.Db.Execution.Binding;
 [SkipLocalsInit]
 public static partial class DbBinder
 {
+    private const string RedactedCommandText = "[redacted]";
+
     // =========================================================================
     // 0. 정적 설정 및 브리지
     // =========================================================================
@@ -181,7 +184,6 @@ public static partial class DbBinder
         if (strictCheck && !meta.IsNullable && isNullOrDbNull && meta.Direction == ParameterDirection.Input)
         {
             string baseMsg = $"파라미터 '{meta.Name}'는 필수값입니다. (NOT NULL 제약 조건 위반) " +
-                          $"Command: {DbExecutionContextScope.Current?.CommandText ?? "N/A"}, " +
                           $"SQL 타입: {meta.SqlDbType}, Direction: {meta.Direction}";
             Context ctx = Context.FromMeta(meta, typeof(object));
             throw new ArgumentException(ctx.CreateErrorMessage(baseMsg), meta.Name);
@@ -192,6 +194,15 @@ public static partial class DbBinder
         // 2. 값 변환 및 유효성 검증 (실제 값이 있을 때만)
         if (finalValue != DBNull.Value)
         {
+            if (finalValue is DateOnly dateOnly)
+            {
+                finalValue = dateOnly.ToDateTime(TimeOnly.MinValue);
+            }
+            else if (finalValue is TimeOnly timeOnly)
+            {
+                finalValue = timeOnly.ToTimeSpan();
+            }
+
             // 정밀도/범위 오버플로우 사전 검증 (Decimal/정수/Enum/DateTime)
             CheckValueOverflow(meta.Name, finalValue, meta.SqlDbType, meta.Precision, meta.Scale);
 
@@ -302,6 +313,7 @@ public static partial class DbBinder
         }
 
         object finalValue = value ?? DBNull.Value;
+        SqlDbType? inferredDbType = null;
 
         // 2. 문자열 전처리
         if (finalValue is string strVal)
@@ -310,19 +322,30 @@ public static partial class DbBinder
             if (processedSpan.Length != strVal.Length)
                 finalValue = processedSpan.ToString();
         }
-        // 3. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
+        // 3. SQL Server date/time 스칼라 보정
+        else if (finalValue is DateOnly dateOnly)
+        {
+            finalValue = dateOnly.ToDateTime(TimeOnly.MinValue);
+            inferredDbType = SqlDbType.Date;
+        }
+        else if (finalValue is TimeOnly timeOnly)
+        {
+            finalValue = timeOnly.ToTimeSpan();
+            inferredDbType = SqlDbType.Time;
+        }
+        // 4. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
         //    List<Dto>를 넘겼을 때 JSON으로 오판하여 AOT 에러가 나는 것을 방지
         else if (IsTvpCollection(finalValue, out IDataReader? tvpReader, out tvpTypeName))
         {
             finalValue = tvpReader;
         }
-        // 4. JSON 직렬화 (복합 객체이면서 TVP/Stream/바이너리가 아닌 경우)
+        // 5. JSON 직렬화 (복합 객체이면서 TVP/Stream/바이너리가 아닌 경우)
         else if (IsComplexObject(finalValue))
         {
             finalValue = JsonSerializer.Serialize(finalValue);
         }
 
-        // 5. 타입 및 메타데이터 결정
+        // 6. 타입 및 메타데이터 결정
         SqlDbType dbType;
         int size = 0;
         byte precision = 0;
@@ -333,7 +356,7 @@ public static partial class DbBinder
             // Attribute 우선
             dbType = metaOverride.DbType != SqlDbType.Variant
                 ? metaOverride.DbType
-                : (finalValue is DBNull ? SqlDbType.Variant : InferSqlDbType(finalValue));
+                : (finalValue is DBNull ? SqlDbType.Variant : inferredDbType ?? InferSqlDbType(finalValue));
 
             size = metaOverride.Size;
             precision = metaOverride.Precision;
@@ -342,7 +365,7 @@ public static partial class DbBinder
         else
         {
             // 추론
-            dbType = finalValue is DBNull ? SqlDbType.Variant : InferSqlDbType(finalValue);
+            dbType = finalValue is DBNull ? SqlDbType.Variant : inferredDbType ?? InferSqlDbType(finalValue);
 
             // 자동 추론 보정 (LOB)
             if (finalValue is byte[] or Stream)
@@ -355,7 +378,7 @@ public static partial class DbBinder
             }
         }
 
-        // 6. 파라미터 생성 (생성자 오버로드 활용)
+        // 7. 파라미터 생성 (생성자 오버로드 활용)
         SqlParameter p;
         if (dbType != SqlDbType.Variant)
         {
@@ -579,11 +602,11 @@ public static partial class DbBinder
     }
 
     /// <summary>
-    /// 오버플로우 발생 시 실행 컨텍스트를 포함한 상세 예외를 생성합니다.
+    /// 오버플로우 발생 시 실행 컨텍스트를 포함한 예외를 생성합니다.
     /// </summary>
     private static void ThrowOverflow(string paramName, SqlDbType dbType, object value, byte precision, byte scale)
     {
-        string baseMessage = $"파라미터 '{paramName}' ({dbType})의 값 {value}은(는) DB 제약(Precision:{precision}, Scale:{scale})을 초과합니다. " +
+        string baseMessage = $"파라미터 '{paramName}' ({dbType})의 입력값은 DB 제약(Precision:{precision}, Scale:{scale})을 초과합니다. " +
                           $"SQL 타입: {dbType}, 허용 범위: Decimal({precision},{scale})";
         Context ctx = new Context(DbExecutionContextScope.Current, paramName.AsSpan(), ReadOnlySpan<char>.Empty, value.GetType());
         throw new ArgumentOutOfRangeException(paramName, ctx.CreateErrorMessage(baseMessage));
@@ -637,7 +660,7 @@ public static partial class DbBinder
         {
             Context ctx = new Context(DbExecutionContextScope.Current, paramName.AsSpan(), ReadOnlySpan<char>.Empty, typeof(DateTime));
             throw new ArgumentOutOfRangeException(paramName,
-                ctx.CreateErrorMessage($"파라미터 '{paramName}'의 값 '{val}'은(는) DATETIME 범위를 벗어납니다. (허용: 1753-01-01 ~ 9999-12-31)"));
+                ctx.CreateErrorMessage($"파라미터 '{paramName}'의 입력값은 DATETIME 범위를 벗어납니다. (허용: 1753-01-01 ~ 9999-12-31)"));
         }
     }
 
@@ -650,7 +673,7 @@ public static partial class DbBinder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsComplexObject(object? v) =>
         v is not (
-            null or DBNull or string or DateTime or Guid or decimal or Enum or
+            null or DBNull or string or DateTime or DateOnly or TimeOnly or Guid or decimal or Enum or
             DataTable or IDataReader or System.Data.Common.DbParameter or Stream or
             byte[] // byte[]는 JSON 직렬화 대상에서 제외
         )
@@ -670,6 +693,8 @@ public static partial class DbBinder
         int => SqlDbType.Int,
         long => SqlDbType.BigInt,
         string => SqlDbType.NVarChar,
+        DateOnly => SqlDbType.Date,
+        TimeOnly => SqlDbType.Time,
         DateTime => SqlDbType.DateTime2,
         bool => SqlDbType.Bit,
         decimal => SqlDbType.Decimal,
@@ -762,7 +787,7 @@ public static partial class DbBinder
     /// TVP(Table-Valued Parameter) 관련 로직을 전담하는 내부 모듈입니다.
     /// <para>
     /// - DTO → Columnar TVP Reader 변환<br/>
-    /// - 스키마 검증(ValidatorCallback) + Bounded Cache<br/>
+    /// - 스키마 검증(ValidatorCallback)<br/>
     /// - ColumnBuffer/Adder/팩터리 관리 및 메트릭 연동
     /// </para>
     /// </summary>
@@ -779,22 +804,11 @@ public static partial class DbBinder
         /// <summary>DTO Type → TVP Reader 팩터리 캐시입니다.</summary>
         private static readonly ConcurrentDictionary<Type, Func<IEnumerable, IDataReader>> s_readerCache = new();
 
-        /// <summary>(DTO Type, TVP Name) → 스키마 검증 상태 캐시입니다.</summary>
-        private static readonly ConcurrentDictionary<(Type ClrType, string TvpName), TvpValidationState> s_validationCache = new();
-
         /// <summary>외부에서 주입되는 TVP 스키마 검증 콜백입니다.</summary>
         internal static Func<Type, string, bool>? ValidatorCallback { get; set; }
 
         /// <summary>Source Generator 기반 TVP 바인딩 사용 여부입니다.</summary>
         internal static bool s_enableGeneratedBinder = true;
-
-        /// <summary>TVP 스키마 검증 상태입니다.</summary>
-        private enum TvpValidationState : byte
-        {
-            NotValidated = 0,
-            Success = 1,
-            Failed = 2
-        }
 
         #endregion
 
@@ -817,7 +831,6 @@ public static partial class DbBinder
         internal static void ClearCaches()
         {
             s_readerCache.Clear();
-            s_validationCache.Clear();
             BufferAdderCache.Clear();
             ColumnBufferFactory.Clear();
         }
@@ -1099,28 +1112,18 @@ public static partial class DbBinder
             if (string.IsNullOrEmpty(meta.UdtTypeName) || ValidatorCallback is null)
                 return;
 
-            (Type ClrType, string TvpName) key = (ClrType: type, TvpName: meta.UdtTypeName);
-
-            if (!s_validationCache.TryGetValue(key, out TvpValidationState state))
+            bool ok;
+            try
             {
-                if (s_validationCache.Count >= s_maxCacheSize)
-                    s_validationCache.Clear();
-
-                bool ok = false;
-                try
-                {
-                    ok = ValidatorCallback(type, meta.UdtTypeName);
-                }
-                catch
-                {
-                    // 콜백 내부 예외는 실패로 간주 (안전 측)
-                }
-
-                state = ok ? TvpValidationState.Success : TvpValidationState.Failed;
-                s_validationCache[key] = state;
+                ok = ValidatorCallback(type, meta.UdtTypeName);
+            }
+            catch
+            {
+                // 콜백 내부 예외는 실패로 간주 (안전 측)
+                ok = false;
             }
 
-            if (state == TvpValidationState.Failed)
+            if (!ok)
             {
                 Context ctx = Context.FromMeta(meta, type);
                 throw new InvalidOperationException(
@@ -1343,7 +1346,7 @@ public static partial class DbBinder
                 clrType);
 
         /// <summary>
-        /// 상세한 실행 컨텍스트를 포함한 오류 메시지를 생성합니다.
+        /// 실행 컨텍스트를 포함한 오류 메시지를 생성합니다.
         /// </summary>
         /// <param name="reason">오류 원인 설명</param>
         /// <param name="prefix">메시지 헤더 (기본: "[바인딩 오류]")</param>
@@ -1364,23 +1367,9 @@ public static partial class DbBinder
             if (Execution is { } exec)
             {
                 sb.AppendLine(" - 실행 정보 :");
-                sb.Append("   * 인스턴스 : ").AppendLine(exec.InstanceName);
+                sb.Append("   * 인스턴스 : ").AppendLine(DbDiagnosticRedactor.RedactInstanceId(exec.InstanceName));
                 sb.Append("   * 명령 유형 : ").Append(exec.CommandType).AppendLine();
-
-                // SQL 텍스트 요약 (너무 길면 잘라서 표시)
-                ReadOnlySpan<char> cmdText = exec.CommandText.AsSpan();
-                const int maxLen = 100;
-
-                sb.Append("   * SQL 요약 : ");
-                if (cmdText.Length > maxLen)
-                {
-                    sb.Append(cmdText[..maxLen]).Append("... (생략됨)");
-                }
-                else
-                {
-                    sb.Append(cmdText);
-                }
-                sb.AppendLine();
+                sb.Append("   * 명령 텍스트 : ").AppendLine(RedactedCommandText);
 
                 if (!string.IsNullOrEmpty(exec.CorrelationId))
                     sb.Append("   * 추적 ID  : ").AppendLine(exec.CorrelationId);

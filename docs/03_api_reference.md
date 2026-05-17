@@ -27,10 +27,81 @@ DB 작업의 유일한 진입점입니다. DI 컨테이너에서 `Scoped`로 등
 | 멤버 | 시그니처 | 설명 |
 |---|---|---|
 | `Procedure` | `IParameterStage Procedure(string spName)` | 저장 프로시저 지정 |
-| `Sql` | `IParameterStage Sql(string sqlText)` | Raw SQL 텍스트 지정 |
-| `Sql` | `IParameterStage Sql(FormattableString sql)` | 보간 SQL (파라미터 자동 추출, Zero-Allocation) |
+| `Sql` | `IParameterStage Sql(string sqlText)` | Raw SQL 텍스트 지정. 사용자 입력은 문자열 결합하지 말고 파라미터로 전달 |
+| `Sql` | `IParameterStage Sql(FormattableString sql)` | 보간 SQL (값 인수 파라미터 자동 추출) |
+| `SqlInterpolated` | `IParameterStage SqlInterpolated(FormattableString sql)` | 보간 SQL을 명시적으로 선택하는 파라미터화 API |
 
 ---
+
+## 2-1. Raw SQL 보안 옵션
+
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `RawSqlPolicy` | `Allow` | `CommandType.Text` 실행 정책. `DenyAllText`는 모든 Raw SQL 텍스트를 차단하고, `DenyWriteText`는 주석/문자열/식별자를 건너뛰며 쓰기/DDL/권한/운영 계열 위험 토큰을 차단합니다. |
+| `ConnectionSecurityProfile` | `Development` | `Production` 설정 시 암호화 비활성, `TrustServerCertificate=True`, 고권한 기본 SQL 로그인 사용을 검증합니다. |
+
+`DenyWriteText`는 SQL 파서가 아니라 전환기 보조 guardrail입니다.
+복잡한 T-SQL 문법 전체를 증명하는 보안 경계로 간주하면 안 됩니다.
+운영에서 Raw SQL 자체를 금지하려면 `DenyAllText`와 DB 권한 분리를 함께 사용하세요.
+
+## 2-2. DTO 결과 매핑 규칙
+
+기본 DTO 결과 매퍼는 SQL Server 컬럼명과 CLR 프로퍼티명을 다음 순서로 매칭합니다.
+
+| 순서 | 규칙 | 예 |
+|---|---|---|
+| 1 | exact/case-insensitive 프로퍼티명 매칭 | `CellNo`, `cellno` -> `CellNo` |
+| 2 | SQL 이름 정규화 fallback | `CELL_NO`, `cell_no`, `Cell_No` -> `CellNo` |
+| 3 | 충돌 시 자동 매핑 제외 | `CellNo`와 `Cell_No` 프로퍼티가 동시에 있으면 fallback 제외 |
+
+정규화 fallback은 `_`를 제거하고 대소문자를 무시하는 보수적 규칙입니다.
+명시적인 exact match가 항상 우선하며, 동일 프로퍼티가 여러 컬럼에 중복 매칭되면 첫 번째 컬럼만 사용합니다.
+이 정책은 positional record 생성자 매핑에도 영향을 줍니다.
+
+```csharp
+public sealed record SuspendRow(int CellNo, string SlotName);
+```
+
+위 타입은 다음 ResultSet을 기본 매퍼로 읽을 수 있습니다.
+
+```sql
+SELECT CELL_NO, SLOT_NAME
+FROM verify.ResultMappingRows;
+```
+
+`Dictionary<string, object?>`, `DataRow`, scalar 매퍼는 각 타입의 기존 의미를 유지합니다.
+
+## 2-3. DateOnly/TimeOnly 파라미터 바인딩
+
+`DateOnly`와 `TimeOnly`는 Raw SQL과 저장 프로시저 바인딩에서 SQL Server 타입으로 명시 변환됩니다.
+
+| CLR 타입 | SQL Server 타입 | 전송 값 |
+|---|---|---|
+| `DateOnly` | `date` | `DateTime` 00:00:00 |
+| `TimeOnly` | `time` | `TimeSpan` |
+
+```csharp
+DbResult<int> count = await session.Default
+    .Sql("SELECT COUNT(*) FROM verify.ResultMappingRows WHERE SCAN_DATE = @ScanDate")
+    .With(new { ScanDate = new DateOnly(2026, 5, 17) })
+    .ExecuteScalarAsync<int>();
+```
+
+## 2-4. `[DbResult]` generated mapper reader 계약
+
+`[DbResult]` Source Generator는 v2.2.1부터 다음 두 진입점을 함께 생성합니다.
+
+```csharp
+public static T Map(DbDataReader reader);
+public static T Map(SqlDataReader reader);
+```
+
+런타임 `GeneratedResultMapper<T>`는 `Map(DbDataReader)`를 우선 사용합니다.
+따라서 Diagnostic monitor가 반환하는 `MonitoredSqlDataReader : DbDataReader` wrapper에서도 generated mapper가 동작합니다.
+`Map(SqlDataReader)`는 기존 generated contract 호환을 위한 overload입니다.
+
+이미 빌드되어 배포된 오래된 generator 산출물은 `Map(DbDataReader)`가 없을 수 있습니다.
+이 경우 새 `Lib.Db.TvpGen`으로 재빌드하여 generated source를 갱신하세요.
 
 ## 3. IParameterStage
 
@@ -216,6 +287,7 @@ DB 명령 실행 전후를 가로채는 사용자 수준 인터셉터입니다.
 | 속성 | 타입 | 설명 |
 |---|---|---|
 | `CommandText` | `string` (required) | SP 이름 또는 SQL 텍스트 |
+| `DiagnosticCommandText` | `string?` | 진단/로그용 명령 텍스트. Raw SQL 원문 노출을 피하려면 이 값을 우선 사용 |
 | `CommandType` | `CommandType` (required) | 명령 유형 |
 | `InstanceName` | `string` (required) | 대상 인스턴스 이름 |
 | `StartTime` | `DateTime` | 실행 시작 시각 (UTC, 기본값: UtcNow) |
@@ -270,7 +342,7 @@ OpenTelemetry 기반 관측 가능성을 위한 정적 클래스입니다.
 | 상수/필드/메서드 | 타입 | 설명 |
 |---|---|---|
 | `SourceName` | `const string` | `"Lib.Db"` — ActivitySource/Meter 공통 이름 |
-| `Version` | `const string` | `"2.2.0"` — ActivitySource/Meter 버전 |
+| `Version` | `const string` | `"2.2.1"` — ActivitySource/Meter 버전 |
 | `ActivitySource` | `ActivitySource` | 트레이스 데이터 생성 |
 | `Meter` | `Meter` | 메트릭 데이터 생성 |
 | `RecordBytesFreed(long)` | `static void` | 캐시 정리 시 해제된 바이트 누적 기록 |

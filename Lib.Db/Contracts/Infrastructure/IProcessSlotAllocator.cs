@@ -25,6 +25,7 @@ namespace Lib.Db.Contracts.Infrastructure;
 /// </para>
 /// </summary>
 ///
+/// <remarks>
 /// <para><b>[동작 원리]</b></para>
 /// <list type="number">
 ///   <item>

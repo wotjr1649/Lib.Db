@@ -13,6 +13,7 @@
 
 using System.Diagnostics;
 using Lib.Db.Contracts.Schema;
+using Lib.Db.Diagnostics;
 
 namespace Lib.Db.Hosting;
 
@@ -185,6 +186,7 @@ public sealed class SchemaWarmupService(
             Stopwatch stopwatch = Stopwatch.StartNew();
             bool success = false;
             string schemaLogStr = string.Join(",", target.SchemaNames);
+            string diagnosticInstance = RedactWarmupInstanceId(target.InstanceId);
 
             try
             {
@@ -199,18 +201,18 @@ public sealed class SchemaWarmupService(
                     // LogFastWarn(Exception? ex, string message) pattern
                     _logger.LogFastWarn(
                         null,
-                        $"[SchemaWarmup] 경고 - 요청한 스키마 중 일부가 DB에서 발견되지 않아 워밍업에서 제외되었습니다. 누락된 스키마: [{missingStr}], 인스턴스: '{target.InstanceId}'");
+                        $"[SchemaWarmup] 경고 - 요청한 스키마 중 일부가 DB에서 발견되지 않아 워밍업에서 제외되었습니다. 누락된 스키마: [{missingStr}], 인스턴스: '{diagnosticInstance}'");
                 }
 
                 success = true;
 
                 _logger.LogFastInfo(
-                    $"[SchemaWarmup] 인스턴스='{target.InstanceId}', 스키마='{schemaLogStr}' 사전 로드 완료. (로드된 항목: {preloadResult.LoadedItemsCount})");
+                    $"[SchemaWarmup] 인스턴스='{diagnosticInstance}', 스키마='{schemaLogStr}' 사전 로드 완료. (로드된 항목: {preloadResult.LoadedItemsCount})");
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 _logger.LogFastInfo(
-                    $"[SchemaWarmup] 취소됨 - 인스턴스='{target.InstanceId}', 스키마='{schemaLogStr}'.");
+                    $"[SchemaWarmup] 취소됨 - 인스턴스='{diagnosticInstance}', 스키마='{schemaLogStr}'.");
                 throw;
             }
             catch (Exception ex)
@@ -218,7 +220,7 @@ public sealed class SchemaWarmupService(
                 // 개별 워밍업 실패는 로깅만 하고 전체 Warmup은 계속 진행
                 _logger.LogFastWarn(
                     ex,
-                    $"[SchemaWarmup] 인스턴스='{target.InstanceId}', 스키마='{schemaLogStr}' 사전 로드 중 오류 발생. (애플리케이션은 계속 실행됩니다.)");
+                    $"[SchemaWarmup] 인스턴스='{diagnosticInstance}', 스키마='{schemaLogStr}' 사전 로드 중 오류 발생. (애플리케이션은 계속 실행됩니다.)");
             }
             finally
             {
@@ -229,7 +231,7 @@ public sealed class SchemaWarmupService(
 
                 // 2) Warmup 전용 SchemaRefresh 메트릭
                 //    - kind: "Warmup" 으로 고정
-                //    - Target(스키마명)은 DbRequestInfo.Target 에 설정됨
+                //    - Target은 DbRequestInfo.Target의 고정 진단 값("bulk-load")을 사용
                 DbMetrics.TrackSchemaRefresh(success, "Warmup", in requestInfo);
             }
         }
@@ -244,18 +246,23 @@ public sealed class SchemaWarmupService(
     #region [3. Warmup 전용 DbRequestInfo 구성]
 
     /// <summary>
-    /// 스키마 워밍업 작업에 특화된 <see cref="DbRequestInfo"/> 를 구성합니다.
+    /// 스키마 워밍업 작업에 특화된 진단용 <see cref="DbRequestInfo"/> 를 구성합니다.
     /// <para>
     /// - Operation: "SCHEMA_WARMUP"<br/>
     /// - CommandKind: "Warmup"<br/>
     /// - IsTransactional: false<br/>
-    /// - CorrelationId: "warmup:{InstanceId}:{SchemaCount}"
+    /// - CorrelationId: "warmup:{DiagnosticInstanceId}:{SchemaCount}"
     /// </para>
     /// </summary>
-    /// <param name="target">워밍업 대상 인스턴스/스키마 정보</param>
-    private static DbRequestInfo CreateWarmupRequestInfo(in WarmupTarget target)
-        => new(
-            InstanceId: target.InstanceId,
+    /// <param name="instanceId">워밍업 대상 인스턴스 식별자</param>
+    /// <param name="schemaCount">워밍업 대상 스키마 수</param>
+    /// <returns>로그/메트릭 경계에서 사용할 진단용 요청 정보입니다.</returns>
+    internal static DbRequestInfo CreateDiagnosticRequestInfo(string instanceId, int schemaCount)
+    {
+        string diagnosticInstance = RedactWarmupInstanceId(instanceId);
+
+        return new DbRequestInfo(
+            InstanceId: diagnosticInstance,
             DbSystem: "mssql",
             DbName: null,              // 필요 시 DbExecutionContext 확장 후 주입 가능
             DbUser: null,
@@ -265,8 +272,15 @@ public sealed class SchemaWarmupService(
             Target: "bulk-load", // 여러 스키마이므로 고정값 사용
             CommandKind: "Warmup",
             IsTransactional: false,
-            CorrelationId: $"warmup:{target.InstanceId}:{target.SchemaNames.Count}"
+            CorrelationId: $"warmup:{diagnosticInstance}:{schemaCount}"
         );
+    }
+
+    private static DbRequestInfo CreateWarmupRequestInfo(in WarmupTarget target)
+        => CreateDiagnosticRequestInfo(target.InstanceId, target.SchemaNames.Count);
+
+    private static string RedactWarmupInstanceId(string instanceId)
+        => DbDiagnosticRedactor.RedactInstanceId(instanceId) ?? instanceId;
 
     #endregion
 

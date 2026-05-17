@@ -22,6 +22,7 @@ using System.Runtime.CompilerServices;
 using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Schema;
+using Lib.Db.Diagnostics;
 
 using Polly;
 using Polly.CircuitBreaker;
@@ -423,9 +424,9 @@ internal sealed class InterceptorChain(IEnumerable<IDbCommandInterceptor> interc
 /// </list>
 ///
 /// <para><strong>🧵 스레드 안전성</strong></para>
-/// <list type=”bullet”>
+/// <list type="bullet">
 ///   <item>
-///     내부 상태 <c>s_elevatePriorityOnNextRetry</c>는 <see cref=”AsyncLocal{T}”/>로 관리되므로,
+///     내부 상태 <c>s_elevatePriorityOnNextRetry</c>는 <see cref="AsyncLocal{T}"/>로 관리되므로,
 ///     Singleton으로 등록되어 동시 요청에 공유되더라도 각 비동기 실행 컨텍스트(요청)별로 독립적인 값을 유지합니다.
 ///   </item>
 /// </list>
@@ -492,10 +493,10 @@ internal sealed class ResilientStrategy(
         CancellationToken token)
     {
         DbRequestInfo info = new DbRequestInfo(
-            InstanceId: request.InstanceHash,
+            InstanceId: DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash),
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
-            Target: request.CommandText);
+            CommandKind: request.CommandType.ToString());
 
         await using SqlConnection conn = await _connFactory
             .CreateConnectionAsync(request.InstanceHash, token)
@@ -542,10 +543,10 @@ internal sealed class ResilientStrategy(
         CancellationToken token)
     {
         DbRequestInfo info = new DbRequestInfo(
-            InstanceId: request.InstanceHash,
+            InstanceId: DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash),
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
-            Target: request.CommandText);
+            CommandKind: request.CommandType.ToString());
 
         // 스트리밍은 “연결 수명”이 Reader 수명과 묶이므로 await using을 쓰지 않습니다.
         SqlConnection conn = await _connFactory
@@ -634,10 +635,10 @@ internal sealed class ResilientStrategy(
         CancellationToken ct)
     {
         DbRequestInfo info = new DbRequestInfo(
-            InstanceId: request.InstanceHash,
+            InstanceId: DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash),
             DbSystem: "mssql",
             Operation: request.CommandType.ToString(),
-            Target: request.CommandText);
+            CommandKind: request.CommandType.ToString());
 
         // 1) 데드락(1205): 다음 시도에서 DEADLOCK_PRIORITY HIGH
         if (ex.Number == 1205)
@@ -671,8 +672,7 @@ internal sealed class ResilientStrategy(
             && request.CommandType == CommandType.StoredProcedure)
         {
             _logger.LogWarning(ex,
-                "[Resilient/Schema] SP '{SpName}' 스키마 불일치(코드: {Code}) 감지. 캐시 무효화 후 재로딩을 시도합니다.",
-                request.CommandText,
+                "[Resilient/Schema] SP 스키마 불일치(코드: {Code}) 감지. 캐시 무효화 후 재로딩을 시도합니다.",
                 ex.Number);
 
             _schemaService.InvalidateSpSchema(request.CommandText, request.InstanceHash);
@@ -782,15 +782,14 @@ internal sealed class TransactionalStrategy(
                                       && request.CommandType == CommandType.StoredProcedure)
         {
             DbRequestInfo info = new DbRequestInfo(
-                InstanceId: request.InstanceHash,
+                InstanceId: DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash),
                 DbSystem: "mssql",
                 Operation: request.CommandType.ToString(),
-                Target: request.CommandText);
+                CommandKind: request.CommandType.ToString());
 
             _logger.LogWarning(ex,
-                "[Transaction/Schema] 스키마 불일치(코드: {Code}) 감지. SP '{SpName}' 캐시를 무효화합니다.",
-                ex.Number,
-                request.CommandText);
+                "[Transaction/Schema] 스키마 불일치(코드: {Code}) 감지. SP 캐시를 무효화합니다.",
+                ex.Number);
 
             _schemaService.InvalidateSpSchema(request.CommandText, request.InstanceHash);
 
@@ -818,4 +817,3 @@ internal sealed class TransactionalStrategy(
 }
 
 #endregion
-

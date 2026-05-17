@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -15,8 +15,9 @@
 	  <!-- 분석기/제너레이터가 모든 빌드에서 항상 동작하도록 -->
 	<EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
 	
-	<!-- AOT 분석 경고 억제 (일반 JIT 컴파일 사용 시 영향 없음) -->
-	<NoWarn>$(NoWarn);IL2060;SYSLIB0020</NoWarn>
+	<!-- AOT/레거시 호환 경고 억제 (일반 JIT 컴파일 사용 시 영향 없음) -->
+	<NoWarn>$(NoWarn);IL2060</NoWarn>
+	<GenerateDocumentationFile>true</GenerateDocumentationFile>
 
 	  <!-- 생성 파일 디버깅/확인용(선택) -->
 	  <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
@@ -41,7 +42,7 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <Version>2.2.0</Version>
+    <Version>2.2.1</Version>
     <Authors>KIM JAE SEOK</Authors>
     <Description>High-Performance Data Access Library for .NET 10</Description>
     <PackageTags>sql-server;performance;aot;resilience</PackageTags>

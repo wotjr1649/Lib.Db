@@ -7,7 +7,9 @@
 using Lib.Db.Diagnostics;
 using Lib.Db.IntegrationTests.Infrastructure;
 using Microsoft.Extensions.Logging;
+using System.Data;
 using System.Diagnostics;
+using Lib.Db.Core;
 
 namespace Lib.Db.IntegrationTests.Diagnostics;
 
@@ -25,13 +27,12 @@ public sealed class DbDiagnosticsTests
     public void DD01_ExceptionFactory_ShouldCreateCorrectExceptions()
     {
         Exception inner = new("Native Error");
-        string cmdText = "SELECT * FROM Users";
 
-        Exception ex = LibDbExceptionFactory.CreateCommandExecutionFailed(cmdText, inner);
+        Exception ex = LibDbExceptionFactory.CreateCommandExecutionFailed(inner);
 
         Assert.IsType<InvalidOperationException>(ex);
         Assert.Contains("오류가 발생했습니다", ex.Message);
-        Assert.Contains("SELECT * FROM", ex.Message);
+        Assert.DoesNotContain("SELECT * FROM", ex.Message);
         Assert.Same(inner, ex.InnerException);
     }
 
@@ -95,15 +96,71 @@ public sealed class DbDiagnosticsTests
         IReadOnlyList<CapturedMeasurement<int>> measurements = harness.GetInts("db.client.resilience.retries");
         Assert.NotEmpty(measurements);
 
-        CapturedMeasurement<int> last = measurements.Last();
-        Assert.Equal(1, last.Value);
+        CapturedMeasurement<int> captured = Assert.Single(measurements, m =>
+            m.Tags.Any(t => t.Key == "libdb.retry.reason" && (string)t.Value! == "Deadlock") &&
+            m.Tags.Any(t => t.Key == "libdb.instance.id" && (string)t.Value! == "TestInst"));
+        Assert.Equal(1, captured.Value);
 
-        KeyValuePair<string, object?>[] tags = last.Tags.ToArray();
+        KeyValuePair<string, object?>[] tags = captured.Tags.ToArray();
         Assert.Contains(tags, t => t.Key == "libdb.retry.reason" && (string)t.Value! == "Deadlock");
         Assert.Contains(tags, t => t.Key == "libdb.instance.id" && (string)t.Value! == "TestInst");
         Assert.Contains(tags, t => t.Key == "db.operation" && (string)t.Value! == "EXEC");
         Assert.Contains(tags, t => t.Key == "libdb.command.kind" && (string)t.Value! == "StoredProcedure");
 
         Assert.DoesNotContain(tags, t => t.Key == "db.name");
+    }
+
+    [Fact]
+    public void DD06_FromExecutionContext_ShouldNotExposeCommandTextAsTarget()
+    {
+        DbExecutionContext context = DbExecutionContext.ForCommand(
+            "TestInst",
+            "SELECT * FROM SensitiveTable WHERE Secret = @secret",
+            CommandType.Text);
+
+        DbRequestInfo info = DbRequestInfo.FromExecutionContext(context);
+
+        Assert.Null(info.Target);
+        Assert.Equal("Text", info.CommandKind);
+    }
+
+    [Fact]
+    public void DD07_FromExecutionContext_ShouldRedactRawConnectionStringInstance()
+    {
+        const string rawInstance = "Raw:InstanceMaterialForDiagnosticsTest;Segment=Zeta";
+
+        DbExecutionContext context = DbExecutionContext.ForCommand(
+            rawInstance,
+            "dbo.usp_Test",
+            CommandType.StoredProcedure);
+
+        DbRequestInfo info = DbRequestInfo.FromExecutionContext(context);
+
+        Assert.Equal("Raw:[redacted]", info.InstanceId);
+        Assert.DoesNotContain("InstanceMaterialForDiagnosticsTest", info.InstanceId);
+        Assert.DoesNotContain("Segment=Zeta", info.InstanceId);
+    }
+
+    [Fact]
+    public void DD08_DbMetrics_ShouldRedactRawInstanceTag()
+    {
+        using TelemetryTestHarness harness = new("Lib.Db");
+        DbRequestInfo info = new(
+            InstanceId: "Raw:InstanceMaterialForMetricsTest;Segment=Eta",
+            Operation: "EXEC",
+            CommandKind: "StoredProcedure"
+        );
+
+        DbMetrics.TrackRetry("Deadlock", in info);
+
+        CapturedMeasurement<int> captured = Assert.Single(
+            harness.GetInts("db.client.resilience.retries"),
+            m => m.Tags.Any(t => t.Key == "libdb.retry.reason" && (string)t.Value! == "Deadlock"));
+
+        KeyValuePair<string, object?> instanceTag = Assert.Single(
+            captured.Tags,
+            t => t.Key == "libdb.instance.id");
+
+        Assert.Equal("Raw:[redacted]", instanceTag.Value);
     }
 }

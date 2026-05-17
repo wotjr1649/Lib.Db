@@ -372,6 +372,74 @@ internal static class ReflectionCache
 
 #endregion
 
+#region SQL 식별자 이름 해석
+
+/// <summary>
+/// SQL 컬럼/파라미터 이름과 CLR 프로퍼티 이름을 보수적으로 매칭하는 헬퍼입니다.
+/// </summary>
+internal static class SqlIdentifierName
+{
+    public static FrozenDictionary<string, PropertyInfo> BuildNormalizedPropertyMap(PropertyInfo[] properties)
+    {
+        Dictionary<string, PropertyInfo> normalized = new(StringComparer.Ordinal);
+        HashSet<string> ambiguous = new(StringComparer.Ordinal);
+
+        foreach (PropertyInfo property in properties)
+        {
+            string key = Normalize(property.Name);
+            if (key.Length == 0 || ambiguous.Contains(key))
+                continue;
+
+            if (normalized.ContainsKey(key))
+            {
+                normalized.Remove(key);
+                ambiguous.Add(key);
+                continue;
+            }
+
+            normalized.Add(key, property);
+        }
+
+        return normalized.ToFrozenDictionary(StringComparer.Ordinal);
+    }
+
+    public static bool TryGetProperty(
+        FrozenDictionary<string, PropertyInfo> exactMap,
+        FrozenDictionary<string, PropertyInfo> normalizedMap,
+        string name,
+        [NotNullWhen(true)] out PropertyInfo? property)
+    {
+        if (exactMap.TryGetValue(name, out property))
+            return true;
+
+        string normalized = Normalize(name);
+        return normalizedMap.TryGetValue(normalized, out property);
+    }
+
+    private static string Normalize(string name)
+    {
+        ReadOnlySpan<char> span = name.AsSpan();
+        while (!span.IsEmpty && span[0] == '@')
+            span = span[1..];
+
+        char[] buffer = new char[span.Length];
+        int written = 0;
+
+        for (int i = 0; i < span.Length; i++)
+        {
+            char c = span[i];
+            if (c == '_')
+                continue;
+
+            buffer[written++] = char.ToUpperInvariant(c);
+        }
+
+        return new string(buffer, 0, written);
+    }
+}
+
+#endregion
+
 // ============================================================================
 // [Expression Tree Mapper] JIT 전용 DTO 매퍼 (Typed Getter + JSON 지원)
 // ============================================================================
@@ -406,6 +474,9 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         /// <summary>대소문자 무시 프로퍼티 조회용 맵 (이름 → PropertyInfo)</summary>
         public static readonly FrozenDictionary<string, PropertyInfo> PropMap;
 
+        /// <summary>snake_case/upper snake 컬럼명 조회용 정규화 맵 (충돌 항목 제외)</summary>
+        public static readonly FrozenDictionary<string, PropertyInfo> NormalizedPropMap;
+
         /// <summary>Raw SQL 바인딩용 전체 프로퍼티 메타데이터 배열 (선언 순서 유지)</summary>
         public static readonly PropertyMeta[] AllProps;
 
@@ -415,6 +486,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
             PropertyInfo[] allProps = ReflectionCache.GetPublicProperties(typeof(T));
 
             PropMap = allProps.ToFrozenDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
+            NormalizedPropMap = SqlIdentifierName.BuildNormalizedPropertyMap(allProps);
 
             // 2) Raw SQL 파라미터 바인딩용 AllProps는 "읽기 가능한" 프로퍼티만 대상
             AllProps = allProps
@@ -423,6 +495,9 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                 .Select(p => new PropertyMeta(p, p.GetCustomAttribute<DbParameterAttribute>()))
                 .ToArray();
         }
+
+        public static bool TryGetProperty(string name, [NotNullWhen(true)] out PropertyInfo? property)
+            => SqlIdentifierName.TryGetProperty(PropMap, NormalizedPropMap, name, out property);
     }
 
     #endregion
@@ -464,7 +539,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
 
                 string name = meta.Name.TrimStart('@');
 
-                if (Meta.PropMap.TryGetValue(name, out PropertyInfo? prop) && prop.CanRead)
+                if (Meta.TryGetProperty(name, out PropertyInfo? prop) && prop.CanRead)
                 {
                     Func<T, object?> getter = GetGetter(name, prop);
                     object? value = getter(param);
@@ -512,7 +587,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
             {
                 string name = p.ParameterName.TrimStart('@');
 
-                if (Meta.PropMap.TryGetValue(name, out PropertyInfo? prop) && prop.CanWrite)
+                if (Meta.TryGetProperty(name, out PropertyInfo? prop) && prop.CanWrite)
                 {
                     Action<T, object?> setter = GetSetter(name, prop);
                     object? value = p.Value == DBNull.Value ? null : p.Value;
@@ -546,6 +621,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
     {
         ParameterExpression rParam = Expression.Parameter(typeof(DbDataReader), "reader");
         List<MemberBinding> bindings = new List<MemberBinding>();
+        HashSet<string> boundProperties = new(StringComparer.OrdinalIgnoreCase);
 
         // 공통 메서드 캐시
         MethodInfo isDbNull = typeof(DbDataReader).GetMethod(nameof(DbDataReader.IsDBNull))!;
@@ -562,7 +638,9 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         {
             string colName = reader.GetName(i);
 
-            if (!Meta.PropMap.TryGetValue(colName, out PropertyInfo? prop) || !prop.CanWrite)
+            if (!Meta.TryGetProperty(colName, out PropertyInfo? prop) || !prop.CanWrite)
+                continue;
+            if (!boundProperties.Add(prop.Name))
                 continue;
 
             ConstantExpression idxExp = Expression.Constant(i);
@@ -1264,6 +1342,7 @@ internal sealed class ReflectionParameterMapper<
     private static class TypeCache
     {
         public static readonly FrozenDictionary<string, PropertyInfo> Properties;
+        public static readonly FrozenDictionary<string, PropertyInfo> NormalizedProperties;
         public static readonly PropertyMeta[] AllProperties;
 
         static TypeCache()
@@ -1271,6 +1350,7 @@ internal sealed class ReflectionParameterMapper<
             PropertyInfo[] props = ReflectionCache.GetPublicProperties(typeof(T));
             Properties = props
                 .ToFrozenDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
+            NormalizedProperties = SqlIdentifierName.BuildNormalizedPropertyMap(props);
 
             AllProperties = props
                 .Where(p => p.CanRead)
@@ -1278,6 +1358,9 @@ internal sealed class ReflectionParameterMapper<
                 .Select(p => new PropertyMeta(p, p.GetCustomAttribute<DbParameterAttribute>()))
                 .ToArray();
         }
+
+        public static bool TryGetProperty(string name, [NotNullWhen(true)] out PropertyInfo? property)
+            => SqlIdentifierName.TryGetProperty(Properties, NormalizedProperties, name, out property);
     }
 
     /// <inheritdoc />
@@ -1299,7 +1382,7 @@ internal sealed class ReflectionParameterMapper<
 
                 string name = meta.Name.TrimStart('@');
 
-                if (TypeCache.Properties.TryGetValue(name, out PropertyInfo? prop) && prop.CanRead)
+                if (TypeCache.TryGetProperty(name, out PropertyInfo? prop) && prop.CanRead)
                 {
                     object? value = prop.GetValue(parameters);
                     DbBinder.BindParameter(cmd, meta, value, strict);
@@ -1346,7 +1429,7 @@ internal sealed class ReflectionParameterMapper<
             {
                 string name = p.ParameterName.TrimStart('@');
 
-                if (TypeCache.Properties.TryGetValue(name, out PropertyInfo? prop) && prop.CanWrite)
+                if (TypeCache.TryGetProperty(name, out PropertyInfo? prop) && prop.CanWrite)
                 {
                     object? value = p.Value == DBNull.Value ? null : p.Value;
                     prop.SetValue(parameters, value);
@@ -1377,23 +1460,42 @@ internal sealed class GeneratedResultMapper<
     [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>
     : ISqlMapper<T>
 {
-    private readonly Func<SqlDataReader, T> _mapFunc;
+    private readonly Func<DbDataReader, T> _mapFunc;
     private readonly ISqlMapper<T> _parameterMapper;
 
     /// <summary>
-    /// Source Generator가 제공하는 <c>T.Map(SqlDataReader)</c> 메서드를 찾아 델리게이트로 컴파일합니다.
+    /// Source Generator가 제공하는 <c>T.Map(DbDataReader)</c> 메서드를 우선 사용합니다.
     /// </summary>
     public GeneratedResultMapper(LibDbOptions options)
     {
-        MethodInfo method = typeof(T).GetMethod(
+        MethodInfo? dbReaderMethod = typeof(T).GetMethod(
             "Map",
             BindingFlags.Public | BindingFlags.Static,
-            [typeof(SqlDataReader)])
-            ?? throw new InvalidOperationException(
-                $"'{typeof(T).Name}' 형식에 정적 메서드 Map(SqlDataReader)이 없습니다.");
+            [typeof(DbDataReader)]);
 
-        _mapFunc = (Func<SqlDataReader, T>)Delegate.CreateDelegate(
-            typeof(Func<SqlDataReader, T>), method);
+        if (dbReaderMethod is not null)
+        {
+            _mapFunc = (Func<DbDataReader, T>)Delegate.CreateDelegate(
+                typeof(Func<DbDataReader, T>), dbReaderMethod);
+        }
+        else
+        {
+            MethodInfo sqlReaderMethod = typeof(T).GetMethod(
+                "Map",
+                BindingFlags.Public | BindingFlags.Static,
+                [typeof(SqlDataReader)])
+                ?? throw new InvalidOperationException(
+                    $"'{typeof(T).Name}' 형식에 정적 메서드 Map(DbDataReader) 또는 Map(SqlDataReader)이 없습니다.");
+
+            Func<SqlDataReader, T> sqlMapFunc = (Func<SqlDataReader, T>)Delegate.CreateDelegate(
+                typeof(Func<SqlDataReader, T>), sqlReaderMethod);
+
+            _mapFunc = reader => reader is SqlDataReader sqlReader
+                ? sqlMapFunc(sqlReader)
+                : throw new InvalidOperationException(
+                    $"'{typeof(T).Name}' generated mapper only exposes Map(SqlDataReader). " +
+                    "Regenerate the [DbResult] mapper so MonitoredSqlDataReader/DbDataReader wrappers can be used.");
+        }
 
         _parameterMapper = RuntimeFeature.IsDynamicCodeSupported
             ? new ExpressionTreeMapper<T>(options.JsonOptions, options.StrictRequiredParameterCheck)
@@ -1410,7 +1512,7 @@ internal sealed class GeneratedResultMapper<
 
     /// <inheritdoc />
     public T MapResult(DbDataReader reader)
-        => _mapFunc((SqlDataReader)reader);
+        => _mapFunc(reader);
 }
 
 #endregion

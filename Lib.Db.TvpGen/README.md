@@ -85,6 +85,21 @@ public sealed class ProductService(IDbSession session)
 }
 ```
 
+### v2.2.1 reader 호환성
+
+`[DbResult]` 생성 코드는 v2.2.1부터 `DbDataReader` 기반 mapper를 기본 진입점으로 생성합니다.
+
+```csharp
+public static ProductDto Map(DbDataReader reader);
+public static ProductDto Map(SqlDataReader reader);
+```
+
+런타임 `GeneratedResultMapper<T>`는 `Map(DbDataReader)`를 우선 호출합니다.
+따라서 `Lib.Db` diagnostic monitor가 연결 수명/메트릭 관리를 위해 감싸는 `MonitoredSqlDataReader : DbDataReader` 경로에서도 `InvalidCastException` 없이 동작합니다.
+`Map(SqlDataReader)` overload는 기존 generated source와의 소스 호환을 위한 shim입니다.
+
+오래된 generator 산출물을 포함해 배포한 경우에는 새 `Lib.Db.TvpGen`으로 재빌드하여 `Map(DbDataReader)` overload가 포함되었는지 확인하세요.
+
 ---
 
 ## 아키텍처

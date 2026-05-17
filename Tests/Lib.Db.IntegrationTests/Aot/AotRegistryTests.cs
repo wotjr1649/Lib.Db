@@ -8,6 +8,7 @@ using System.Collections;
 using System.Reflection;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution.Binding;
+using Lib.Db.Execution.Tvp;
 
 namespace Lib.Db.IntegrationTests.Aot;
 
@@ -46,5 +47,16 @@ public sealed class AotRegistryTests
         }
 
         Assert.True(found, "AotDto was not found in TvpFactoryRegistry. Source Generator might have failed.");
+    }
+
+    [Fact]
+    public void TvpGen_Should_Register_Dto_In_TvpAccessorRegistry()
+    {
+        bool found = TvpAccessorRegistry.TryGet<AotDto>(out TvpAccessors<AotDto>? accessors);
+
+        Assert.True(found, "AotDto was not found in TvpAccessorRegistry. Static validator and buffer adder are not wired.");
+        Assert.NotNull(accessors);
+        Assert.NotNull(accessors.StaticValidator);
+        Assert.NotNull(accessors.BufferAdder);
     }
 }

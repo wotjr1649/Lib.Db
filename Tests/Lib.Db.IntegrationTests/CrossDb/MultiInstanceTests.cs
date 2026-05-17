@@ -5,6 +5,7 @@
 // ============================================================================
 
 using Lib.Db.IntegrationTests.Infrastructure;
+using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.CrossDb;
 
@@ -21,6 +22,8 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
     private readonly IDbSession _session = fixture.Session;
     private readonly IProcedureStage _verification = fixture.Verification;
     private readonly IProcedureStage _sorter = fixture.Sorter;
+    private readonly string _verificationConnectionString = fixture.GetConnectionString(TestConnectionStrings.Verification);
+    private readonly string _sorterConnectionString = fixture.GetConnectionString(TestConnectionStrings.Sorter);
 
     #endregion
 
@@ -39,7 +42,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
 
         // Assert
         result.IsSuccess.Should().BeTrue();
-        result.Value.Should().Be("LIBDB_VERIFICATION_TEST");
+        result.Value.Should().Be(GetInitialCatalog(_verificationConnectionString));
     }
 
     #endregion
@@ -72,17 +75,14 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
     [Fact]
     public async Task MI03_UseConnectionString_AdHoc_ShouldWork()
     {
-        // Arrange
-        string connectionString = "Server=127.0.0.1;Database=LIBDB_VERIFICATION_TEST;User Id=sa;Password=123456;TrustServerCertificate=True;Encrypt=False;";
-
         // Act
-        DbResult<string?> result = await _session.UseConnectionString(connectionString)
+        DbResult<string?> result = await _session.UseConnectionString(_verificationConnectionString)
             .Sql("SELECT DB_NAME()")
             .ExecuteScalarAsync<string>();
 
         // Assert
         result.IsSuccess.Should().BeTrue();
-        result.Value.Should().Be("LIBDB_VERIFICATION_TEST");
+        result.Value.Should().Be(GetInitialCatalog(_verificationConnectionString));
     }
 
     #endregion
@@ -132,7 +132,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
 
         // Assert
         vResult.IsSuccess.Should().BeTrue();
-        vResult.Value.Should().Be("LIBDB_VERIFICATION_TEST");
+        vResult.Value.Should().Be(GetInitialCatalog(_verificationConnectionString));
 
         // Act — Sorter DB
         DbResult<string?> sResult = await _session.Use("Sorter")
@@ -141,7 +141,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
 
         // Assert
         sResult.IsSuccess.Should().BeTrue();
-        sResult.Value.Should().Be("LV_ANP_SORTER");
+        sResult.Value.Should().Be(GetInitialCatalog(_sorterConnectionString));
     }
 
     #endregion
@@ -168,4 +168,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
     }
 
     #endregion
+
+    private static string GetInitialCatalog(string connectionString)
+        => new SqlConnectionStringBuilder(connectionString).InitialCatalog;
 }

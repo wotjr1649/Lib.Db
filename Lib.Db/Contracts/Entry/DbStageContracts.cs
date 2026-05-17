@@ -43,7 +43,11 @@ public interface IProcedureStage
 
     /// <summary>
     /// Raw SQL 텍스트를 지정합니다.
-    /// <para>예: <c>"SELECT * FROM ..."</c></para>
+    /// <para>
+    /// 이 오버로드는 SQL 텍스트를 그대로 실행기로 전달합니다. 사용자 입력을 문자열 결합으로 포함하지 말고,
+    /// 값 바인딩은 <see cref="Sql(FormattableString)"/>, <see cref="SqlInterpolated(FormattableString)"/> 또는 <see cref="IParameterStage.With{TParams}(TParams)"/>를 사용하세요.
+    /// </para>
+    /// <para>예: <c>"SELECT * FROM Users WHERE Id = @Id"</c></para>
     /// </summary>
     /// <param name="sqlText">실행할 SQL 텍스트</param>
     /// <returns>파라미터를 설정하는 2단계 인터페이스</returns>
@@ -52,12 +56,24 @@ public interface IProcedureStage
     /// <summary>
     /// 문자열 보간(<c>$</c>)을 사용하여 SQL과 파라미터를 동시에 지정합니다.
     /// <para>
-    /// SQL Injection 방지를 위해 보간 인수는 자동으로 파라미터화 처리됩니다.
+    /// 보간 값 인수는 자동으로 파라미터화되어 값 기반 SQL injection 위험을 줄입니다.
     /// </para>
     /// </summary>
     /// <param name="sql">보간 문자열로 표현된 SQL</param>
-    /// <returns>파라미터를 설정하는 2단계 인터페이스</returns>
+    /// <returns>보간 인수로 생성된 파라미터를 유지하는 2단계 인터페이스. 추가 <c>With(...)</c> 호출은 충돌 없는 명명 파라미터를 병합합니다.</returns>
     IParameterStage Sql(FormattableString sql);
+
+    /// <summary>
+    /// 문자열 보간(<c>$</c>)을 사용하여 SQL과 파라미터를 동시에 지정합니다.
+    /// <para>
+    /// <see cref="Sql(FormattableString)"/>와 동일한 동작을 하는 명시적 이름의 파라미터화 API입니다.
+    /// Raw SQL 오버로드와 혼동을 줄이려면 이 메서드를 우선 사용하세요.
+    /// </para>
+    /// </summary>
+    /// <param name="sql">보간 문자열로 표현된 SQL</param>
+    /// <returns>보간 인수로 생성된 파라미터를 유지하는 2단계 인터페이스. 추가 <c>With(...)</c> 호출은 충돌 없는 명명 파라미터를 병합합니다.</returns>
+    IParameterStage SqlInterpolated(FormattableString sql)
+        => Sql(sql);
 
     #endregion
 }

@@ -147,6 +147,8 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 
 - [ ] `ConnectionStringNames`에 사용할 모든 DB 키 나열
 - [ ] 각 키에 대응하는 `ConnectionStrings` 값 존재
+- [ ] 운영 서비스는 `ConnectionSecurityProfile = Production` 또는 `UseProductionSecurityDefaults()` 적용
+- [ ] Raw SQL Text가 필요한 경우에도 운영 기본값은 `RawSqlPolicy = DenyWriteText`, 보안 경계가 필요하면 `DenyAllText`
 - [ ] `Encrypt=True;TrustServerCertificate=False` (프로덕션)
 - [ ] sa 계정 대신 최소 권한 Application User 사용
 - [ ] **MARS 정책 설정**: `"Mars": "ForceEnable"` (권장) 또는 `"Mars": "Auto"` (기본값)
@@ -161,17 +163,80 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 - [ ] `EnableSchemaCaching = true`, `SchemaRefreshIntervalSeconds`: 60~300
 - [ ] `PrewarmExcludePatterns`: `*_Test*`, `*_Legacy*` 등 제외
 - [ ] `DefaultCommandTimeoutSeconds`: 30 (OLTP), 120+ (배치)
+- [ ] 사용자 지정 cache key에는 비밀값, PII, 원문 SQL, 조건값 원문을 넣지 않음
+  - cache key는 Activity/log 태그로 전달될 수 있으므로 안정적인 non-sensitive 식별자 또는 해시 사용
 
 ### 4-4. HealthCheck
 
 - [ ] `HealthCheckThrottleSeconds`: 1~10 (기본값: 1초)
   - v2.2부터 이 설정이 실제로 적용됩니다 (이전 버전에서는 1초 하드코딩)
+- [ ] HealthCheck 응답의 캐시 진단 데이터 확인
+  - `libdb.cache.mode`: `shared-memory`, `fallback`, `unregistered` 중 하나
+  - `libdb.cache.fallback_active`: SharedMemory 사용이 기대되는 환경에서 `true`면 degraded 상태로 취급
+  - HealthCheck를 외부 공개 엔드포인트로 노출하는 경우 내부 캐시 모드가 운영 정보가 될 수 있으므로 접근 제어를 적용
 
 ---
 
-## 5. 성능 튜닝 가이드
+## 5. v2.2.1 회귀 검증 체크리스트
 
-### 5-1. 스키마 캐시 TTL
+v2.2.1에는 실 DB에서 확인된 세 가지 차단 이슈에 대한 전용 검증 경로가 포함됩니다.
+검증 DB 이름은 `LIBDB_VERIFICATION_TEST`를 사용하며, 테스트 실행 시 연결 문자열은 환경변수로만 제공합니다.
+문서나 로그에는 연결 문자열 값을 남기지 마세요.
+
+### 5-1. 검증 DB 배포 객체
+
+테스트 fixture는 안전한 테스트 DB에서만 다음 객체를 멱등 배포합니다.
+
+| 객체 | 목적 |
+|---|---|
+| `[verify].[ResultMappingRows]` | `CELL_NO`, `SLOT_NAME`, `SCAN_DATE` 등 회귀 검증용 시드 데이터 |
+| `[verify].[usp_GetSuspendRows]` | UPPER_SNAKE ResultSet -> PascalCase positional record 매핑 검증 |
+| `[verify].[usp_GetGeneratedRows]` | `[DbResult]` generated mapper + monitored reader 검증 |
+| `[verify].[QuotedIdentifierRows]` | `SET QUOTED_IDENTIFIER ON` 기반 computed column index 생성 검증 |
+| `IX_QuotedIdentifierRows_NormalizedCode` | computed column index가 실제 생성됐는지 확인 |
+
+### 5-2. 검증 대상
+
+| 테스트 | 확인하는 문제 |
+|---|---|
+| `V22101_DefaultMapper_ShouldMapUpperSnakeResultSet_ToPascalCasePositionalRecord` | `CELL_NO -> CellNo` 기본 매퍼 convention |
+| `V22102_GeneratedDbResult_ShouldMapThroughMonitoredDbDataReader` | `[DbResult]` mapper가 `MonitoredSqlDataReader` wrapper에서 동작 |
+| `V22103_RawSqlDateOnlyParameter_ShouldBindAsSqlDate` | Raw SQL `DateOnly` 파라미터가 SQL `date`로 동작 |
+| `V22104_QuotedIdentifierVerificationIndex_ShouldBeCreated` | `SET QUOTED_IDENTIFIER ON`이 필요한 computed column index 생성 |
+
+### 5-3. 실행 명령
+
+다음 환경변수 키를 현재 셸 프로세스에만 설정한 뒤 실행합니다.
+값 자체는 출력하거나 커밋하지 않습니다.
+
+| 환경변수 | 설명 |
+|---|---|
+| `LIBDB_TEST_CONNECTION_VERIFICATION` | `LIBDB_VERIFICATION_TEST` 연결 문자열 |
+| `LIBDB_TEST_CONNECTION_SORTER` | 멀티 DB 테스트용 연결 문자열. 같은 테스트 DB를 가리켜도 됩니다. |
+
+```powershell
+dotnet test .\Tests\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj `
+  -c Release `
+  --filter "FullyQualifiedName~V221BlockerVerificationTests"
+```
+
+전체 회귀 확인:
+
+```powershell
+dotnet test .\Tests\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj -c Release
+```
+
+### 5-4. 보안 운영 메모
+
+- 검증 DB에서는 DDL 배포를 허용하지만, 프로덕션 DB에서 테스트 초기화 코드를 실행하지 마세요.
+- `RawSqlPolicy.DenyWriteText`는 SQL 파서가 아니라 guardrail입니다. 운영 보안 경계는 최소 권한 DB 계정, `DenyAllText`, SP 권한 분리로 구성하세요.
+- `SET QUOTED_IDENTIFIER ON`은 computed column index, indexed view, filtered index 등 SQL Server 기능에서 요구될 수 있으므로 DDL 스크립트에 명시하세요.
+
+---
+
+## 6. 성능 튜닝 가이드
+
+### 6-1. 스키마 캐시 TTL
 
 | 환경 | 권장 SchemaRefreshIntervalSeconds |
 |---|---|
@@ -179,12 +244,12 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 | 스테이징 | 60 (기본값) |
 | 프로덕션 | 300~600 (안정적 스키마) |
 
-### 5-2. SharedMemoryCache 스트라이프
+### 6-2. SharedMemoryCache 스트라이프
 
 128개 Mutex 스트라이프가 기본이며, 대부분의 워크로드에 적합합니다.
 동시 프로세스 수가 매우 많은 경우 `BasePath` 격리를 확인하세요.
 
-### 5-3. Polly 재시도 설정
+### 6-3. Polly 재시도 설정
 
 | 시나리오 | MaxRetryCount | BaseRetryDelayMs |
 |---|---|---|
@@ -193,7 +258,7 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 | 배치 처리 | 5 | 500 |
 | 장시간 작업 | 3 | 1000 |
 
-### 5-4. 진단 활성화
+### 6-4. 진단 활성화
 
 `EnableObservability`를 `true`로 설정합니다.
 

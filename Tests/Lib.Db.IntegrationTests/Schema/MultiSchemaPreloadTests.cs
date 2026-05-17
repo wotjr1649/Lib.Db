@@ -8,6 +8,7 @@ using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
 using Lib.Db.IntegrationTests.Infrastructure;
 using Lib.Db.Schema;
+using Microsoft.Extensions.Caching.Hybrid;
 
 namespace Lib.Db.IntegrationTests.Schema;
 
@@ -93,13 +94,55 @@ public sealed class MultiSchemaPreloadTests
         catch (Exception ex)
         {
             _output.WriteLine($"[TEST ERROR] {ex.GetType().Name}: {ex.Message}");
-            _output.WriteLine(ex.StackTrace);
+            _output.WriteLine(ex.StackTrace ?? string.Empty);
             throw;
         }
         finally
         {
             await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {dboSp}").ExecuteAsync();
             await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {coreSp}").ExecuteAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    [Trait("Feature", "SchemaCache")]
+    public async Task GetSpSchemaAsync_ShouldRecoverFromInvalidCachedSchemaPayload()
+    {
+        string spName = "dbo.usp_CacheRecovery";
+
+        try
+        {
+            await _fixture.Verification.Sql($@"
+                CREATE OR ALTER PROCEDURE {spName} AS SELECT 1;
+            ").ExecuteAsync();
+
+            using IServiceScope scope = _fixture.Services.CreateScope();
+            ISchemaService schemaService = scope.ServiceProvider.GetRequiredService<ISchemaService>();
+            HybridCache cache = scope.ServiceProvider.GetRequiredService<HybridCache>();
+            LibDbOptions options = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LibDbOptions>>().Value;
+
+            string instanceHash = options.ConnectionStringNames.Count > 0 ? options.ConnectionStringNames[0] : "Default";
+            string cacheKey = $"Sch:v2:{instanceHash}:SP:{spName}";
+
+            TvpSchema wrongPayload = new()
+            {
+                Name = spName,
+                VersionToken = 1,
+                LastCheckedAt = DateTime.UtcNow,
+                Columns = []
+            };
+
+            await cache.SetAsync(cacheKey, wrongPayload, cancellationToken: CancellationToken.None);
+
+            SpSchema schema = await schemaService.GetSpSchemaAsync(spName, instanceHash, CancellationToken.None);
+
+            Assert.Equal(spName, schema.Name);
+            Assert.NotNull(schema.Parameters);
+        }
+        finally
+        {
+            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {spName}").ExecuteAsync();
         }
     }
 }

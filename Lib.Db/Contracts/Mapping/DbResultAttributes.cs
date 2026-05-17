@@ -52,6 +52,8 @@ public interface IMapableResult<T>
     /// <para>
     /// 이 메서드는 개발자가 직접 구현하지 않으며,
     /// Source Generator에 의해 자동으로 생성됩니다.
+    /// 생성기는 런타임 진단 래퍼 호환을 위해 <see cref="System.Data.Common.DbDataReader"/>
+    /// overload도 함께 생성합니다.
     /// </para>
     /// </summary>
     /// <param name="reader">SQL 결과를 제공하는 <see cref="SqlDataReader"/> 인스턴스</param>

@@ -17,10 +17,11 @@ namespace Lib.Db.Diagnostics;
 public static class LibDbTelemetry
 {
     #region Core Sources
+    /// <summary>Lib.Db 텔레메트리 소스 이름입니다.</summary>
     public const string SourceName = "Lib.Db";
 
     /// <summary>Lib.Db 라이브러리 버전입니다.</summary>
-    public const string Version = "2.2.0";
+    public const string Version = "2.2.1";
 
     /// <summary>
     /// Lib.Db 전용 ActivitySource입니다. 추적(Tracing) 데이터 생성에 사용됩니다.

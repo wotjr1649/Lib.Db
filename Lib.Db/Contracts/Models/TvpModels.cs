@@ -79,16 +79,47 @@ public record TvpAccessors
     private int _isValidated;
 
     /// <summary>
+    /// 마지막으로 검증된 DB 인스턴스/TVP 스키마 지문입니다.
+    /// </summary>
+    private string? _validatedIdentity;
+
+    /// <summary>
     /// TVP 스키마 검증 완료 여부입니다.
     /// <para>
-    /// - <c>true</c>로 설정되면 이후 동일 인스턴스에 대한 검증 과정을 생략할 수 있습니다.<br/>
+    /// - 내부 검증기는 동일 DB 인스턴스/TVP 스키마 지문과 일치할 때만 검증 과정을 생략합니다.<br/>
+    /// - 외부에서 <c>true</c>로 설정해도 스키마 지문은 생성되지 않으므로 내부 생략 조건을 직접 만족시키지는 않습니다.<br/>
     /// - <see cref="Volatile"/>을 사용하므로 다중 스레드에서도 일관성을 보장합니다.
     /// </para>
     /// </summary>
     public bool IsValidated
     {
         get => Volatile.Read(ref _isValidated) != 0;
-        set => Volatile.Write(ref _isValidated, value ? 1 : 0);
+        set
+        {
+            if (!value)
+                Volatile.Write(ref _validatedIdentity, null);
+
+            Volatile.Write(ref _isValidated, value ? 1 : 0);
+        }
+    }
+
+    /// <summary>
+    /// 지정된 스키마 지문에 대해 검증이 완료되었는지 확인합니다.
+    /// </summary>
+    internal bool IsValidatedFor(string validationIdentity)
+        => Volatile.Read(ref _isValidated) != 0
+           && string.Equals(
+               Volatile.Read(ref _validatedIdentity),
+               validationIdentity,
+               StringComparison.Ordinal);
+
+    /// <summary>
+    /// 지정된 스키마 지문에 대한 검증 완료 상태를 기록합니다.
+    /// </summary>
+    internal void MarkValidated(string validationIdentity)
+    {
+        Volatile.Write(ref _validatedIdentity, validationIdentity);
+        Volatile.Write(ref _isValidated, 1);
     }
 
     #endregion
@@ -320,7 +351,7 @@ public sealed record TvpAccessors<T> : TvpAccessors
     /// [AOT/SG 성능 최적화] 컬럼 버퍼에 값을 직접 주입하는 고속 델리게이트입니다. (선택)
     /// <para>
     /// 시그니처: <c>(T item, object[] buffers)</c><br/>
-    /// 내부적으로 <paramref name="buffers"/>의 각 원소를 <see cref="ITvpColumn{TValue}"/>로 캐스팅하여
+    /// 내부적으로 <c>buffers</c> 배열의 각 원소를 <see cref="ITvpColumn{TValue}"/>로 캐스팅하여
     /// 컬럼별 버퍼에 값을 추가(Add)하는 방식으로 동작할 수 있습니다.
     /// </para>
     /// </summary>

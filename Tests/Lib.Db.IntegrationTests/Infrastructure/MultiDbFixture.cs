@@ -18,6 +18,9 @@ public sealed class MultiDbFixture : IAsyncLifetime
     /// <summary>DI 서비스 프로바이더</summary>
     public IServiceProvider Services { get; private set; } = null!;
 
+    /// <summary>테스트 구성</summary>
+    public IConfiguration Configuration { get; private set; } = null!;
+
     /// <summary>LIBDB_VERIFICATION_TEST 인스턴스 접근</summary>
     public IProcedureStage Verification => Session.Use("Verification");
 
@@ -26,25 +29,33 @@ public sealed class MultiDbFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        IConfiguration configuration = new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json")
-            .Build();
+        Configuration = TestConnectionStrings.CreateConfiguration();
+        _ = TestConnectionStrings.Require(Configuration, TestConnectionStrings.Verification);
+        _ = TestConnectionStrings.Require(Configuration, TestConnectionStrings.Sorter);
 
         ServiceCollection services = new();
-        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton<IConfiguration>(Configuration);
         services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
-        services.AddLibDb(configuration);
+        services.AddLibDb(Configuration);
 
         Services = services.BuildServiceProvider();
         Session = Services.GetRequiredService<IDbSession>();
 
+        TestConnectionStrings.RequireSafeSchemaInitialization(Configuration, TestConnectionStrings.Verification);
+        TestConnectionStrings.RequireSafeSchemaInitialization(Configuration, TestConnectionStrings.Sorter);
+
         // 기존 스키마 + [test] 스키마 + 추가 SP 생성 (Verification DB 전용)
         await SchemaInitializer.EnsureAllSchemasAsync(Session.Use("Verification")).ConfigureAwait(false);
+
+        // Sorter 별칭용 조회 테이블 + 로그/흐름 SP 생성
+        await SchemaInitializer.EnsureSorterSchemaAsync(Session.Use("Sorter")).ConfigureAwait(false);
 
         // 기본 시드 데이터 (Alice, Bob, Charlie + Products 3개)
         await SchemaInitializer.SeedBaseDataAsync(Session.Use("Verification")).ConfigureAwait(false);
     }
+
+    public string GetConnectionString(string name)
+        => TestConnectionStrings.Require(Configuration, name);
 
     public async ValueTask DisposeAsync()
     {

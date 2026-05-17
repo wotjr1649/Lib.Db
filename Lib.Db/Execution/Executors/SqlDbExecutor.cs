@@ -17,7 +17,6 @@ using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
 using Lib.Db.Core;
 using Lib.Db.Diagnostics;
-using Lib.Db.Execution.Binding;
 using Lib.Db.Execution.Executors;
 
 namespace Lib.Db.Execution;
@@ -50,6 +49,8 @@ internal sealed partial class SqlDbExecutor(
     private const string ActivityNameQuery = "DB Query";
     private const string ActivityNameProcedure = "DB Procedure";
     private const string ActivityNameCommand = "DB Command";
+    private const string RedactedCommandText = "[redacted]";
+    private const string ActivityErrorDescription = "db.execution.failed";
     // [MARS Validation] 연결 문자열별 MARS 활성화 여부 캐시
     // 앱당 연결 문자열 종류는 통상 1~5개이므로 크기 상한/Clear 불필요
     // → Count >= N 체크 + Clear() 조합은 멀티스레드 환경에서 비원자적이었음(제거)
@@ -142,6 +143,11 @@ internal sealed partial class SqlDbExecutor(
         DbExecutionOptions? options = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        EnsureRawSqlAllowed(commandText, commandType);
+
+        string diagnosticCommandText = GetDiagnosticCommandText(commandText, commandType);
+        string diagnosticInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash.Value) ?? instanceHash.Value;
+
         // ---------------------------------------------------------------------
         // [Observability] Start Activity & Metric
         // ---------------------------------------------------------------------
@@ -152,16 +158,17 @@ internal sealed partial class SqlDbExecutor(
         if (activity != null)
         {
             activity.SetTag("db.system", "mssql");
-            activity.SetTag("db.operation", commandText);
+            activity.SetTag("db.operation", commandType.ToString());
+            activity.SetTag("db.statement", diagnosticCommandText);
             activity.SetTag("db.command_type", commandType.ToString());
-            activity.SetTag("libdb.instance", instanceHash.Value);
+            activity.SetTag("libdb.instance", diagnosticInstance);
         }
 
         if (_options.EnableObservability)
         {
             LibDbTelemetry.DbRequestsTotal.Add(1,
                 new KeyValuePair<string, object?>("operation", "ExecuteAsync"),
-                new KeyValuePair<string, object?>("instance", instanceHash.Value));
+                new KeyValuePair<string, object?>("instance", diagnosticInstance));
         }
 
         long startTime = _options.EnableObservability ? Stopwatch.GetTimestamp() : 0;
@@ -182,9 +189,7 @@ internal sealed partial class SqlDbExecutor(
                 using SqlCommand cmd = conn.CreateCommand();
                 cmd.CommandText = commandText;
                 cmd.CommandType = commandType;
-
-                if (options?.CommandTimeout != null)
-                    cmd.CommandTimeout = options.Value.CommandTimeout.Value;
+                cmd.CommandTimeout = options?.CommandTimeout ?? _options.DefaultCommandTimeoutSeconds;
 
                 _strategy.EnlistTransaction(cmd);
 
@@ -388,10 +393,12 @@ internal sealed partial class SqlDbExecutor(
         DbExecutionOptions options,
         CancellationToken ct)
     {
+        EnsureRawSqlAllowed(commandText, commandType);
+
         // [Dry-Run] 설계 – EmptyGridReader 반환 정책 유지
         if (_options.EnableDryRun)
         {
-            LogDryRunStream(_logger, commandText);
+            LogDryRunStream(_logger, GetDiagnosticCommandText(commandText, commandType));
             return new EmptyGridReader();
         }
 
@@ -402,10 +409,11 @@ internal sealed partial class SqlDbExecutor(
 
         using (Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("DB QueryMultiple"))
         {
+            string diagnosticCommandText = GetDiagnosticCommandText(commandText, commandType);
             activity?.SetTag("db.system", "mssql");
             activity?.SetTag("db.operation", commandType.ToString());
-            activity?.SetTag("db.statement", commandText);
-            activity?.SetTag("db.instance", instanceHash);
+            activity?.SetTag("db.statement", diagnosticCommandText);
+            activity?.SetTag("db.instance", DbDiagnosticRedactor.RedactInstanceId(instanceHash));
 
             try
             {
@@ -416,7 +424,7 @@ internal sealed partial class SqlDbExecutor(
                         SqlCommand cmd = new SqlCommand(commandText, conn)
                         {
                             CommandType = commandType,
-                            CommandTimeout = _options.DefaultCommandTimeoutSeconds
+                            CommandTimeout = options.CommandTimeout ?? _options.DefaultCommandTimeoutSeconds
                         };
 
                         _strategy.EnlistTransaction(cmd);
@@ -433,7 +441,7 @@ internal sealed partial class SqlDbExecutor(
 
                         if (ctx.SuppressExecution)
                         {
-                            LogMockingExecution(_logger, commandText);
+                            LogMockingExecution(_logger, diagnosticCommandText);
                             return (ctx.MockResult as SqlDataReader)!;
                         }
 
@@ -447,11 +455,11 @@ internal sealed partial class SqlDbExecutor(
             }
             catch (Exception ex)
             {
-                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.SetStatus(ActivityStatusCode.Error, ActivityErrorDescription);
                 _logger.LogWarning(ex,
-                    "다중 결과 쿼리 실행 중 오류가 발생했습니다. (SQL: {CommandText})",
-                    commandText);
-                throw LibDbExceptionFactory.CreateCommandExecutionFailed(commandText, ex);
+                    "다중 결과 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText})",
+                    diagnosticCommandText);
+                throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
             }
         }
 
@@ -461,10 +469,10 @@ internal sealed partial class SqlDbExecutor(
         TimeSpan elapsed = Stopwatch.GetElapsedTime(startTicks);
 
         DbRequestInfo info = new DbRequestInfo(
-            InstanceId: instanceHash,
+            InstanceId: DbDiagnosticRedactor.RedactInstanceId(instanceHash),
             DbSystem: "mssql",
             Operation: commandType.ToString(),
-            Target: commandText);
+            CommandKind: commandType.ToString());
 
         DbMetrics.TrackDuration(elapsed, info);
 
@@ -505,7 +513,7 @@ internal sealed partial class SqlDbExecutor(
     /// 9. Interceptor Executed: 실행 후 인터셉터 체인 호출 (성능 로깅, 결과 변환 등)<br/><br/>
     /// <b>[예외 처리 전략]</b><br/>
     /// - SqlException은 Polly Resilience Pipeline이 처리할 수 있도록 그대로 전파합니다.<br/>
-    /// - 기타 예외는 LibDbExceptionFactory를 통해 컨텍스트 정보(CommandText, InstanceId)를 포함한 예외로 래핑합니다.<br/>
+    /// - 기타 예외는 LibDbExceptionFactory를 통해 원문 SQL을 제외한 예외로 래핑합니다.<br/>
     /// - Activity는 예외 발생 시 Error 상태로 설정되어 분산 추적 시스템에 전달됩니다.
     /// </para>
     /// </summary>
@@ -514,12 +522,16 @@ internal sealed partial class SqlDbExecutor(
         DbExecutionOptions execOptions,
         Func<SqlCommand, CancellationToken, Task<TResult>> operation)
     {
+        EnsureRawSqlAllowed(request.CommandText, request.CommandType);
+
         // [Dry-Run] Text 기반 쓰기 명령은 실제 실행을 건너뜁니다.
-        if (_options.EnableDryRun && IsWriteOperation(request.CommandText))
+        if (_options.EnableDryRun && IsWriteOperation(request.CommandText, request.CommandType))
         {
-            LogDryRunExecution(_logger, request.CommandText);
+            LogDryRunExecution(_logger, GetDiagnosticCommandText(request.CommandText, request.CommandType));
             return default!;
         }
+
+        string diagnosticCommandText = GetDiagnosticCommandText(request.CommandText, request.CommandType);
 
         // [사용자 인터셉터] Executing 단계 — 인터셉터가 0개면 건너뜀
         DbInterceptionContext? userCtx = null;
@@ -528,8 +540,9 @@ internal sealed partial class SqlDbExecutor(
             userCtx = new DbInterceptionContext
             {
                 CommandText = request.CommandText,
+                DiagnosticCommandText = diagnosticCommandText,
                 CommandType = request.CommandType,
-                InstanceName = request.InstanceHash
+                InstanceName = DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash) ?? request.InstanceHash
             };
 
             foreach (IDbInterceptor interceptor in _userInterceptors)
@@ -542,7 +555,7 @@ internal sealed partial class SqlDbExecutor(
 
                     if (interceptResult == DbInterceptionResult.Suppress)
                     {
-                        LogMockingExecution(_logger, request.CommandText);
+                        LogMockingExecution(_logger, diagnosticCommandText);
                         return default!;
                     }
                 }
@@ -550,8 +563,8 @@ internal sealed partial class SqlDbExecutor(
                 {
                     // 인터셉터 예외는 로깅 후 무시 (실행 파이프라인 차단하지 않음)
                     _logger.LogWarning(interceptEx,
-                        "[UserInterceptor] OnExecutingAsync 실행 중 오류가 발생했습니다. (SQL: {CommandText})",
-                        request.CommandText);
+                        "[UserInterceptor] OnExecutingAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
+                        diagnosticCommandText);
                 }
             }
         }
@@ -567,8 +580,8 @@ internal sealed partial class SqlDbExecutor(
         using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity(activityName);
         activity?.SetTag("db.system", "mssql");
         activity?.SetTag("db.operation", request.CommandType.ToString());
-        activity?.SetTag("db.statement", request.CommandText);
-        activity?.SetTag("db.instance", request.InstanceHash);
+        activity?.SetTag("db.statement", diagnosticCommandText);
+        activity?.SetTag("db.instance", DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash));
 
         long pipelineStartTicks = Stopwatch.GetTimestamp();
 
@@ -594,7 +607,7 @@ internal sealed partial class SqlDbExecutor(
 
                 if (ctx.SuppressExecution)
                 {
-                    LogMockingExecution(_logger, request.CommandText);
+                    LogMockingExecution(_logger, diagnosticCommandText);
 
                     if (ctx.MockResult is TResult casted)
                         return casted;
@@ -611,10 +624,10 @@ internal sealed partial class SqlDbExecutor(
                 TimeSpan elapsed = Stopwatch.GetElapsedTime(startTicks);
 
                 DbRequestInfo info = new DbRequestInfo(
-                    InstanceId: request.InstanceHash,
+                    InstanceId: DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash),
                     DbSystem: "mssql",
                     Operation: request.CommandType.ToString(),
-                    Target: request.CommandText
+                    CommandKind: request.CommandType.ToString()
                 );
 
                 // 전역 메트릭 – 단일 명령 실행 시간 기록
@@ -647,8 +660,8 @@ internal sealed partial class SqlDbExecutor(
                     catch (Exception interceptEx)
                     {
                         _logger.LogWarning(interceptEx,
-                            "[UserInterceptor] OnExecutedAsync 실행 중 오류가 발생했습니다. (SQL: {CommandText})",
-                            request.CommandText);
+                            "[UserInterceptor] OnExecutedAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
+                            diagnosticCommandText);
                     }
                 }
             }
@@ -657,7 +670,7 @@ internal sealed partial class SqlDbExecutor(
         }
         catch (Exception ex)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetStatus(ActivityStatusCode.Error, ActivityErrorDescription);
 
             // [사용자 인터셉터] Error 단계
             if (_userInterceptors.Length > 0 && userCtx is not null)
@@ -676,24 +689,24 @@ internal sealed partial class SqlDbExecutor(
                     catch (Exception interceptEx)
                     {
                         _logger.LogWarning(interceptEx,
-                            "[UserInterceptor] OnErrorAsync 실행 중 오류가 발생했습니다. (SQL: {CommandText})",
-                            request.CommandText);
+                            "[UserInterceptor] OnErrorAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
+                            diagnosticCommandText);
                     }
                 }
             }
 
             _logger.LogWarning(ex,
                 "[Executor] DB 파이프라인 실행 중 오류가 발생했습니다. " +
-                "(SQL: {CommandText}, Instance: {InstanceId}, CommandType: {CommandType})",
-                request.CommandText,
-                request.InstanceHash,
+                "(Command: {CommandText}, Instance: {InstanceId}, CommandType: {CommandType})",
+                diagnosticCommandText,
+                DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash),
                 request.CommandType);
 
             // [Modify] SqlException은 포장하지 않고 그대로 전파해야 Polly/Test가 정상 동작함
             if (ex is SqlException)
                 throw;
 
-            throw LibDbExceptionFactory.CreateCommandExecutionFailed(request.CommandText, ex);
+            throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
         }
     }
 
@@ -707,6 +720,12 @@ internal sealed partial class SqlDbExecutor(
         DbExecutionOptions execOptions,
         CancellationToken ct)
     {
+        using var scope = DbExecutionContextScope.Enter(
+            instanceHash,
+            cmd.CommandText,
+            cmd.CommandType,
+            _strategy.IsTransactional);
+
         SpSchema? schema = null;
 
         if (cmd.CommandType == CommandType.StoredProcedure)
@@ -730,8 +749,8 @@ internal sealed partial class SqlDbExecutor(
                         throw;
 
                     _logger.LogWarning(ex,
-                        "[Schema] SP '{SpName}' 스키마 조회 실패. 스키마 없이 파라미터 매핑을 진행합니다.",
-                        cmd.CommandText);
+                        "[Schema] SP 스키마 조회 실패. 스키마 없이 파라미터 매핑을 진행합니다. (Command: {CommandText})",
+                        GetDiagnosticCommandText(cmd.CommandText, cmd.CommandType));
                 }
             }
         }
@@ -758,10 +777,12 @@ internal sealed partial class SqlDbExecutor(
         DbExecutionOptions options,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        EnsureRawSqlAllowed(commandText, commandType);
+
         // [Dry-Run] Text 기반 쓰기 스트리밍은 실행을 건너뜁니다.
-        if (_options.EnableDryRun && IsWriteOperation(commandText))
+        if (_options.EnableDryRun && IsWriteOperation(commandText, commandType))
         {
-            LogDryRunStream(_logger, commandText);
+            LogDryRunStream(_logger, GetDiagnosticCommandText(commandText, commandType));
             yield break;
         }
 
@@ -772,10 +793,11 @@ internal sealed partial class SqlDbExecutor(
 
         using (Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("DB QueryStream"))
         {
+            string diagnosticCommandText = GetDiagnosticCommandText(commandText, commandType);
             activity?.SetTag("db.system", "mssql");
             activity?.SetTag("db.operation", commandType.ToString());
-            activity?.SetTag("db.statement", commandText);
-            activity?.SetTag("db.instance", instanceHash);
+            activity?.SetTag("db.statement", diagnosticCommandText);
+            activity?.SetTag("db.instance", DbDiagnosticRedactor.RedactInstanceId(instanceHash));
 
             try
             {
@@ -786,7 +808,7 @@ internal sealed partial class SqlDbExecutor(
                         SqlCommand cmd = new SqlCommand(commandText, conn)
                         {
                             CommandType = commandType,
-                            CommandTimeout = _options.DefaultCommandTimeoutSeconds
+                            CommandTimeout = options.CommandTimeout ?? _options.DefaultCommandTimeoutSeconds
                         };
 
                         _strategy.EnlistTransaction(cmd);
@@ -799,7 +821,7 @@ internal sealed partial class SqlDbExecutor(
 
                         if (ctx.SuppressExecution)
                         {
-                            LogMockingExecution(_logger, commandText);
+                            LogMockingExecution(_logger, diagnosticCommandText);
                             return default(SqlDataReader)!;
                         }
 
@@ -817,11 +839,11 @@ internal sealed partial class SqlDbExecutor(
             }
             catch (Exception ex)
             {
-                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.SetStatus(ActivityStatusCode.Error, ActivityErrorDescription);
                 _logger.LogWarning(ex,
-                    "Streaming 쿼리 실행 중 오류가 발생했습니다. (SQL: {CommandText})",
-                    commandText);
-                throw LibDbExceptionFactory.CreateCommandExecutionFailed(commandText, ex);
+                    "Streaming 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText})",
+                    diagnosticCommandText);
+                throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
             }
         }
 
@@ -831,10 +853,10 @@ internal sealed partial class SqlDbExecutor(
         TimeSpan elapsed = Stopwatch.GetElapsedTime(startTicks);
 
         DbRequestInfo info = new DbRequestInfo(
-            InstanceId: instanceHash,
+            InstanceId: DbDiagnosticRedactor.RedactInstanceId(instanceHash),
             DbSystem: "mssql",
             Operation: commandType.ToString(),
-            Target: commandText);
+            CommandKind: commandType.ToString());
 
         DbMetrics.TrackDuration(elapsed, info);
 
@@ -869,14 +891,228 @@ internal sealed partial class SqlDbExecutor(
     }
 
     /// <summary>
-    /// 텍스트 기반 쓰기 명령(INSERT/UPDATE/DELETE/MERGE) 여부를 판별합니다.
+    /// 텍스트 기반 쓰기/권한/운영 명령 여부를 보수적으로 판별합니다.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsWriteOperation(string cmdText)
-        => cmdText.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase)
-        || cmdText.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase)
-        || cmdText.StartsWith("DELETE", StringComparison.OrdinalIgnoreCase)
-        || cmdText.StartsWith("MERGE", StringComparison.OrdinalIgnoreCase);
+    private static bool IsWriteOperation(string cmdText, CommandType commandType)
+    {
+        if (commandType != CommandType.Text)
+            return false;
+
+        return ContainsBlockedRawSqlToken(cmdText.AsSpan());
+    }
+
+    private void EnsureRawSqlAllowed(string commandText, CommandType commandType)
+    {
+        if (commandType != CommandType.Text || _options.RawSqlPolicy == RawSqlPolicy.Allow)
+            return;
+
+        if (_options.RawSqlPolicy == RawSqlPolicy.DenyAllText)
+        {
+            throw new InvalidOperationException(
+                "Raw SQL text execution is disabled by LibDbOptions.RawSqlPolicy. " +
+                "Use Procedure(...) for stored procedures or change RawSqlPolicy explicitly.");
+        }
+
+        if (_options.RawSqlPolicy == RawSqlPolicy.DenyWriteText &&
+            IsWriteOperation(commandText, commandType))
+        {
+            throw new InvalidOperationException(
+                "Mutating Raw SQL text execution is disabled by LibDbOptions.RawSqlPolicy. " +
+                "Use stored procedures or parameterized read-only SQL.");
+        }
+    }
+
+    private static bool ContainsBlockedRawSqlToken(ReadOnlySpan<char> sql)
+    {
+        ReadOnlySpan<char> span = sql;
+        int position = 0;
+
+        while (position < span.Length)
+        {
+            char ch = span[position];
+
+            if (char.IsWhiteSpace(ch) || ch == ';')
+            {
+                position++;
+                continue;
+            }
+
+            ReadOnlySpan<char> remaining = span[position..];
+            if (remaining.StartsWith("--", StringComparison.Ordinal))
+            {
+                int lineBreak = remaining.IndexOfAny('\r', '\n');
+                if (lineBreak < 0)
+                    return false;
+
+                position += lineBreak + 1;
+                continue;
+            }
+
+            if (remaining.StartsWith("/*", StringComparison.Ordinal))
+            {
+                int commentLength = GetBlockCommentLength(remaining);
+                if (commentLength < 0)
+                    return true;
+
+                position += commentLength;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                position = SkipSingleQuotedLiteral(span, position + 1);
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                position = SkipBracketIdentifier(span, position + 1);
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                position = SkipDoubleQuotedIdentifierOrLiteral(span, position + 1);
+                continue;
+            }
+
+            if (char.IsLetter(ch))
+            {
+                int tokenStart = position;
+                position++;
+                while (position < span.Length &&
+                       (char.IsLetterOrDigit(span[position]) || span[position] == '_'))
+                {
+                    position++;
+                }
+
+                if (IsBlockedRawSqlToken(span[tokenStart..position]))
+                    return true;
+
+                continue;
+            }
+
+            position++;
+        }
+
+        return false;
+    }
+
+    private static bool IsBlockedRawSqlToken(ReadOnlySpan<char> token)
+    {
+        return token.Equals("INSERT", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DELETE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("MERGE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("TRUNCATE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("CREATE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("ALTER", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DROP", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("EXEC", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("EXECUTE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("GRANT", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("REVOKE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DENY", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("BACKUP", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("RESTORE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DBCC", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("BULK", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("USE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("INTO", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int SkipSingleQuotedLiteral(ReadOnlySpan<char> span, int position)
+    {
+        while (position < span.Length)
+        {
+            if (span[position] == '\'')
+            {
+                if (position + 1 < span.Length && span[position + 1] == '\'')
+                {
+                    position += 2;
+                    continue;
+                }
+
+                return position + 1;
+            }
+
+            position++;
+        }
+
+        return span.Length;
+    }
+
+    private static int SkipBracketIdentifier(ReadOnlySpan<char> span, int position)
+    {
+        while (position < span.Length)
+        {
+            if (span[position] == ']')
+            {
+                if (position + 1 < span.Length && span[position + 1] == ']')
+                {
+                    position += 2;
+                    continue;
+                }
+
+                return position + 1;
+            }
+
+            position++;
+        }
+
+        return span.Length;
+    }
+
+    private static int SkipDoubleQuotedIdentifierOrLiteral(ReadOnlySpan<char> span, int position)
+    {
+        while (position < span.Length)
+        {
+            if (span[position] == '"')
+            {
+                if (position + 1 < span.Length && span[position + 1] == '"')
+                {
+                    position += 2;
+                    continue;
+                }
+
+                return position + 1;
+            }
+
+            position++;
+        }
+
+        return span.Length;
+    }
+
+    private static int GetBlockCommentLength(ReadOnlySpan<char> span)
+    {
+        int depth = 1;
+        int position = 2;
+
+        while (position < span.Length - 1)
+        {
+            if (span[position] == '/' && span[position + 1] == '*')
+            {
+                depth++;
+                position += 2;
+                continue;
+            }
+
+            if (span[position] == '*' && span[position + 1] == '/')
+            {
+                depth--;
+                position += 2;
+                if (depth == 0)
+                    return position;
+
+                continue;
+            }
+
+            position++;
+        }
+
+        return -1;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long TicksToMicroseconds(long ticks)
@@ -886,31 +1122,19 @@ internal sealed partial class SqlDbExecutor(
 
     #region 유틸리티 - 문자열 처리 및 로깅
 
-    private static string Quote(string identifier)
-    {
-        if (string.IsNullOrWhiteSpace(identifier))
-            return identifier;
+    private string GetDiagnosticCommandText(string commandText, CommandType commandType)
+        => _options.IncludeParametersInTrace
+            ? commandText
+            : GetDiagnosticCommandKind(commandType);
 
-        // 이미 전체가 감싸져 있는 경우 ([dbo].[Table] 형태는 여기서 걸러지지 않음)
-        // 단순하게 [ ] 로만 시작/끝나는 경우는 내부 점검 필요.
-        // 여기서는 "Schema.Table" 처리를 위해 Split 로직을 우선합니다.
-
-        string[] parts = identifier.Split('.');
-        if (parts.Length > 1)
+    private static string GetDiagnosticCommandKind(CommandType commandType)
+        => commandType switch
         {
-            return string.Join(".", parts.Select(p => QuotePart(p)));
-        }
-
-        return QuotePart(identifier);
-
-        static string QuotePart(string part)
-        {
-            // [Optimization] StringPreprocessor.RemoveBrackets 사용하여
-            // 내부 대괄호도 모두 제거되므로 Injection 및 Malformed Identifier 방지
-            string clean = StringPreprocessor.RemoveBrackets(part);
-            return $"[{clean}]";
-        }
-    }
+            CommandType.Text => "Text",
+            CommandType.StoredProcedure => "StoredProcedure",
+            CommandType.TableDirect => "TableDirect",
+            _ => RedactedCommandText
+        };
 
     /// <summary>
     /// MarsPolicy에 따라 MARS 활성화 여부를 검증합니다.

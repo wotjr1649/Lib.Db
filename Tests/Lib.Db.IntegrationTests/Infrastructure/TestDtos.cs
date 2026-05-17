@@ -299,6 +299,23 @@ public partial class DbResultUser
 }
 
 /// <summary>
+/// v2.2.1 결과 매핑 convention 회귀 검증용 positional record.
+/// </summary>
+public sealed record V221SuspendRow(int CellNo, string SlotName);
+
+/// <summary>
+/// v2.2.1 [DbResult] + MonitoredSqlDataReader 회귀 검증용 DTO.
+/// </summary>
+[DbResult]
+public partial class V221GeneratedVerificationRow
+{
+    public int UserId { get; set; }
+    public string UserName { get; set; } = "";
+    public string Email { get; set; } = "";
+    public int? Age { get; set; }
+}
+
+/// <summary>
 /// AdvancedQueryTests에서 사용
 /// </summary>
 public sealed class ResumableLogDto

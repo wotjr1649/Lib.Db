@@ -10,6 +10,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.IO.Hashing;
 using System.IO.MemoryMappedFiles;
+using Lib.Db.Diagnostics;
 using Microsoft.Extensions.Options;
 
 namespace Lib.Db.Caching;
@@ -36,6 +37,10 @@ public sealed class GlobalCacheEpoch : IDisposable
     private readonly MemoryMappedViewAccessor _accessor;
     private readonly Mutex _mutex;
 
+    /// <summary>
+    /// 공유 메모리 캐시 옵션을 사용하여 글로벌 Epoch 저장소를 초기화합니다.
+    /// </summary>
+    /// <param name="options">공유 메모리 캐시 옵션</param>
     public GlobalCacheEpoch(IOptions<SharedMemoryCacheOptions> options)
     {
         string basePath = CacheInternalHelpers.ResolveBasePath(options.Value);
@@ -57,6 +62,10 @@ public sealed class GlobalCacheEpoch : IDisposable
         _mutex = new Mutex(false, $"{mutexPrefix}EpochMutex");
     }
 
+    /// <summary>
+    /// 지정된 기본 경로에 글로벌 Epoch 저장소를 초기화합니다.
+    /// </summary>
+    /// <param name="basePath">Epoch 파일 기본 경로</param>
     public GlobalCacheEpoch(string basePath)
         : this(Options.Create(new SharedMemoryCacheOptions { BasePath = basePath })) { }
 
@@ -90,6 +99,7 @@ public sealed class GlobalCacheEpoch : IDisposable
         }
     }
 
+    /// <inheritdoc />
     public void Dispose()
     {
         _accessor.Dispose();
@@ -119,19 +129,15 @@ public sealed class GlobalCacheEpoch : IDisposable
 /// <item><description><strong>Striped Mutex</strong>: 128개의 Mutex Stripe를 사용하여 인스턴스별 경합을 최소화합니다.</description></item>
 /// </list>
 /// </remarks>
-public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : IDisposable
+public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool enabled = true) : IDisposable
 {
-    private readonly string _basePath = basePath ?? throw new ArgumentNullException(nameof(basePath));
+    private readonly bool _enabled = enabled;
+    private readonly string _basePath = enabled ? EnsureBasePath(basePath) : string.Empty;
     // 128개 뮤텍스의 지연 초기화 (Lazy Initialization)
     private readonly Lazy<Mutex[]> _mutexStripes = new(() =>
         Enumerable.Range(0, 128)
             .Select(i => CreateFallbackMutex($"Lib.Db.Epoch.Stripe{i}", logger))
             .ToArray());
-
-    static EpochStore()
-    {
-        // 생성자 진입 시 디렉토리 생성
-    }
 
     // 지연 뮤텍스 생성 로직 (3단계 폴백 전략)
     private static Mutex CreateFallbackMutex(string name, ILogger logger)
@@ -152,11 +158,28 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
         }
     }
 
+    private static string EnsureBasePath(string basePath)
+    {
+        ArgumentNullException.ThrowIfNull(basePath);
+        Directory.CreateDirectory(basePath);
+        return basePath;
+    }
+
+    /// <summary>
+    /// 파일 시스템을 사용하지 않는 비활성 Epoch 저장소를 생성합니다.
+    /// </summary>
+    /// <param name="logger">로그 기록기</param>
+    /// <returns>비활성 Epoch 저장소</returns>
+    public static EpochStore Disabled(ILogger<EpochStore> logger) => new(string.Empty, logger, enabled: false);
+
     /// <summary>
     /// 지정된 인스턴스의 Epoch 값을 원자적으로 1 증가시킵니다.
     /// </summary>
     public long IncrementEpoch(string instanceHash)
     {
+        if (!_enabled)
+            return 0;
+
         if (string.IsNullOrWhiteSpace(instanceHash))
             throw new ArgumentException("해시값은 필수입니다.", nameof(instanceHash));
 
@@ -164,6 +187,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
         string filePath = GetEpochFilePath(instanceHash);
         string tempPath = filePath + ".tmp";
         Mutex mutex = GetMutex(instanceHash);
+        string diagnosticInstance = RedactInstanceForDiagnostics(instanceHash);
         bool acquired = false;
 
         try
@@ -175,11 +199,11 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
             catch (AbandonedMutexException)
             {
                 acquired = true;
-                logger.LogWarning("[Epoch] Abandoned Mutex Recovered: {Hash}", instanceHash);
+                logger.LogWarning("[Epoch] Abandoned Mutex Recovered: {Hash}", diagnosticInstance);
             }
 
             if (!acquired)
-                throw new TimeoutException($"Epoch 잠금 타임아웃 발생: {instanceHash}");
+                throw new TimeoutException($"Epoch 잠금 타임아웃 발생: {diagnosticInstance}");
 
             long current = ReadEpochSafe(filePath);
             long newEpoch = current + 1;
@@ -211,6 +235,9 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
     /// </summary>
     public long GetEpoch(string instanceHash)
     {
+        if (!_enabled)
+            return 0;
+
         if (string.IsNullOrWhiteSpace(instanceHash))
             throw new ArgumentException("해시값은 필수입니다.", nameof(instanceHash));
         return ReadEpochDirect(instanceHash);
@@ -271,6 +298,9 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
         return ReadEpochSafe(filePath);
     }
 
+    internal static string RedactInstanceForDiagnostics(string instanceHash)
+        => DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
+
     private string GetEpochFilePath(string instanceHash)
     {
         byte[] hashBytes = XxHash128.Hash(Encoding.UTF8.GetBytes(instanceHash));
@@ -278,6 +308,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger) : ID
         return Path.GetFullPath(Path.Combine(_basePath, $"epoch_{hexHash}.bin"));
     }
 
+    /// <inheritdoc />
     public void Dispose()
     {
         if (_mutexStripes.IsValueCreated)

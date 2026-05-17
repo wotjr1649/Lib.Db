@@ -348,7 +348,7 @@ internal sealed class DbSession(
 
     #endregion
 
-    #region Zero-Allocation SQL 문자열 보간
+    #region SQL 문자열 보간 지원
 
     /// <summary>
     /// 내부용 StringBuilder를 가져옵니다.
@@ -557,6 +557,14 @@ internal sealed class DbTransactionScopeAdapter : IDbTransactionScope
     public IParameterStage Sql(FormattableString sql)
     {
         return CreateBoundBuilder().Sql(sql);
+    }
+
+    /// <summary>
+    /// 명시적 보간 SQL API를 실행합니다.
+    /// </summary>
+    public IParameterStage SqlInterpolated(FormattableString sql)
+    {
+        return CreateBoundBuilder().SqlInterpolated(sql);
     }
 
     /// <summary>

@@ -1,6 +1,6 @@
 // ============================================================================
 // 파일: Lib.Db/Fluent/SqlInterpolatedStringHandler.cs
-// 설명: Zero-Allocation SQL 문자열 처리를 위한 InterpolatedStringHandler
+// 설명: SQL 문자열과 파라미터 구성을 돕는 InterpolatedStringHandler
 // 타겟: .NET 10 / C# 14
 // ============================================================================
 
@@ -12,22 +12,22 @@ using System.Runtime.CompilerServices;
 namespace Lib.Db.Fluent;
 
 /// <summary>
-/// Zero-Allocation SQL 문자열 처리를 위한 Interpolated String Handler입니다.
+/// 저수준 빌더 경로에서 SQL 문자열과 파라미터를 구성하는 Interpolated String Handler입니다.
 /// <para>
 /// <b>[핵심 기능]</b><br/>
-/// - ArrayPool을 활용한 Zero-Allocation 버퍼 관리<br/>
-/// - 자동 파라미터 수집 및 SQL Injection 방어<br/>
+/// - ArrayPool을 활용한 할당 절감형 버퍼 관리<br/>
+/// - 자동 파라미터 수집으로 값 기반 SQL injection 위험 완화<br/>
 /// - Span&lt;char&gt; 기반 고성능 문자열 조합
 /// </para>
 /// </summary>
 /// <example>
 /// <code>
-/// // 컴파일러가 자동으로 SqlInterpolatedStringHandler 사용
+/// // 저수준 빌더 경로에서는 컴파일러가 SqlInterpolatedStringHandler를 사용할 수 있음
 /// int userId = 123;
 /// string userName = "TestUser";
 /// 
 /// var result = db.Default
-///     .Sql($"SELECT * FROM Users WHERE Id = {userId} AND Name = {userName}")
+///     .SqlInterpolated($"SELECT * FROM Users WHERE Id = {userId} AND Name = {userName}")
 ///     .QueryAsync&lt;User&gt;();
 /// 
 /// // 생성된 SQL: "SELECT * FROM Users WHERE Id = @p0 AND Name = @p1"

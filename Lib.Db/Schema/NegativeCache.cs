@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using Lib.Db.Diagnostics;
 
 namespace Lib.Db.Schema;
 
@@ -31,7 +32,7 @@ namespace Lib.Db.Schema;
 internal static class NegativeCache
 {
     // [스레드 안전] 존재하지 않는 객체 목록 저장소
-    // Key: "DB해시:타입:객체명" 복합 키
+    // Key: "InstanceIdentity:타입:객체명" 복합 키
     // Value: 재사용 가능한 사전 생성된 예외 객체
     private static readonly ConcurrentDictionary<string, InvalidOperationException> s_missingObjects = new();
 
@@ -78,7 +79,7 @@ internal static class NegativeCache
     /// 이는 Negative Cache의 특성상(일시적인 오류 상황) 빈번한 오버플로우가 발생하지 않는다는 가정에 기반합니다.
     /// </para>
     /// </summary>
-    /// <param name="dbHash">대상 데이터베이스 인스턴스의 해시값</param>
+    /// <param name="dbHash">대상 데이터베이스 인스턴스의 식별자 또는 해시값</param>
     /// <param name="objectName">객체 이름 (예: "dbo.usp_GetUser")</param>
     /// <param name="objectType">객체 타입 (예: "StoredProcedure", "TvpType")</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -99,8 +100,9 @@ internal static class NegativeCache
 
         // [최적화] 예외 객체를 미리 생성하여 값으로 저장 (Flyweight)
         // 나중에 조회 시 새로 생성하지 않고 이 인스턴스를 즉시 던집니다.
+        string safeDbHash = DbDiagnosticRedactor.RedactInstanceId(dbHash) ?? dbHash;
         InvalidOperationException ex = new InvalidOperationException(
-            $"[Negative Cache] {objectType} '{objectName}'이(가) DB '{dbHash}'에 존재하지 않습니다. (이전에 확인됨)");
+            $"[Negative Cache] {objectType} '{objectName}'이(가) DB '{safeDbHash}'에 존재하지 않습니다. (이전에 확인됨)");
 
         s_missingObjects[key] = ex;
     }
@@ -110,10 +112,10 @@ internal static class NegativeCache
     /// <para>
     /// <b>[성능 보장]</b><br/>
     /// 이 메서드는 메모리 조회만 수행하므로 매우 빠릅니다(수 마이크로초).<br/>
-    /// 불필요한 DB 연결이나 쿼리 실행을 원천 차단하여 시스템 전체의 응답성을 보호합니다.
+    /// 불필요한 DB 연결이나 쿼리 실행을 줄여 시스템 전체의 응답성을 보호합니다.
     /// </para>
     /// </summary>
-    /// <param name="dbHash">대상 데이터베이스 인스턴스 해시</param>
+    /// <param name="dbHash">대상 데이터베이스 인스턴스 식별자 또는 해시</param>
     /// <param name="objectName">객체 이름</param>
     /// <param name="objectType">객체 타입</param>
     /// <returns>
@@ -139,9 +141,9 @@ internal static class NegativeCache
 
     /// <summary>
     /// [내부 헬퍼] 검색을 위한 복합 키 문자열을 생성합니다.
-    /// <para>형식: <c>{dbHash}:{objectType}:{objectName}</c></para>
+    /// <para>형식: <c>{InstanceIdentity}:{objectType}:{objectName}</c></para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string BuildKey(string dbHash, string objectName, string objectType)
-        => $"{dbHash}:{objectType}:{objectName}";
+        => $"{SchemaCacheIdentity.ForCache(dbHash)}:{objectType}:{objectName}";
 }

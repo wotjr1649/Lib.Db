@@ -20,6 +20,11 @@ public sealed class CacheMaintenanceService : BackgroundService
     private readonly ILogger<CacheMaintenanceService> _logger;
     private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(5); // 5분 주기
 
+    /// <summary>
+    /// 캐시 유지보수 서비스를 초기화합니다.
+    /// </summary>
+    /// <param name="serviceProvider">서비스 조회를 위한 루트 서비스 공급자</param>
+    /// <param name="logger">로그 기록기</param>
     public CacheMaintenanceService(
         IServiceProvider serviceProvider,
         ILogger<CacheMaintenanceService> logger)
@@ -28,6 +33,7 @@ public sealed class CacheMaintenanceService : BackgroundService
         _logger = logger;
     }
 
+    /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("[CacheMaintenance] 서비스 시작 (Interval: {Interval}분)", _checkInterval.TotalMinutes);

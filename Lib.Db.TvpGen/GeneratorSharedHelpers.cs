@@ -7,6 +7,8 @@
 #nullable enable
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Lib.Db.TvpGen;
 
@@ -41,20 +43,74 @@ internal static class GeneratorSharedHelpers
         return true;
     }
 
+    /// <summary>
+    /// 타입 또는 상위 타입 선언에 <c>file</c> modifier가 포함되어 생성 파일에서 접근할 수 없는지 확인합니다.
+    /// </summary>
+    internal static bool IsFileLocalType(
+        INamedTypeSymbol type,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        INamedTypeSymbol? current = type;
+        while (current is not null)
+        {
+            if (HasFileModifier(current, cancellationToken))
+            {
+                return true;
+            }
+
+            current = current.ContainingType;
+        }
+
+        return false;
+    }
+
+    private static bool HasFileModifier(
+        INamedTypeSymbol type,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        foreach (SyntaxReference syntaxReference in type.DeclaringSyntaxReferences)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (syntaxReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax declaration)
+                continue;
+
+            foreach (SyntaxToken modifier in declaration.Modifiers)
+            {
+                if (modifier.IsKind(SyntaxKind.FileKeyword))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     #endregion
 
     #region 힌트명 생성
 
     /// <summary>
     /// 소스 제너레이터 AddSource에 사용될 안전한 파일 힌트명을 생성합니다.
-    /// <para>완전 수식 이름 기반으로 생성하며, <see cref="SharedHashUtils.SanitizeIdentifier"/>로 파일명에 부적합한 문자를 치환합니다.</para>
+    /// <para>완전 수식 이름 기반으로 생성하며, sanitize 후 원본 이름의 ordinal hash를 붙여 충돌을 방지합니다.</para>
     /// </summary>
     internal static string BuildSafeHintName(INamedTypeSymbol type, string suffix)
+        => BuildSafeTypeSuffix(type) + suffix;
+
+    /// <summary>
+    /// 생성 타입명 suffix에 사용할 안전하고 결정론적인 식별자를 생성합니다.
+    /// </summary>
+    internal static string BuildSafeTypeSuffix(INamedTypeSymbol type)
     {
-        string fqn = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
-            .Replace("global::", "");
-        return SharedHashUtils.SanitizeIdentifier(fqn) + suffix;
+        string fqn = GetFullyQualifiedName(type);
+        string hash = SharedHashUtils.HashOrdinalFnv1a(fqn).ToString("x8");
+        return SharedHashUtils.SanitizeIdentifier(fqn) + "_" + hash;
     }
+
+    private static string GetFullyQualifiedName(INamedTypeSymbol type)
+        => type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+            .Replace("global::", "");
 
     #endregion
 }

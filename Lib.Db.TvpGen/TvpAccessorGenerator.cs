@@ -133,6 +133,14 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor s_fileLocalNotSupported = new(
+        id: "TVP006",
+        title: "file-local 타입 미지원",
+        messageFormat: "TVP DTO '{0}' 또는 상위 타입은 file-local 타입이므로 생성 코드에서 접근할 수 없습니다.",
+        category: "Design",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     #endregion
 
     #region 초기화
@@ -217,7 +225,17 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 2) 접근성(중첩 포함)
+        // 2) file-local 타입 금지
+        if (GeneratorSharedHelpers.IsFileLocalType(type, spc.CancellationToken))
+        {
+            spc.ReportDiagnostic(Diagnostic.Create(
+                s_fileLocalNotSupported,
+                type.Locations.FirstOrDefault(),
+                type.Name));
+            return false;
+        }
+
+        // 3) 접근성(중첩 포함)
         if (!GeneratorSharedHelpers.IsAccessibleFromGeneratedCode(type))
         {
             spc.ReportDiagnostic(Diagnostic.Create(
@@ -227,7 +245,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 3) 처리 가능한 속성 수집
+        // 4) 처리 가능한 속성 수집
         props = GetProcessableProperties(type);
 
         if (props.Count == 0)
@@ -240,7 +258,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 4) 중복 속성명 + 지원 타입 검사
+        // 5) 중복 속성명 + 지원 타입 검사
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var p in props)
@@ -299,10 +317,20 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
 
         // 생성 코드는 공용 네임스페이스에 배치(기존 정책 유지)
         var namespaceName = "Lib.Db.Generated";
-        var suffix = GetUniqueSuffix(type);
+        var suffix = GeneratorSharedHelpers.BuildSafeTypeSuffix(type);
         var registryClassName = $"TvpRegistry_{suffix}";
         var validatorClassName = $"StaticValidator_{suffix}";
         var cacheClassName = $"__ColumnCache_{suffix}";
+        var isSmall = props.Count <= GeneratorSharedHelpers.SmallMemberThreshold;
+        var propIdentifiers = props
+            .Select(static p => SharedHashUtils.EscapeIdentifier(p.Name))
+            .ToArray();
+        var propNameLiterals = props
+            .Select(static p => SharedHashUtils.EscapeStringLiteral(p.Name))
+            .ToArray();
+        var sqlTypeNameLiteral = sqlTypeName is null
+            ? null
+            : SharedHashUtils.EscapeStringLiteral(sqlTypeName);
 
         var sb = new StringBuilder(128 * 1024);
 
@@ -346,8 +374,6 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine("    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]");
         sb.AppendLine($"    internal static class {registryClassName}");
         sb.AppendLine("    {");
-        sb.AppendLine($"        private const int __SmallThreshold = {GeneratorSharedHelpers.SmallMemberThreshold};");
-        sb.AppendLine();
 
         // 결정론적 해시(FNV-1a)
         sb.AppendLine("        #region [내부 해시] 결정론적 이름 해시(FNV-1a, ASCII IgnoreCase)");
@@ -404,7 +430,8 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine($"            var cache = __bufferCache.GetValue(buffers, static b => new {cacheClassName}(b));");
         for (int i = 0; i < props.Count; i++)
         {
-            sb.AppendLine($"            cache.C{i}.Add(dto.{props[i].Name});");
+            var nullForgiving = props[i].Type.IsReferenceType ? "!" : "";
+            sb.AppendLine($"            cache.C{i}.Add(dto.{propIdentifiers[i]}{nullForgiving});");
         }
         sb.AppendLine("        }");
         sb.AppendLine("        #endregion");
@@ -415,14 +442,14 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine("        [ModuleInitializer]");
         sb.AppendLine("        internal static void Init()");
         sb.AppendLine("        {");
-        sb.AppendLine("            // 1. (Legacy) Accessor Registry (if needed / existing)");
-        sb.AppendLine("            // TvpAccessorRegistry.Register(CreateAccessors()); ");
+        sb.AppendLine("            // 1. Accessor Registry (StaticValidator / BufferAdder)");
+        sb.AppendLine("            TvpAccessorRegistry.Register(CreateAccessors());");
         sb.AppendLine("");
         sb.AppendLine("            // 2. Lib.Db Runtime Factory 등록 (Fast Binder)");
         sb.AppendLine("            Lib.Db.Execution.Binding.TvpFactoryRegistry.Register(");
         sb.AppendLine($"                typeof(global::System.Collections.Generic.IEnumerable<{fullTypeName}>),");
         sb.AppendLine($"                static obj => Lib.Db.Execution.Binding.DbBinder.ToDataReader((global::System.Collections.Generic.IEnumerable<{fullTypeName}>)obj),");
-        sb.AppendLine($"                {(sqlTypeName is null ? "null" : $"\"{sqlTypeName}\"")}");
+        sb.AppendLine($"                {(sqlTypeNameLiteral is null ? "null" : $"\"{sqlTypeNameLiteral}\"")}");
         sb.AppendLine("            );");
         sb.AppendLine("        }");
         sb.AppendLine();
@@ -435,7 +462,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine("            return ordinal switch");
         sb.AppendLine("            {");
         for (int i = 0; i < props.Count; i++)
-            sb.AppendLine($"                {i} => dto.{props[i].Name},");
+            sb.AppendLine($"                {i} => dto.{propIdentifiers[i]},");
         sb.AppendLine("                _ => null");
         sb.AppendLine("            };");
         sb.AppendLine("        }");
@@ -465,54 +492,54 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine("            var __props = new PropertyInfo[__Expected];");
         sb.AppendLine("            int __remaining = __Expected;");
         sb.AppendLine();
-        sb.AppendLine("            if (__Expected <= __SmallThreshold)");
-        sb.AppendLine("            {");
-        sb.AppendLine("                for (int i = 0; i < __all.Length; i++)");
-        sb.AppendLine("                {");
-        sb.AppendLine("                    var pi = __all[i];");
-        sb.AppendLine("                    var n = pi.Name;");
-        for (int i = 0; i < props.Count; i++)
+        if (isSmall)
         {
-            var head = (i == 0) ? "                    if" : "                    else if";
-            sb.AppendLine($"{head} (__props[{i}] is null && string.Equals(n, \"{props[i].Name}\", StringComparison.OrdinalIgnoreCase))");
-            sb.AppendLine("                    {");
-            sb.AppendLine($"                        __props[{i}] = pi;");
-            sb.AppendLine("                        if (--__remaining == 0) break;");
-            sb.AppendLine("                    }");
+            sb.AppendLine("            for (int i = 0; i < __all.Length; i++)");
+            sb.AppendLine("            {");
+            sb.AppendLine("                var pi = __all[i];");
+            sb.AppendLine("                var n = pi.Name;");
+            for (int i = 0; i < props.Count; i++)
+            {
+                var head = (i == 0) ? "                if" : "                else if";
+                sb.AppendLine($"{head} (__props[{i}] is null && string.Equals(n, \"{propNameLiterals[i]}\", StringComparison.OrdinalIgnoreCase))");
+                sb.AppendLine("                {");
+                sb.AppendLine($"                    __props[{i}] = pi;");
+                sb.AppendLine("                    if (--__remaining == 0) break;");
+                sb.AppendLine("                }");
+            }
+            sb.AppendLine("            }");
         }
-        sb.AppendLine("                }");
-        sb.AppendLine("            }");
-        sb.AppendLine("            else");
-        sb.AppendLine("            {");
-        sb.AppendLine("                for (int i = 0; i < __all.Length; i++)");
-        sb.AppendLine("                {");
-        sb.AppendLine("                    var pi = __all[i];");
-        sb.AppendLine("                    var n = pi.Name;");
-        sb.AppendLine("                    uint h = __HashName(n);");
-        sb.AppendLine("                    switch (h)");
-        sb.AppendLine("                    {");
-        for (int i = 0; i < props.Count; i++)
+        else
         {
-            var p = props[i];
-            uint hash = SharedHashUtils.HashAsciiIgnoreCaseFnv1a(p.Name);
-            sb.AppendLine($"                        case 0x{hash:X8}u: // {p.Name}");
-            sb.AppendLine($"                            if (__props[{i}] is null && string.Equals(n, \"{p.Name}\", StringComparison.OrdinalIgnoreCase))");
-            sb.AppendLine("                            {");
-            sb.AppendLine($"                                __props[{i}] = pi;");
-            sb.AppendLine("                                if (--__remaining == 0) goto __done;");
-            sb.AppendLine("                            }");
-            sb.AppendLine("                            break;");
+            sb.AppendLine("            for (int i = 0; i < __all.Length; i++)");
+            sb.AppendLine("            {");
+            sb.AppendLine("                var pi = __all[i];");
+            sb.AppendLine("                var n = pi.Name;");
+            sb.AppendLine("                uint h = __HashName(n);");
+            sb.AppendLine("                switch (h)");
+            sb.AppendLine("                {");
+            for (int i = 0; i < props.Count; i++)
+            {
+                var p = props[i];
+                uint hash = SharedHashUtils.HashAsciiIgnoreCaseFnv1a(p.Name);
+                sb.AppendLine($"                    case 0x{hash:X8}u: // {p.Name}");
+                sb.AppendLine($"                        if (__props[{i}] is null && string.Equals(n, \"{propNameLiterals[i]}\", StringComparison.OrdinalIgnoreCase))");
+                sb.AppendLine("                        {");
+                sb.AppendLine($"                            __props[{i}] = pi;");
+                sb.AppendLine("                            if (--__remaining == 0) goto __done;");
+                sb.AppendLine("                        }");
+                sb.AppendLine("                        break;");
+            }
+            sb.AppendLine("                    default: break;");
+            sb.AppendLine("                }");
+            sb.AppendLine("            }");
+            sb.AppendLine("            __done:;");
         }
-        sb.AppendLine("                        default: break;");
-        sb.AppendLine("                    }");
-        sb.AppendLine("                }");
-        sb.AppendLine("            }");
-        sb.AppendLine("            __done:;");
         sb.AppendLine();
 
         for (int i = 0; i < props.Count; i++)
         {
-            sb.AppendLine($"            if (__props[{i}] is null) ThrowMissingProperty(typeof({fullTypeName}), \"{props[i].Name}\");");
+            sb.AppendLine($"            if (__props[{i}] is null) ThrowMissingProperty(typeof({fullTypeName}), \"{propNameLiterals[i]}\");");
         }
 
         sb.AppendLine();
@@ -524,7 +551,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine("            var ordinal = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)");
         sb.AppendLine("            {");
         for (int i = 0; i < props.Count; i++)
-            sb.AppendLine($"                [\"{props[i].Name}\"] = {i},");
+            sb.AppendLine($"                [\"{propNameLiterals[i]}\"] = {i},");
         sb.AppendLine("            }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);");
 
         // Accessors 하이브리드
@@ -533,34 +560,33 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine($"            Func<{fullTypeName}, object?>[] typedAccessors;");
         sb.AppendLine("            Func<object, object?>[] objectAccessors;");
         sb.AppendLine();
-        sb.AppendLine("            if (__Expected <= __SmallThreshold)");
+        sb.AppendLine($"            typedAccessors = new Func<{fullTypeName}, object?>[__Expected]");
         sb.AppendLine("            {");
-        sb.AppendLine($"                typedAccessors = new Func<{fullTypeName}, object?>[__Expected]");
-        sb.AppendLine("                {");
-        for (int i = 0; i < props.Count; i++)
-            sb.AppendLine($"                    static dto => __GetTypedByOrdinal(in dto, {i}),");
-        sb.AppendLine("                };");
+        if (isSmall)
+        {
+            for (int i = 0; i < props.Count; i++)
+                sb.AppendLine($"                static dto => __GetTypedByOrdinal(in dto, {i}),");
+        }
+        else
+        {
+            for (int i = 0; i < props.Count; i++)
+                sb.AppendLine($"                static dto => dto.{propIdentifiers[i]},");
+        }
+        sb.AppendLine("            };");
         sb.AppendLine();
-        sb.AppendLine("                objectAccessors = new Func<object, object?>[__Expected]");
-        sb.AppendLine("                {");
-        for (int i = 0; i < props.Count; i++)
-            sb.AppendLine($"                    static obj => __GetObjectByOrdinal(obj, {i}),");
-        sb.AppendLine("                };");
-        sb.AppendLine("            }");
-        sb.AppendLine("            else");
+        sb.AppendLine("            objectAccessors = new Func<object, object?>[__Expected]");
         sb.AppendLine("            {");
-        sb.AppendLine($"                typedAccessors = new Func<{fullTypeName}, object?>[__Expected]");
-        sb.AppendLine("                {");
-        foreach (var p in props)
-            sb.AppendLine($"                    static dto => dto.{p.Name},");
-        sb.AppendLine("                };");
-        sb.AppendLine();
-        sb.AppendLine("                objectAccessors = new Func<object, object?>[__Expected]");
-        sb.AppendLine("                {");
-        foreach (var p in props)
-            sb.AppendLine($"                    static obj => (({fullTypeName})obj).{p.Name},");
-        sb.AppendLine("                };");
-        sb.AppendLine("            }");
+        if (isSmall)
+        {
+            for (int i = 0; i < props.Count; i++)
+                sb.AppendLine($"                static obj => __GetObjectByOrdinal(obj, {i}),");
+        }
+        else
+        {
+            for (int i = 0; i < props.Count; i++)
+                sb.AppendLine($"                static obj => (({fullTypeName})obj).{propIdentifiers[i]},");
+        }
+        sb.AppendLine("            };");
 
         // BufferAdder는 캐시 기반 __AddRow로 교체
         sb.AppendLine();
@@ -581,7 +607,7 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
         sb.AppendLine("                IsValidated = false,");
         sb.AppendLine($"                StaticValidator = new {validatorClassName}(),");
         sb.AppendLine("                BufferAdder = bufferAdder,");
-        sb.AppendLine($"                SqlTypeName = {(sqlTypeName is null ? "null" : $"\"{sqlTypeName}\"")},");
+        sb.AppendLine($"                SqlTypeName = {(sqlTypeNameLiteral is null ? "null" : $"\"{sqlTypeNameLiteral}\"")},");
         sb.AppendLine("            };");
         sb.AppendLine("        }");
         sb.AppendLine();
@@ -660,22 +686,30 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
             var nameHash = (int)SharedHashUtils.HashAsciiIgnoreCaseFnv1a(p.Name);
 
             var expectedSqlType = GetSqlTypeFromSymbol(p.Type, useDatetime2);  // ✅ useDatetime2 전달
+            var compatibleSqlTypes = TypeMappingRegistry.GetCompatibleSqlDbTypeNames(p.Type);
+            var compatibleSqlTypePattern = string.Join(
+                " or ",
+                compatibleSqlTypes.Select(static typeName => $"SqlDbType.{typeName}"));
+            var compatibleSqlTypeList = string.Join("/", compatibleSqlTypes);
 
             sb.AppendLine($"                // Column [{i}]: {p.Name}");
             sb.AppendLine("                {");
             sb.AppendLine($"                    var col = cols[{i}];");
-            sb.AppendLine($"                    if (col.NameHash != {nameHash})");
-            sb.AppendLine("                        throw new TvpSchemaValidationException(schema.Name, \"컬럼명_불일치\",");
-            sb.AppendLine($"                            $\"[{i}] 불일치: '{p.Name}' 기대됨 (실제 NameHash={{col.NameHash}})\", \"{p.Name}\", {i});");
-            sb.AppendLine($"                    if (col.SqlDbType != SqlDbType.{expectedSqlType})");
-            sb.AppendLine("                        throw new TvpSchemaValidationException(schema.Name, \"SQL타입_불일치\",");
-            sb.AppendLine($"                            $\"[{i}] '{p.Name}': 앱({expectedSqlType}) != DB({{col.SqlDbType}})\", \"{p.Name}\", {i});");
+            sb.AppendLine($"                    if (col.NameHash != {nameHash} || !string.Equals(col.Name, \"{propNameLiterals[i]}\", StringComparison.OrdinalIgnoreCase))");
+            sb.AppendLine("                        throw new TvpSchemaValidationException(schema.Name, \"스키마_컬럼명_불일치\",");
+            sb.AppendLine($"                            $\"[{i}] 불일치: '{propNameLiterals[i]}' 기대됨 (실제 NameHash={{col.NameHash}})\", \"{propNameLiterals[i]}\", {i});");
+            if (compatibleSqlTypes.Length > 0)
+            {
+                sb.AppendLine($"                    if (col.SqlDbType is not ({compatibleSqlTypePattern}))");
+                sb.AppendLine("                        throw new TvpSchemaValidationException(schema.Name, \"스키마_SQL타입_불일치\",");
+                sb.AppendLine($"                            $\"[{i}] '{propNameLiterals[i]}': 앱({expectedSqlType}) 호환 타입이 아님 (허용: {compatibleSqlTypeList}, DB={{col.SqlDbType}})\", \"{propNameLiterals[i]}\", {i});");
+            }
             sb.AppendLine("                    if (col.IsIdentity)");
-            sb.AppendLine("                        throw new TvpSchemaValidationException(schema.Name, \"ID/계산컬럼_쓰기금지\",");
-            sb.AppendLine($"                            $\"[{i}] '{p.Name}': Identity 컬럼은 TVP에서 값을 제공할 수 없습니다.\", \"{p.Name}\", {i});");
+            sb.AppendLine("                        throw new TvpSchemaValidationException(schema.Name, \"스키마_ID_계산컬럼_쓰기금지\",");
+            sb.AppendLine($"                            $\"[{i}] '{propNameLiterals[i]}': Identity 컬럼은 TVP에서 값을 제공할 수 없습니다.\", \"{propNameLiterals[i]}\", {i});");
             sb.AppendLine("                    if (col.IsComputed)");
-            sb.AppendLine("                        throw new TvpSchemaValidationException(schema.Name, \"ID/계산컬럼_쓰기금지\",");
-            sb.AppendLine($"                            $\"[{i}] '{p.Name}': Computed 컬럼은 TVP에서 값을 제공할 수 없습니다.\", \"{p.Name}\", {i});");
+            sb.AppendLine("                        throw new TvpSchemaValidationException(schema.Name, \"스키마_ID_계산컬럼_쓰기금지\",");
+            sb.AppendLine($"                            $\"[{i}] '{propNameLiterals[i]}': Computed 컬럼은 TVP에서 값을 제공할 수 없습니다.\", \"{propNameLiterals[i]}\", {i});");
             sb.AppendLine("                }");
             sb.AppendLine();
         }
@@ -730,20 +764,6 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
     /// </summary>
     private static string ToFullyQualifiedTypeName(ITypeSymbol type)
         => type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-
-    /// <summary>
-    /// Nullable&lt;T&gt;라면 T를, 아니면 원래 타입을 반환합니다.
-    /// <para>✅ TypeMappingRegistry로 위임</para>
-    /// </summary>
-    private static ITypeSymbol UnwrapNullable(ITypeSymbol type)
-        => TypeMappingRegistry.UnwrapNullable(type);
-
-    /// <summary>
-    /// enum이면 underlying 타입을 반환합니다. 아니면 원래 타입을 반환합니다.
-    /// <para>✅ TypeMappingRegistry로 위임</para>
-    /// </summary>
-    private static ITypeSymbol UnwrapEnumUnderlying(ITypeSymbol type)
-        => TypeMappingRegistry.UnwrapEnumUnderlying(type);
 
     #endregion
 
@@ -802,18 +822,6 @@ public sealed class TvpAccessorGenerator : IIncrementalGenerator
 
         public int Compare(IPropertySymbol? a, IPropertySymbol? b)
             => StringComparer.Ordinal.Compare(a?.Name, b?.Name);
-    }
-
-    /// <summary>
-    /// 생성 타입을 구분하기 위한 결정론적 suffix를 구성합니다.
-    /// </summary>
-    private static string GetUniqueSuffix(INamedTypeSymbol type)
-    {
-        var ns = type.ContainingNamespace.IsGlobalNamespace
-            ? ""
-            : type.ContainingNamespace.ToDisplayString().Replace(".", "_");
-
-        return string.IsNullOrEmpty(ns) ? type.Name : $"{ns}_{type.Name}";
     }
 
     #endregion

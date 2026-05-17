@@ -23,6 +23,43 @@ namespace Microsoft.Extensions.DependencyInjection;
 public static class LibDbOptionsExtensions
 {
     /// <summary>
+    /// 운영 환경 권장 보안 기본값을 적용합니다.
+    /// <para>
+    /// 연결 문자열은 <see cref="ConnectionSecurityProfile.Production"/> 기준으로 검증하고,
+    /// Raw SQL은 기본적으로 쓰기/권한/운영 계열 Text 명령을 차단합니다.
+    /// </para>
+    /// </summary>
+    /// <param name="options">보안 기본값을 적용할 옵션 인스턴스</param>
+    /// <returns>체이닝을 위한 동일 옵션 인스턴스</returns>
+    public static LibDbOptions UseProductionSecurityDefaults(this LibDbOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        options.ConnectionSecurityProfile = ConnectionSecurityProfile.Production;
+        options.AllowProductionTrustServerCertificateWaiver = false;
+        options.AllowProductionSaLoginWaiver = false;
+        options.IncludeParametersInTrace = false;
+
+        if (options.RawSqlPolicy == RawSqlPolicy.Allow)
+            options.RawSqlPolicy = RawSqlPolicy.DenyWriteText;
+
+        return options;
+    }
+
+    /// <summary>
+    /// <see cref="OptionsBuilder{TOptions}"/> 구성 파이프라인에 운영 환경 권장 보안 기본값을 추가합니다.
+    /// </summary>
+    /// <param name="builder">Lib.Db 옵션 빌더</param>
+    /// <returns>체이닝을 위한 동일 옵션 빌더</returns>
+    public static OptionsBuilder<LibDbOptions> UseProductionSecurityDefaults(
+        this OptionsBuilder<LibDbOptions> builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        return builder.Configure(static options => options.UseProductionSecurityDefaults());
+    }
+
+    /// <summary>
     /// LibDbOptions를 구성하고 등록합니다. (표준 OptionsBuilder 패턴)
     /// </summary>
     /// <param name="services">서비스 컬렉션</param>
@@ -95,6 +132,14 @@ public static class LibDbOptionsExtensions
             options.SchemaRefreshIntervalSeconds = sris;
         if (bool.TryParse(section["EnableDryRun"], out bool edr))
             options.EnableDryRun = edr;
+        if (Enum.TryParse(section["RawSqlPolicy"], ignoreCase: true, out RawSqlPolicy rawSqlPolicy))
+            options.RawSqlPolicy = rawSqlPolicy;
+        if (Enum.TryParse(section["ConnectionSecurityProfile"], ignoreCase: true, out ConnectionSecurityProfile securityProfile))
+            options.ConnectionSecurityProfile = securityProfile;
+        if (bool.TryParse(section["AllowProductionTrustServerCertificateWaiver"], out bool allowTrustWaiver))
+            options.AllowProductionTrustServerCertificateWaiver = allowTrustWaiver;
+        if (bool.TryParse(section["AllowProductionSaLoginWaiver"], out bool allowSaWaiver))
+            options.AllowProductionSaLoginWaiver = allowSaWaiver;
 
         // ConnectionStringNames (List)
         IConfigurationSection connNamesSection = section.GetSection("ConnectionStringNames");

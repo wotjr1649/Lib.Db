@@ -49,10 +49,10 @@ global using Lib.Db.Repository;
 
 #region [5. 타입 별칭 (Type Aliases)]
 
-/// <summary>저장 프로시저 이름을 나타내는 타입 별칭입니다.</summary>
+// 저장 프로시저 이름을 나타내는 타입 별칭입니다.
 global using SpName = Lib.Db.Contracts.Core.DbObjectName<Lib.Db.Contracts.Core.SpTrait>;
 
-/// <summary>TVP(Table-Valued Parameter) 타입 이름을 나타내는 타입 별칭입니다.</summary>
+// TVP(Table-Valued Parameter) 타입 이름을 나타내는 타입 별칭입니다.
 global using TvpName = Lib.Db.Contracts.Core.DbObjectName<Lib.Db.Contracts.Core.TvpTrait>;
 
 #endregion

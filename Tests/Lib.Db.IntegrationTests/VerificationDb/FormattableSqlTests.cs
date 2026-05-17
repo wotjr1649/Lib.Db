@@ -9,12 +9,13 @@ using Lib.Db.IntegrationTests.Infrastructure;
 namespace Lib.Db.IntegrationTests.VerificationDb;
 
 /// <summary>
-/// FormattableString(보간 문자열)을 사용한 SQL 자동 파라미터화를 검증하는 테스트.
+/// FormattableString(보간 문자열)을 사용한 SQL 자동 파라미터화를 검증하는 legacy compatibility 테스트.
 /// <para><b>[설계 의도]</b> <c>Sql((FormattableString)$"...")</c> 호출 시 보간 인수가 자동으로
-/// @p0, @p1 등의 파라미터로 변환되어 SQL Injection을 방지하는지 검증한다.</para>
+/// @p0, @p1 등의 파라미터로 변환되는지 검증한다.</para>
 /// <para><b>[주의]</b> IProcedureStage 인터페이스에 Sql(string)과 Sql(FormattableString) 오버로드가
 /// 공존하므로, C# 컴파일러가 기본적으로 string 오버로드를 선택한다.
-/// FormattableString 오버로드를 명시적으로 호출하려면 <c>(FormattableString)</c> 캐스트가 필요하다.</para>
+/// FormattableString 오버로드를 명시적으로 호출하려면 <c>(FormattableString)</c> 캐스트가 필요하다.
+/// 신규 코드에서는 <c>SqlInterpolated(...)</c>를 우선 사용한다.</para>
 /// </summary>
 [Collection("MultiDb")]
 public sealed class FormattableSqlTests(MultiDbFixture fixture)
