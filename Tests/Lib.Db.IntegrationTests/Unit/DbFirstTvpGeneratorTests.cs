@@ -331,6 +331,43 @@ public sealed class DbFirstTvpGeneratorTests
         generatedSource.Should().NotContain("result.event");
     }
 
+    [Fact(DisplayName = "RES04: DbResult generated mapper exposes DbDataReader overload")]
+    public void RES04_DbResult_ShouldGenerateDbDataReaderMapOverload()
+    {
+        CSharpParseOptions parseOptions = CSharpParseOptions.Default
+            .WithLanguageVersion(LanguageVersion.Preview);
+
+        var (diagnostics, runResult, outputCompilation) = RunGeneratorAndUpdateCompilation(
+            new ResultAccessorGenerator().AsSourceGenerator(),
+            """
+            using Lib.Db.Contracts.Mapping;
+
+            [DbResult]
+            public partial class ReaderOverloadResult
+            {
+                public int Id { get; set; }
+                public string Name { get; set; } = "";
+            }
+            """,
+            parseOptions);
+
+        diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+
+        Diagnostic[] compileErrors = outputCompilation
+            .GetDiagnostics(TestContext.Current.CancellationToken)
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+
+        compileErrors.Should().BeEmpty();
+
+        string generatedSource = string.Join(
+            Environment.NewLine,
+            runResult.GeneratedTrees.Select(t => t.GetText(TestContext.Current.CancellationToken).ToString()));
+
+        generatedSource.Should().Contain("public static global::ReaderOverloadResult Map(DbDataReader reader)");
+        generatedSource.Should().Contain("public static global::ReaderOverloadResult Map(SqlDataReader reader) => Map((DbDataReader)reader);");
+    }
+
     private static (ImmutableArray<Diagnostic> Diagnostics, GeneratorDriverRunResult RunResult) RunGenerator(
         ISourceGenerator generator,
         string source,

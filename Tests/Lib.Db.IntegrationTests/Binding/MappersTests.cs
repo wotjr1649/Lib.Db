@@ -8,6 +8,7 @@ using System.Data;
 using System.Data.Common;
 using Lib.Db.Core;
 using Lib.Db.Execution.Binding;
+using Lib.Db.IntegrationTests.Infrastructure;
 
 namespace Lib.Db.IntegrationTests.Binding;
 
@@ -184,6 +185,87 @@ public sealed class MappersTests
 
         Assert.Equal(1.2300000190734863, result.DoubleVal);
         Assert.Equal(255, result.IntVal);
+    }
+
+    #endregion
+
+    #region MP-06: SQL Name Convention
+
+    public sealed record SuspendRow(int CellNo, string SlotName);
+
+    [Fact]
+    public void MP06_Map_SnakeCaseColumns_ToPascalCasePositionalRecord_ShouldWork()
+    {
+        Mock<DbDataReader> readerMock = new();
+        readerMock.Setup(r => r.FieldCount).Returns(2);
+        readerMock.Setup(r => r.GetName(0)).Returns("CELL_NO");
+        readerMock.Setup(r => r.GetName(1)).Returns("SLOT_NAME");
+        readerMock.Setup(r => r.GetFieldType(0)).Returns(typeof(int));
+        readerMock.Setup(r => r.GetFieldType(1)).Returns(typeof(string));
+        readerMock.Setup(r => r.IsDBNull(0)).Returns(false);
+        readerMock.Setup(r => r.IsDBNull(1)).Returns(false);
+        readerMock.Setup(r => r.GetInt32(0)).Returns(7);
+        readerMock.Setup(r => r.GetString(1)).Returns("A01");
+
+        Lib.Db.Contracts.Mapping.ISqlMapper<SuspendRow> mapper = _factory.GetMapper<SuspendRow>();
+
+        SuspendRow result = mapper.MapResult(readerMock.Object);
+
+        Assert.Equal(7, result.CellNo);
+        Assert.Equal("A01", result.SlotName);
+    }
+
+    [Fact]
+    public void MP07_GeneratedResultMapper_ShouldAcceptDbDataReaderWrapper()
+    {
+        Mock<DbDataReader> readerMock = new();
+        readerMock.Setup(r => r.FieldCount).Returns(4);
+        readerMock.Setup(r => r.GetName(0)).Returns(nameof(DbResultUser.UserId));
+        readerMock.Setup(r => r.GetName(1)).Returns(nameof(DbResultUser.UserName));
+        readerMock.Setup(r => r.GetName(2)).Returns(nameof(DbResultUser.Email));
+        readerMock.Setup(r => r.GetName(3)).Returns(nameof(DbResultUser.Age));
+        readerMock.Setup(r => r.IsDBNull(0)).Returns(false);
+        readerMock.Setup(r => r.IsDBNull(1)).Returns(false);
+        readerMock.Setup(r => r.IsDBNull(2)).Returns(false);
+        readerMock.Setup(r => r.IsDBNull(3)).Returns(true);
+        readerMock.Setup(r => r.GetInt32(0)).Returns(42);
+        readerMock.Setup(r => r.GetString(1)).Returns("user-42");
+        readerMock.Setup(r => r.GetString(2)).Returns("user42@example.test");
+
+        Lib.Db.Contracts.Mapping.ISqlMapper<DbResultUser> mapper = _factory.GetMapper<DbResultUser>();
+
+        DbResultUser result = mapper.MapResult(readerMock.Object);
+
+        Assert.Equal(42, result.UserId);
+        Assert.Equal("user-42", result.UserName);
+        Assert.Equal("user42@example.test", result.Email);
+        Assert.Null(result.Age);
+    }
+
+    [Fact]
+    public void MP08_Map_DuplicateNormalizedColumns_ShouldUseFirstMappedColumn()
+    {
+        Mock<DbDataReader> readerMock = new();
+        readerMock.Setup(r => r.FieldCount).Returns(2);
+        readerMock.Setup(r => r.GetName(0)).Returns("CELL_NO");
+        readerMock.Setup(r => r.GetName(1)).Returns("CellNo");
+        readerMock.Setup(r => r.GetFieldType(0)).Returns(typeof(int));
+        readerMock.Setup(r => r.GetFieldType(1)).Returns(typeof(int));
+        readerMock.Setup(r => r.IsDBNull(0)).Returns(false);
+        readerMock.Setup(r => r.IsDBNull(1)).Returns(false);
+        readerMock.Setup(r => r.GetInt32(0)).Returns(7);
+        readerMock.Setup(r => r.GetInt32(1)).Returns(99);
+
+        Lib.Db.Contracts.Mapping.ISqlMapper<DuplicateColumnRow> mapper = _factory.GetMapper<DuplicateColumnRow>();
+
+        DuplicateColumnRow result = mapper.MapResult(readerMock.Object);
+
+        Assert.Equal(7, result.CellNo);
+    }
+
+    public sealed class DuplicateColumnRow
+    {
+        public int CellNo { get; set; }
     }
 
     #endregion

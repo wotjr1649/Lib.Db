@@ -194,6 +194,15 @@ public static partial class DbBinder
         // 2. 값 변환 및 유효성 검증 (실제 값이 있을 때만)
         if (finalValue != DBNull.Value)
         {
+            if (finalValue is DateOnly dateOnly)
+            {
+                finalValue = dateOnly.ToDateTime(TimeOnly.MinValue);
+            }
+            else if (finalValue is TimeOnly timeOnly)
+            {
+                finalValue = timeOnly.ToTimeSpan();
+            }
+
             // 정밀도/범위 오버플로우 사전 검증 (Decimal/정수/Enum/DateTime)
             CheckValueOverflow(meta.Name, finalValue, meta.SqlDbType, meta.Precision, meta.Scale);
 
@@ -304,6 +313,7 @@ public static partial class DbBinder
         }
 
         object finalValue = value ?? DBNull.Value;
+        SqlDbType? inferredDbType = null;
 
         // 2. 문자열 전처리
         if (finalValue is string strVal)
@@ -312,19 +322,30 @@ public static partial class DbBinder
             if (processedSpan.Length != strVal.Length)
                 finalValue = processedSpan.ToString();
         }
-        // 3. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
+        // 3. SQL Server date/time 스칼라 보정
+        else if (finalValue is DateOnly dateOnly)
+        {
+            finalValue = dateOnly.ToDateTime(TimeOnly.MinValue);
+            inferredDbType = SqlDbType.Date;
+        }
+        else if (finalValue is TimeOnly timeOnly)
+        {
+            finalValue = timeOnly.ToTimeSpan();
+            inferredDbType = SqlDbType.Time;
+        }
+        // 4. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
         //    List<Dto>를 넘겼을 때 JSON으로 오판하여 AOT 에러가 나는 것을 방지
         else if (IsTvpCollection(finalValue, out IDataReader? tvpReader, out tvpTypeName))
         {
             finalValue = tvpReader;
         }
-        // 4. JSON 직렬화 (복합 객체이면서 TVP/Stream/바이너리가 아닌 경우)
+        // 5. JSON 직렬화 (복합 객체이면서 TVP/Stream/바이너리가 아닌 경우)
         else if (IsComplexObject(finalValue))
         {
             finalValue = JsonSerializer.Serialize(finalValue);
         }
 
-        // 5. 타입 및 메타데이터 결정
+        // 6. 타입 및 메타데이터 결정
         SqlDbType dbType;
         int size = 0;
         byte precision = 0;
@@ -335,7 +356,7 @@ public static partial class DbBinder
             // Attribute 우선
             dbType = metaOverride.DbType != SqlDbType.Variant
                 ? metaOverride.DbType
-                : (finalValue is DBNull ? SqlDbType.Variant : InferSqlDbType(finalValue));
+                : (finalValue is DBNull ? SqlDbType.Variant : inferredDbType ?? InferSqlDbType(finalValue));
 
             size = metaOverride.Size;
             precision = metaOverride.Precision;
@@ -344,7 +365,7 @@ public static partial class DbBinder
         else
         {
             // 추론
-            dbType = finalValue is DBNull ? SqlDbType.Variant : InferSqlDbType(finalValue);
+            dbType = finalValue is DBNull ? SqlDbType.Variant : inferredDbType ?? InferSqlDbType(finalValue);
 
             // 자동 추론 보정 (LOB)
             if (finalValue is byte[] or Stream)
@@ -357,7 +378,7 @@ public static partial class DbBinder
             }
         }
 
-        // 6. 파라미터 생성 (생성자 오버로드 활용)
+        // 7. 파라미터 생성 (생성자 오버로드 활용)
         SqlParameter p;
         if (dbType != SqlDbType.Variant)
         {
@@ -652,7 +673,7 @@ public static partial class DbBinder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsComplexObject(object? v) =>
         v is not (
-            null or DBNull or string or DateTime or Guid or decimal or Enum or
+            null or DBNull or string or DateTime or DateOnly or TimeOnly or Guid or decimal or Enum or
             DataTable or IDataReader or System.Data.Common.DbParameter or Stream or
             byte[] // byte[]는 JSON 직렬화 대상에서 제외
         )
@@ -672,6 +693,8 @@ public static partial class DbBinder
         int => SqlDbType.Int,
         long => SqlDbType.BigInt,
         string => SqlDbType.NVarChar,
+        DateOnly => SqlDbType.Date,
+        TimeOnly => SqlDbType.Time,
         DateTime => SqlDbType.DateTime2,
         bool => SqlDbType.Bit,
         decimal => SqlDbType.Decimal,

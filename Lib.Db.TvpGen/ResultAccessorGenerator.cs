@@ -738,8 +738,10 @@ public sealed class ResultAccessorGenerator : IIncrementalGenerator
         sb.Append(indent).AppendLine("    }"); // CreateParser end
         sb.AppendLine();
 
-        // Map 메서드 (테스트 스텁 계약 충족; 실환경에선 사용하지 않아도 컴파일만 되면 OK)
-        sb.Append(indent).AppendLine($"    public static {fullName} Map(SqlDataReader reader) => CreateParser(reader)(reader);");
+        // Map 메서드: runtime mapper는 DbDataReader overload를 우선 사용하고,
+        // 기존 IMapableResult<T> 계약 호환을 위해 SqlDataReader overload도 유지한다.
+        sb.Append(indent).AppendLine($"    public static {fullName} Map(DbDataReader reader) => CreateParser(reader)(reader);");
+        sb.Append(indent).AppendLine($"    public static {fullName} Map(SqlDataReader reader) => Map((DbDataReader)reader);");
 
         sb.Append(indent).AppendLine("}"); // type end
 

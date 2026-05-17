@@ -105,6 +105,34 @@ public sealed class DataBindingTests : IDisposable
     }
 
     [Fact]
+    public void DB03_BindRaw_ShouldBindDateOnly_AsSqlDate()
+    {
+        using SqlCommand cmd = new();
+        DateOnly value = new(2026, 5, 17);
+
+        DbBinder.BindRawParameter(cmd, "pDate", value);
+
+        SqlParameter param = cmd.Parameters["@pDate"];
+        Assert.Equal(SqlDbType.Date, param.SqlDbType);
+        DateTime dateTime = Assert.IsType<DateTime>(param.Value);
+        Assert.Equal(new DateTime(2026, 5, 17), dateTime);
+    }
+
+    [Fact]
+    public void DB03_BindRaw_ShouldBindTimeOnly_AsSqlTime()
+    {
+        using SqlCommand cmd = new();
+        TimeOnly value = new(14, 30, 15);
+
+        DbBinder.BindRawParameter(cmd, "pTime", value);
+
+        SqlParameter param = cmd.Parameters["@pTime"];
+        Assert.Equal(SqlDbType.Time, param.SqlDbType);
+        TimeSpan timeSpan = Assert.IsType<TimeSpan>(param.Value);
+        Assert.Equal(new TimeSpan(14, 30, 15), timeSpan);
+    }
+
+    [Fact]
     public void DB04_LegacyTvp_ShouldWork_WhenSgDisabled()
     {
         DbBinder.ConfigureTvp(new LibDbOptions { EnableGeneratedTvpBinder = false });

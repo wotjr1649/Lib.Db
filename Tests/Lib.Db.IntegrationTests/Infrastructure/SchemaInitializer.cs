@@ -46,7 +46,10 @@ internal static class SchemaInitializer
         // 8. [gap] 스키마 (기능 완전성 검증)
         await EnsureGapSchemaAsync(db).ConfigureAwait(false);
 
-        // 9. dbo 유틸리티 SP
+        // 9. [verify] 스키마 (v2.2.1 차단 이슈 회귀 검증)
+        await EnsureV221BlockerVerificationSchemaAsync(db).ConfigureAwait(false);
+
+        // 10. dbo 유틸리티 SP
         await EnsureDboUtilityAsync(db).ConfigureAwait(false);
     }
 
@@ -1466,6 +1469,122 @@ internal static class SchemaInitializer
                 )
                 SELECT * FROM UserRanking
                 ORDER BY RowNum;
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+    }
+
+    #endregion
+
+    #region [verify] v2.2.1 차단 이슈 검증 스키마
+
+    /// <summary>
+    /// v2.2.1에서 확인된 결과 매핑/DateOnly/QUOTED_IDENTIFIER 회귀를 실 DB에서 검증할 객체를 생성한다.
+    /// </summary>
+    private static async Task EnsureV221BlockerVerificationSchemaAsync(IProcedureStage db)
+    {
+        await db.Sql("""
+            IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'verify')
+                EXEC('CREATE SCHEMA [verify]')
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            IF OBJECT_ID('[verify].[ResultMappingRows]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [verify].[ResultMappingRows] (
+                    CELL_NO INT NOT NULL PRIMARY KEY,
+                    SLOT_NAME NVARCHAR(40) NOT NULL,
+                    SCAN_DATE DATE NOT NULL,
+                    USER_ID INT NOT NULL,
+                    USER_NAME NVARCHAR(100) NOT NULL,
+                    EMAIL NVARCHAR(255) NOT NULL,
+                    AGE INT NULL
+                );
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            MERGE [verify].[ResultMappingRows] AS target
+            USING (VALUES
+                (17, N'A01', CONVERT(date, '2026-05-17'), 1001, N'Generated User', N'generated.user@example.test', 27)
+            ) AS source (CELL_NO, SLOT_NAME, SCAN_DATE, USER_ID, USER_NAME, EMAIL, AGE)
+            ON target.CELL_NO = source.CELL_NO
+            WHEN MATCHED THEN UPDATE SET
+                SLOT_NAME = source.SLOT_NAME,
+                SCAN_DATE = source.SCAN_DATE,
+                USER_ID = source.USER_ID,
+                USER_NAME = source.USER_NAME,
+                EMAIL = source.EMAIL,
+                AGE = source.AGE
+            WHEN NOT MATCHED THEN
+                INSERT (CELL_NO, SLOT_NAME, SCAN_DATE, USER_ID, USER_NAME, EMAIL, AGE)
+                VALUES (source.CELL_NO, source.SLOT_NAME, source.SCAN_DATE, source.USER_ID, source.USER_NAME, source.EMAIL, source.AGE);
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            SET QUOTED_IDENTIFIER ON;
+
+            IF OBJECT_ID('[verify].[QuotedIdentifierRows]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [verify].[QuotedIdentifierRows] (
+                    RowId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                    RawCode NVARCHAR(50) NOT NULL,
+                    NormalizedCode AS UPPER([RawCode]) PERSISTED
+                );
+            END;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM sys.indexes
+                WHERE object_id = OBJECT_ID('[verify].[QuotedIdentifierRows]')
+                  AND name = 'IX_QuotedIdentifierRows_NormalizedCode'
+            )
+            BEGIN
+                CREATE INDEX [IX_QuotedIdentifierRows_NormalizedCode]
+                    ON [verify].[QuotedIdentifierRows] ([NormalizedCode]);
+            END;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM [verify].[QuotedIdentifierRows]
+                WHERE [RawCode] = N'tbl_order'
+            )
+            BEGIN
+                INSERT INTO [verify].[QuotedIdentifierRows] ([RawCode])
+                VALUES (N'tbl_order');
+            END;
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [verify].[usp_GetSuspendRows]
+                @ScanDate DATE
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+
+                SELECT
+                    CELL_NO,
+                    SLOT_NAME
+                FROM [verify].[ResultMappingRows]
+                WHERE SCAN_DATE = @ScanDate
+                ORDER BY CELL_NO;
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER PROCEDURE [verify].[usp_GetGeneratedRows]
+                @ScanDate DATE
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+
+                SELECT
+                    USER_ID AS UserId,
+                    USER_NAME AS UserName,
+                    EMAIL AS Email,
+                    AGE AS Age
+                FROM [verify].[ResultMappingRows]
+                WHERE SCAN_DATE = @ScanDate
+                ORDER BY USER_ID;
             END
             """).ExecuteAsync().ConfigureAwait(false);
     }
