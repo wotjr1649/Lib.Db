@@ -2,7 +2,7 @@
 -- 파일: upgrade-coverage-100.sql
 -- 설명: Lib.Db v2 테스트 커버리지 85→100 달성을 위한 추가 SP 생성
 -- 대상: LIBDB_VERIFICATION_TEST
--- 실행: sqlcmd -S localhost -U sa -P 123456 -i upgrade-coverage-100.sql -f 65001 -C
+-- 실행: sqlcmd -S localhost -U sa -P <password> -i upgrade-coverage-100.sql -f 65001 -C
 -- ============================================================================
 
 USE [LIBDB_VERIFICATION_TEST];
