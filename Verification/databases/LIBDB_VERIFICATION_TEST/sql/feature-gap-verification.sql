@@ -2,7 +2,8 @@
 -- 파일: feature-gap-verification.sql
 -- 설명: Lib.Db v2 SQL Server 기능 완전성 검증용 객체 생성
 -- 대상: LIBDB_VERIFICATION_TEST (SQL Server 2025 Express)
--- 실행: sqlcmd -S localhost -U sa -P <password> -i feature-gap-verification.sql -f 65001 -C
+-- 비밀값: sqlcmd 실행 전 SQLCMDPASSWORD 환경변수를 설정하세요.
+-- 실행: sqlcmd -S localhost -U sa -i feature-gap-verification.sql -f 65001 -C
 -- ============================================================================
 
 USE [LIBDB_VERIFICATION_TEST];
