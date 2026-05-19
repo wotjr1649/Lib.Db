@@ -1,0 +1,65 @@
+{
+  "version": "v2.3.0",
+  "databases": {
+    "Verification": {
+      "name": "LIBDB_VERIFICATION_TEST",
+      "defaultSetup": "databases/LIBDB_VERIFICATION_TEST/sql/setup-libdb-verification-test.sql",
+      "defaultVerify": "databases/LIBDB_VERIFICATION_TEST/sql/verify-libdb-verification-test.sql",
+      "optional": [
+        "databases/LIBDB_VERIFICATION_TEST/sql/verify-libdb-sqlserver2025-syntax.sql",
+        "databases/LIBDB_VERIFICATION_TEST/sql/feature-gap-verification.sql",
+        "databases/LIBDB_VERIFICATION_TEST/sql/upgrade-coverage-100.sql"
+      ],
+      "testFilters": [
+        "FullyQualifiedName~Lib.Db.IntegrationTests.VerificationDb"
+      ],
+      "artifactSubdirectory": "test-results"
+    },
+    "Stress": {
+      "name": "LIBDB_STRESS_TEST",
+      "defaultSetup": "databases/LIBDB_STRESS_TEST/sql/setup-libdb-stress-test.sql",
+      "defaultVerify": "databases/LIBDB_STRESS_TEST/sql/verify-libdb-stress-test.sql",
+      "optional": [],
+      "testFilters": [
+        "FullyQualifiedName~Lib.Db.IntegrationTests.V230Matrix"
+      ],
+      "artifactSubdirectory": "test-results"
+    },
+    "Chaos": {
+      "name": "LIBDB_CHAOS_TEST",
+      "defaultSetup": "databases/LIBDB_CHAOS_TEST/sql/setup-libdb-chaos-test.sql",
+      "defaultVerify": "databases/LIBDB_CHAOS_TEST/sql/verify-libdb-chaos-test.sql",
+      "optional": [
+        "databases/LIBDB_CHAOS_TEST/server-optin/setup-libdb-chaos-server-optin.sql",
+        "databases/LIBDB_CHAOS_TEST/server-optin/verify-libdb-chaos-server-optin.sql",
+        "databases/LIBDB_CHAOS_TEST/server-optin/teardown-libdb-chaos-server-optin.sql"
+      ],
+      "testFilters": [
+        "FullyQualifiedName~Lib.Db.IntegrationTests.V230Matrix"
+      ],
+      "artifactSubdirectory": "test-results"
+    },
+    "Bench": {
+      "name": "LIBDB_BENCH_TEST",
+      "defaultSetup": "databases/LIBDB_BENCH_TEST/sql/setup-libdb-bench-test.sql",
+      "defaultVerify": "databases/LIBDB_BENCH_TEST/sql/verify-libdb-bench-default.sql",
+      "finalVerify": "databases/LIBDB_BENCH_TEST/sql/verify-libdb-bench-test.sql",
+      "optional": [
+        "databases/LIBDB_BENCH_TEST/sql/run-libdb-bench-memory-optimized-tvp-optin.sql",
+        "databases/LIBDB_BENCH_TEST/sql/setup-libdb-bench-memory-optimized-tvp-optin.sql",
+        "databases/LIBDB_BENCH_TEST/sql/verify-libdb-bench-memory-optimized-tvp-optin.sql"
+      ],
+      "benchmarkFilters": [
+        "*TvpBenchmarks*"
+      ],
+      "artifactSubdirectory": "benchmarks"
+    }
+  },
+  "scripts": {
+    "full": "scripts/Invoke-Verification.ps1",
+    "db": "scripts/Invoke-VerificationDb.ps1",
+    "coverage": "scripts/Invoke-Coverage.ps1",
+    "benchmarks": "scripts/Invoke-Benchmarks.ps1",
+    "aot": "scripts/Invoke-Aot.ps1"
+  }
+}
