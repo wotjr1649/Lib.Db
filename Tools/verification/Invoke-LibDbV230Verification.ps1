@@ -50,6 +50,30 @@ function Write-SecretSafeEnvironmentSummary {
     }
 }
 
+function Get-AotRuntimeIdentifier {
+    if ($IsWindows) {
+        return 'win-x64'
+    }
+
+    if ($IsLinux) {
+        return 'linux-x64'
+    }
+
+    if ($IsMacOS) {
+        return 'osx-x64'
+    }
+
+    throw 'Unsupported operating system for AOT verification.'
+}
+
+function Get-AotExecutableName {
+    if ($IsWindows) {
+        return 'Lib.Db.AotVerification.exe'
+    }
+
+    return 'Lib.Db.AotVerification'
+}
+
 Write-Host 'Lib.Db v2.3.0 verification started.'
 Write-SecretSafeEnvironmentSummary
 
@@ -84,19 +108,21 @@ if (-not $SkipAot) {
         throw "AOT verification project was not found: $aotProject"
     }
 
+    $aotRid = Get-AotRuntimeIdentifier
+
     Invoke-Checked 'dotnet' @(
         'publish',
         $aotProject,
         '-c', 'Release',
-        '-r', 'win-x64',
+        '-r', $aotRid,
         '--self-contained', 'true',
         '-p:PublishAot=true',
         '-p:TreatWarningsAsErrors=true',
         '-v:minimal'
     )
 
-    $aotPublishDirectory = Join-Path (Split-Path -Parent $aotProject) 'bin\Release\net10.0\win-x64\publish'
-    $aotExecutable = Join-Path $aotPublishDirectory 'Lib.Db.AotVerification.exe'
+    $aotPublishDirectory = Join-Path (Split-Path -Parent $aotProject) (Join-Path "bin\Release\net10.0" (Join-Path $aotRid 'publish'))
+    $aotExecutable = Join-Path $aotPublishDirectory (Get-AotExecutableName)
     if (-not (Test-Path -LiteralPath $aotExecutable)) {
         throw "AOT verification executable was not produced: $aotExecutable"
     }
