@@ -7,6 +7,7 @@
 #nullable enable
 
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
 
@@ -919,6 +920,10 @@ internal sealed class MonitoredSqlDataReader : DbDataReader
     public override DateTime GetDateTime(int ordinal) => _inner.GetDateTime(ordinal);
     public override decimal GetDecimal(int ordinal) => _inner.GetDecimal(ordinal);
     public override double GetDouble(int ordinal) => _inner.GetDouble(ordinal);
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2093",
+        Justification = "Monitored reader forwards schema Type values only; Lib.Db does not reflect over returned members here.")]
     public override Type GetFieldType(int ordinal) => _inner.GetFieldType(ordinal);
     public override float GetFloat(int ordinal) => _inner.GetFloat(ordinal);
     public override Guid GetGuid(int ordinal) => _inner.GetGuid(ordinal);

@@ -6,6 +6,7 @@
 #nullable enable
 
 using System.Reflection;
+using System.Diagnostics.CodeAnalysis;
 using Lib.Db.Contracts.Schema;
 using Lib.Db.Core;
 using Lib.Db.Execution.Binding;
@@ -55,6 +56,10 @@ public static class LibDbHostExtensions
     /// </summary>
     /// <param name="host">호스트 인스턴스</param>
     /// <returns>체이닝을 위한 IHost</returns>
+    [RequiresDynamicCode(
+        "UseHighPerformanceDb bridges legacy generated TVP accessors through MakeGenericMethod. Native AOT applications should use runtime static-shape TVP registration instead.")]
+    [RequiresUnreferencedCode(
+        "UseHighPerformanceDb bridges legacy generated TVP accessors through MakeGenericMethod. Trimmed applications should use runtime static-shape TVP registration instead.")]
     public static IHost UseHighPerformanceDb(this IHost host)
     {
         // DataBindingEngine(Static) -> Validator(DI Instance) 브리지 설정

@@ -102,6 +102,54 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
     }
 
     /// <inheritdoc />
+    public async Task FlushTvpAsync(string instanceHash, string tvpName, CancellationToken ct = default)
+    {
+        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("FlushTvp");
+        string diagnosticInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
+        activity?.SetTag("instance", diagnosticInstance);
+        activity?.SetTag("tvp", tvpName);
+
+        Stopwatch sw = Stopwatch.StartNew();
+
+        try
+        {
+            long newEpoch = _epochStore.IncrementEpoch(instanceHash);
+
+            DbMetrics.TrackSchemaRefreshFromScope(true, "EpochIncrement");
+
+            _logger.LogInformation(
+                "[SchemaFlush] TVP Epoch 증가: {Instance}, TVP={TvpName}, Epoch={Epoch}",
+                diagnosticInstance, tvpName, newEpoch);
+
+            await _schemaService.FlushTvpAsync(tvpName, instanceHash, ct).ConfigureAwait(false);
+
+            string epochCacheKey = SchemaCacheIdentity.ForCache(instanceHash);
+            _lastKnownEpochs.Set(epochCacheKey, newEpoch, new MemoryCacheEntryOptions
+            {
+                Size = 1,
+                SlidingExpiration = TimeSpan.FromHours(1)
+            });
+
+            DbMetrics.TrackDurationFromScope(sw.Elapsed);
+
+            activity?.SetTag("epoch", newEpoch);
+            activity?.SetTag("duration_ms", sw.ElapsedMilliseconds);
+
+            _logger.LogInformation(
+                "[SchemaFlush] TVP 완료: {Instance}, TVP={TvpName}, Epoch={Epoch}, Duration={Ms}ms",
+                diagnosticInstance, tvpName, newEpoch, sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.GetType().Name);
+            _logger.LogError(ex,
+                "[SchemaFlush] TVP 오류 발생: {Instance}, TVP={TvpName}",
+                diagnosticInstance, tvpName);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
     public long GetCurrentEpoch(string instanceHash)
     {
         return _epochStore.GetEpoch(instanceHash);

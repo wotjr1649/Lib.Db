@@ -424,6 +424,49 @@ public sealed class RuntimeTvpBindingTests
             .WithMessage("*TVP type name*");
     }
 
+    [Fact]
+    public void TvpFactoryRegistry_ShouldRejectUnsafeRegisteredTypeName()
+    {
+        Action act = () => TvpFactoryRegistry.Register(
+            typeof(List<OrderItemRow>),
+            static _ => new DataTable().CreateDataReader(),
+            "dbo.T_OrderItem;DROP");
+
+        act.Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*TVP type name*");
+    }
+
+    [Fact]
+    public void BindRawParameter_ShouldRejectUnsafeTvpRowAttributeTypeName()
+    {
+        var rows = new[] { new UnsafeAttributeOrderItemRow(1) };
+
+        using var command = new SqlCommand();
+        Action act = () => DbBinder.BindRawParameter(command, "Rows", rows);
+
+        act.Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*TVP type name*");
+    }
+
+    [Fact]
+    public void BindParameter_ShouldRejectUnsafeStructuredMetadataTypeName()
+    {
+        using var command = new SqlCommand();
+        using DataTable table = new();
+
+        Action act = () => DbBinder.BindParameter(
+            command,
+            StructuredRowsMetadata("dbo.T_OrderItem;DROP"),
+            table,
+            strictCheck: true);
+
+        act.Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*TVP type name*");
+    }
+
     private static SpParameterMetadata StructuredRowsMetadata(string typeName)
         => new(
             Name: "@Rows",
@@ -448,4 +491,7 @@ public sealed class RuntimeTvpBindingTests
 
     [TvpRow(TypeName = "dbo.T_ReflectionFallbackOrderItem")]
     private sealed record AttributeAndStaticShapeOrderItemRow(int SourceId, string Code, int Qty);
+
+    [TvpRow(TypeName = "dbo.T_Unsafe;DROP")]
+    private sealed record UnsafeAttributeOrderItemRow(int Id);
 }

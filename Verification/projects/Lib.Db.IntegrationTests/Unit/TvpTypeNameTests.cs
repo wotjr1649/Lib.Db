@@ -40,4 +40,36 @@ public sealed class TvpTypeNameTests
             .Throw<ArgumentException>()
             .WithMessage("*TVP type name*");
     }
+
+    [Fact]
+    public void Constructor_ShouldAcceptSafeTypeNameParts()
+    {
+        TvpTypeName typeName = new("dbo", "T_OrderItem");
+
+        typeName.FullName.Should().Be("dbo.T_OrderItem");
+    }
+
+    [Fact]
+    public void Constructor_ShouldRejectUnsafeSchemaPart()
+    {
+        Action nullSchema = () => _ = new TvpTypeName(null!, "T_OrderItem");
+        Action badSchema = () => _ = new TvpTypeName("1bad", "T_OrderItem");
+
+        nullSchema.Should().Throw<ArgumentException>().WithMessage("*TVP type name*");
+        badSchema.Should().Throw<ArgumentException>().WithMessage("*TVP type name*");
+    }
+
+    [Fact]
+    public void Constructor_ShouldRejectUnsafeNamePart()
+    {
+        string tooLong = new('T', 129);
+
+        Action emptyName = () => _ = new TvpTypeName("dbo", string.Empty);
+        Action longName = () => _ = new TvpTypeName("dbo", tooLong);
+        Action badName = () => _ = new TvpTypeName("dbo", "T_OrderItem;DROP");
+
+        emptyName.Should().Throw<ArgumentException>().WithMessage("*TVP type name*");
+        longName.Should().Throw<ArgumentException>().WithMessage("*TVP type name*");
+        badName.Should().Throw<ArgumentException>().WithMessage("*TVP type name*");
+    }
 }

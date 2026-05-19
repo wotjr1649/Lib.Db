@@ -15,8 +15,10 @@ using Lib.Db.Contracts.Core;
 using Lib.Db.Contracts.Entry;
 using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
+using Lib.Db.Contracts.Schema;
 using Lib.Db.Diagnostics;
 using Lib.Db.Execution.Bulk;
+using Lib.Db.Execution.Tvp;
 using Lib.Db.Fluent;
 
 namespace Lib.Db.Core;
@@ -37,7 +39,9 @@ namespace Lib.Db.Core;
 internal sealed class DbSession(
     IDbExecutorFactory executorFactory,
     IDbConnectionFactory connectionFactory,
-    LibDbOptions options) : IDbSession, IDisposable
+    LibDbOptions options,
+    ITvpSchemaProvider? tvpSchemaProvider = null,
+    ISchemaFlushCoordinator? schemaFlushCoordinator = null) : IDbSession, IDisposable
 {
     #region 필드 선언 (C# 14)
 
@@ -114,6 +118,25 @@ internal sealed class DbSession(
     /// </para>
     /// </summary>
     public IProcedureStage Default => Use(options.ConnectionStringNames[0]);
+
+    /// <summary>
+    /// 기본 인스턴스의 스키마 유지보수 API를 시작합니다.
+    /// </summary>
+    public ISchemaMaintenanceStage Schema => UseSchema(options.ConnectionStringNames[0]);
+
+    /// <summary>
+    /// 지정된 DB 인스턴스의 스키마 유지보수 API를 시작합니다.
+    /// </summary>
+    public ISchemaMaintenanceStage UseSchema(string instanceName)
+    {
+        CheckDisposed();
+
+        ISchemaFlushCoordinator coordinator = schemaFlushCoordinator
+            ?? throw new InvalidOperationException(
+                "Schema flush coordinator가 등록되지 않았습니다. AddSchemaFlushCoordination을 등록해야 합니다.");
+
+        return new SchemaMaintenanceStage(tvpSchemaProvider, coordinator, instanceName);
+    }
 
     /// <summary>
     /// 인스턴스별 독립 트랜잭션 스코프를 시작합니다. (기본 격리 수준: ReadCommitted)

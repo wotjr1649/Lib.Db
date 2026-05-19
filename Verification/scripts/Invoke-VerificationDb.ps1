@@ -163,6 +163,30 @@ function Assert-SqlcmdIncludesAllowed {
     }
 }
 
+function Assert-LocalSqlServer {
+    param([Parameter(Mandatory = $true)] [string] $Server)
+
+    if ([string]::IsNullOrWhiteSpace($Server)) {
+        throw "Direct verification SQL execution requires a local SQL Server data source."
+    }
+
+    $normalized = $Server.Trim()
+    foreach ($prefix in @('tcp:', 'np:', 'lpc:')) {
+        if ($normalized.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            $normalized = $normalized.Substring($prefix.Length)
+            break
+        }
+    }
+
+    $hostName = ($normalized -split '[,\\]', 2)[0].Trim('[', ']')
+    $isLocal = $hostName -in @('.', '(local)', 'localhost', '127.0.0.1', '::1') -or
+        $hostName.StartsWith('(localdb)', [StringComparison]::OrdinalIgnoreCase)
+
+    if (-not $isLocal) {
+        throw "Direct verification SQL execution is restricted to local disposable SQL Server instances. Refusing server '$Server'."
+    }
+}
+
 function Invoke-AllowlistedSqlFile {
     param(
         [Parameter(Mandatory = $true)] [string] $SqlFile,
@@ -235,6 +259,8 @@ $entry = $DbAllowlist[$Db]
 if ($null -eq $entry) {
     throw "Unknown verification database."
 }
+
+Assert-LocalSqlServer -Server $Server
 
 if ($Matrix) {
     Write-Host "Matrix switch is accepted for compatibility; DB SQL setup/verify selection is unchanged."

@@ -7,10 +7,8 @@
 	<LangVersion>preview</LangVersion>
 	<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-	  <!-- AOT 및 Trimming 호환성 -->
+	  <!-- Library compatibility analyzers. NativeAOT publishing is validated by executable smoke projects. -->
 	  <IsAotCompatible>true</IsAotCompatible>
-	  <IsPublishTrimmed>true</IsPublishTrimmed>
-	  <PublishAot>true</PublishAot>
 
 	  <!-- 분석기/제너레이터가 모든 빌드에서 항상 동작하도록 -->
 	<EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
@@ -30,8 +28,10 @@
 </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.1" />
     <PackageReference Include="Microsoft.Extensions.Caching.Hybrid" Version="10.5.0" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.6" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.6" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.6" />
     <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="10.0.6" />
@@ -42,7 +42,7 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <Version>2.2.1</Version>
+    <Version>2.3.0</Version>
     <Authors>KIM JAE SEOK</Authors>
     <Description>High-Performance Data Access Library for .NET 10</Description>
     <PackageTags>sql-server;performance;aot;resilience</PackageTags>
@@ -73,22 +73,15 @@
     <DebugType>portable</DebugType>
   </PropertyGroup>
 
-  <ItemGroup>
-	  <!-- Explicitly pack the generator DLL -->
-	  <None Include="..\Lib.Db.TvpGen\bin\$(Configuration)\net10.0\Lib.Db.TvpGen.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- Keep ProjectReference for build dependency but do not reference assembly -->
-    <ProjectReference Include="..\Lib.Db.TvpGen\Lib.Db.TvpGen.csproj" ReferenceOutputAssembly="false" />
-  </ItemGroup>
-
 	<ItemGroup>
 		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
 			<_Parameter1>DynamicProxyGenAssembly2</_Parameter1>
 		</AssemblyAttribute>
 		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
 			<_Parameter1>Lib.Db.IntegrationTests</_Parameter1>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+			<_Parameter1>Lib.Db.AotVerification</_Parameter1>
 		</AssemblyAttribute>
 	</ItemGroup>
 

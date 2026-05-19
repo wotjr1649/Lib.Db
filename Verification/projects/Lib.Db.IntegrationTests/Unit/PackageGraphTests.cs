@@ -13,7 +13,12 @@ public sealed class PackageGraphTests
     {
         DirectoryInfo repoRoot = FindRepoRoot();
         string project = File.ReadAllText(Path.Combine(repoRoot.FullName, "Lib.Db", "Lib.Db.csproj"));
-        string testsProject = File.ReadAllText(Path.Combine(repoRoot.FullName, "Tests", "Lib.Db.IntegrationTests", "Lib.Db.IntegrationTests.csproj"));
+        string testsProject = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "projects",
+            "Lib.Db.IntegrationTests",
+            "Lib.Db.IntegrationTests.csproj"));
         string solution = File.ReadAllText(Path.Combine(repoRoot.FullName, "Lib.Db.slnx"));
 
         project.Should().NotContain("Lib.Db.TvpGen");

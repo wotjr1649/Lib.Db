@@ -1085,9 +1085,13 @@ public sealed class TvpCoreCoverageTests
             reader.GetValue(1).Should().Be(DBNull.Value);
         }
 
+        TvpSchemaDescriptor strictDescriptor = Descriptor(
+            "dbo.T_PocoStrictMissingCoverage",
+            Column("Id", 0, SqlDbType.Int),
+            Column("Missing", 1, SqlDbType.NVarChar, maxLength: 80, isNullable: true));
         Action strictMissing = () => TvpRowAccessorCache.GetOrAdd(
             typeof(AccessorEdgeRow),
-            optionalDescriptor with { Fingerprint = optionalDescriptor.Fingerprint + "-strict" },
+            strictDescriptor,
             TvpBindingPolicy.Strict);
         strictMissing.Should().Throw<InvalidOperationException>()
             .WithMessage("*does not expose required column 'Missing'*");
@@ -1178,6 +1182,44 @@ public sealed class TvpCoreCoverageTests
         badSchema.Should().Throw<ArgumentException>();
         Action badName = () => TvpTypeName.Parse("dbo.1bad");
         badName.Should().Throw<ArgumentException>();
+        Action badColumn = () => TvpColumnShape.Required("Id]; DROP TABLE Users;--", typeof(int));
+        badColumn.Should().Throw<ArgumentException>();
+        Action longColumn = () => TvpColumnShape.Required(new string('C', 129), typeof(int));
+        longColumn.Should().Throw<ArgumentException>();
+        Action badColumnCtor = () => _ = new TvpColumnShape("Id;DROP", typeof(int), allowNull: false);
+        badColumnCtor.Should().Throw<ArgumentException>();
+        Action nullColumnType = () => _ = new TvpColumnShape("Id", null!, allowNull: false);
+        nullColumnType.Should().Throw<ArgumentNullException>();
+        Action badColumnWith = () => _ = TvpColumnShape.Required("Id", typeof(int)) with { Name = "Id;DROP" };
+        badColumnWith.Should().Throw<ArgumentException>();
+        Action badTypeCtor = () => _ = new TvpTypeName("dbo", "Bad;DROP");
+        badTypeCtor.Should().Throw<ArgumentException>();
+
+        TvpTypeName invalidDescriptorTypeName = TvpTypeName.Parse("dbo.T_InvalidDescriptorColumn");
+        TvpColumnMetadata[] invalidDescriptorColumns = [Column("Bad;DROP", 0, SqlDbType.Int, isNullable: false)];
+        TvpSchemaDescriptor invalidColumnDescriptor = new(
+            invalidDescriptorTypeName,
+            VersionToken: 1,
+            invalidDescriptorColumns,
+            TvpSchemaFingerprint.Compute(invalidDescriptorTypeName, 1, invalidDescriptorColumns));
+        Action invalidDescriptorBinding = () => TvpRowAccessorCache.GetOrAdd(
+            typeof(StaticShapeRow),
+            invalidColumnDescriptor,
+            TvpBindingPolicy.Strict);
+        invalidDescriptorBinding.Should().Throw<ArgumentException>();
+
+        TvpSchemaDescriptor fingerprintMismatch = Descriptor(
+            "dbo.T_FingerprintMismatch",
+            Column("Id", 0, SqlDbType.Int, isNullable: false)) with
+        {
+            Fingerprint = "stale"
+        };
+        Action staleFingerprint = () => TvpRowAccessorCache.GetOrAdd(
+            typeof(StaticShapeRow),
+            fingerprintMismatch,
+            TvpBindingPolicy.Strict);
+        staleFingerprint.Should().Throw<InvalidOperationException>()
+            .WithMessage("*fingerprint mismatch*");
 
         var schema = new TvpSchema
         {

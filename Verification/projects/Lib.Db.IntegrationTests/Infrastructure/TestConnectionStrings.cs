@@ -22,19 +22,35 @@ public static class TestConnectionStrings
 
     private const string EnvironmentVariablePrefix = "LIBDB_TEST_CONNECTION_";
     private const string AllowSchemaInitEnvironmentVariable = "LIBDB_TEST_ALLOW_SCHEMA_INIT";
+    private const string LocalSqlServerSection = "LibDbTest:SqlServer";
+    private const string LocalSqlDatabaseSection = "LibDbTest:Databases";
     private static readonly char[] s_catalogTokenSeparators = ['_', '-', '.', ' '];
     private static readonly string[] s_knownNames = [Verification, Sorter, Stress, Chaos, Benchmark];
 
     /// <summary>
     /// 테스트 설정 파일과 환경 변수를 함께 읽는 기본 구성 객체를 생성한다.
     /// </summary>
-    public static IConfigurationRoot CreateConfiguration(IReadOnlyDictionary<string, string?>? aliasEnvironment = null)
+    public static IConfigurationRoot CreateConfiguration(
+        IReadOnlyDictionary<string, string?>? aliasEnvironment = null,
+        IReadOnlyDictionary<string, string?>? configurationOverrides = null)
     {
-        Dictionary<string, string?> aliases = BuildAliasConfiguration(aliasEnvironment);
-        IConfigurationRoot preliminary = BuildConfiguration(aliases);
-        Dictionary<string, string?> dynamicValues = new(aliases, StringComparer.OrdinalIgnoreCase);
+        AssertNoFileBackedConnectionStringPasswords(configurationOverrides);
 
-        string[] configuredNames = BuildConfiguredConnectionNames(preliminary);
+        Dictionary<string, string?> baseValues = configurationOverrides is null
+            ? new(StringComparer.OrdinalIgnoreCase)
+            : new(configurationOverrides, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string?> aliases = BuildAliasConfiguration(aliasEnvironment);
+        Dictionary<string, string?> preliminaryValues = new(baseValues, StringComparer.OrdinalIgnoreCase);
+        AddValues(preliminaryValues, aliases);
+
+        IConfigurationRoot preliminary = BuildConfiguration(preliminaryValues);
+        Dictionary<string, string?> dynamicValues = new(baseValues, StringComparer.OrdinalIgnoreCase);
+        AddValues(dynamicValues, aliases);
+
+        AddLocalSqlServerConnectionStrings(preliminary, dynamicValues);
+
+        IConfigurationRoot generated = BuildConfiguration(dynamicValues);
+        string[] configuredNames = BuildConfiguredConnectionNames(generated);
         for (int i = 0; i < configuredNames.Length; i++)
             dynamicValues[$"LibDb:ConnectionStringNames:{i}"] = configuredNames[i];
 
@@ -74,12 +90,12 @@ public static class TestConnectionStrings
 
         string? value = configuration.GetConnectionString(name);
         if (!string.IsNullOrWhiteSpace(value))
-            return value;
+            return RequireLocalTestDatabase(value, name);
 
         string alias = GetAliasEnvironmentVariableName(name);
         value = Environment.GetEnvironmentVariable(alias);
         if (!string.IsNullOrWhiteSpace(value))
-            return value;
+            return RequireLocalTestDatabase(value, name);
 
         throw SkipException.ForSkip(
             $"Connection string '{name}' is not configured. Set 'ConnectionStrings__{name}' or '{alias}' before running database integration tests.");
@@ -108,7 +124,7 @@ public static class TestConnectionStrings
             return;
 
         throw SkipException.ForSkip(
-            $"Connection string '{name}' is not marked as a test database. Use a database name containing a separated TEST/LOCAL/DEV token or set '{AllowSchemaInitEnvironmentVariable}=true' for explicit schema initialization.");
+            $"Connection string '{name}' is not marked as a local test database. Use a local SQL Server data source and a database name containing a separated TEST/LOCAL/DEV token, or set '{AllowSchemaInitEnvironmentVariable}=true' for explicit schema initialization.");
     }
 
     /// <summary>
@@ -140,7 +156,7 @@ public static class TestConnectionStrings
 
     private static IConfigurationRoot BuildConfiguration(IReadOnlyDictionary<string, string?> values)
         => new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
+            .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true)
             .AddEnvironmentVariables()
             .AddInMemoryCollection(values)
@@ -165,6 +181,120 @@ public static class TestConnectionStrings
         return names.ToArray();
     }
 
+    private static void AddLocalSqlServerConnectionStrings(
+        IConfiguration configuration,
+        Dictionary<string, string?> dynamicValues)
+    {
+        foreach (string name in s_knownNames)
+        {
+            string key = $"ConnectionStrings:{name}";
+            if (dynamicValues.ContainsKey(key) || !string.IsNullOrWhiteSpace(configuration.GetConnectionString(name)))
+                continue;
+
+            if (TryBuildLocalSqlServerConnectionString(configuration, name, out string connectionString))
+                dynamicValues[key] = connectionString;
+        }
+    }
+
+    private static bool TryBuildLocalSqlServerConnectionString(
+        IConfiguration configuration,
+        string name,
+        out string connectionString)
+    {
+        string? database = configuration[$"{LocalSqlDatabaseSection}:{name}"];
+        if (string.IsNullOrWhiteSpace(database))
+        {
+            connectionString = string.Empty;
+            return false;
+        }
+
+        bool integratedSecurity = ReadBoolean(configuration, $"{LocalSqlServerSection}:IntegratedSecurity", defaultValue: false);
+        string? userId = configuration[$"{LocalSqlServerSection}:UserId"];
+        if (!string.IsNullOrWhiteSpace(configuration[$"{LocalSqlServerSection}:Password"]))
+            throw new InvalidOperationException(
+                $"{LocalSqlServerSection}:Password must not be configured. Use {LocalSqlServerSection}:PasswordEnvironmentVariable instead.");
+
+        string? password = null;
+        string? passwordEnvironmentVariable = configuration[$"{LocalSqlServerSection}:PasswordEnvironmentVariable"];
+
+        if (!integratedSecurity && !string.IsNullOrWhiteSpace(passwordEnvironmentVariable))
+            password = Environment.GetEnvironmentVariable(passwordEnvironmentVariable);
+
+        string dataSource = ReadString(configuration, $"{LocalSqlServerSection}:DataSource", "127.0.0.1");
+        if (!IsLocalDataSource(dataSource))
+        {
+            connectionString = string.Empty;
+            return false;
+        }
+
+        if (!integratedSecurity && (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(password)))
+        {
+            connectionString = string.Empty;
+            return false;
+        }
+
+        SqlConnectionStringBuilder builder = new()
+        {
+            DataSource = dataSource,
+            InitialCatalog = database,
+            IntegratedSecurity = integratedSecurity,
+            MultipleActiveResultSets = ReadBoolean(configuration, $"{LocalSqlServerSection}:MultipleActiveResultSets", defaultValue: true),
+            TrustServerCertificate = ReadBoolean(configuration, $"{LocalSqlServerSection}:TrustServerCertificate", defaultValue: true),
+            ConnectTimeout = ReadInt(configuration, $"{LocalSqlServerSection}:ConnectTimeoutSeconds", defaultValue: 15),
+            ApplicationName = ReadString(configuration, $"{LocalSqlServerSection}:ApplicationName", "Lib.Db.IntegrationTests")
+        };
+
+        string encrypt = ReadString(configuration, $"{LocalSqlServerSection}:Encrypt", "False");
+        builder["Encrypt"] = encrypt;
+
+        if (!integratedSecurity)
+        {
+            builder.UserID = userId;
+            builder.Password = password;
+        }
+
+        connectionString = builder.ConnectionString;
+        return true;
+    }
+
+    private static string ReadString(IConfiguration configuration, string key, string defaultValue)
+    {
+        string? value = configuration[key];
+        return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
+    }
+
+    private static bool ReadBoolean(IConfiguration configuration, string key, bool defaultValue)
+        => bool.TryParse(configuration[key], out bool value) ? value : defaultValue;
+
+    private static int ReadInt(IConfiguration configuration, string key, int defaultValue)
+        => int.TryParse(configuration[key], out int value) ? value : defaultValue;
+
+    private static bool IsLocalDataSource(string dataSource)
+    {
+        if (string.IsNullOrWhiteSpace(dataSource))
+            return false;
+
+        string normalized = dataSource.Trim();
+        if (normalized.StartsWith("tcp:", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[4..];
+
+        string host = normalized.Split([',', '\\'], 2, StringSplitOptions.TrimEntries)[0];
+        return string.Equals(host, ".", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "(local)", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase) ||
+            host.StartsWith("(localdb)", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AddValues(
+        Dictionary<string, string?> target,
+        IReadOnlyDictionary<string, string?> values)
+    {
+        foreach ((string key, string? value) in values)
+            target[key] = value;
+    }
+
     private static bool IsExplicitSchemaInitializationAllowed()
         => bool.TryParse(Environment.GetEnvironmentVariable(AllowSchemaInitEnvironmentVariable), out bool allowed) && allowed;
 
@@ -172,13 +302,22 @@ public static class TestConnectionStrings
     {
         try
         {
-            string catalog = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
-            return IsSafeSchemaCatalogName(catalog);
+            SqlConnectionStringBuilder builder = new(connectionString);
+            return IsLocalDataSource(builder.DataSource) && IsSafeSchemaCatalogName(builder.InitialCatalog);
         }
         catch (ArgumentException)
         {
             return false;
         }
+    }
+
+    private static string RequireLocalTestDatabase(string connectionString, string name)
+    {
+        if (IsSchemaInitializationAllowed(connectionString))
+            return connectionString;
+
+        throw SkipException.ForSkip(
+            $"Connection string '{name}' is not marked as a local test database. Use a local SQL Server data source and a database name containing a separated TEST/LOCAL/DEV token.");
     }
 
     private static bool IsSafeSchemaCatalogName(string catalog)
@@ -215,5 +354,53 @@ public static class TestConnectionStrings
         }
 
         return null;
+    }
+
+    private static void AssertNoFileBackedConnectionStringPasswords(
+        IReadOnlyDictionary<string, string?>? configurationOverrides)
+    {
+        IConfigurationRoot jsonConfiguration = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true)
+            .Build();
+
+        foreach (string name in s_knownNames)
+        {
+            if (ContainsPasswordToken(jsonConfiguration.GetConnectionString(name)))
+            {
+                throw new InvalidOperationException(
+                    $"ConnectionStrings:{name} must not contain a password in appsettings.json. Use {EnvironmentVariablePrefix}{name.ToUpperInvariant()} or {LocalSqlServerSection}:PasswordEnvironmentVariable instead.");
+            }
+        }
+
+        if (configurationOverrides is null)
+            return;
+
+        foreach ((string key, string? value) in configurationOverrides)
+        {
+            if (key.StartsWith("ConnectionStrings:", StringComparison.OrdinalIgnoreCase) &&
+                ContainsPasswordToken(value))
+            {
+                throw new InvalidOperationException(
+                    $"{key} must not contain a password in file-backed test configuration. Use environment variables instead.");
+            }
+        }
+    }
+
+    private static bool ContainsPasswordToken(string? connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+            return false;
+
+        try
+        {
+            SqlConnectionStringBuilder builder = new(connectionString);
+            return !string.IsNullOrWhiteSpace(builder.Password);
+        }
+        catch (ArgumentException)
+        {
+            return connectionString.Contains("Password=", StringComparison.OrdinalIgnoreCase) ||
+                connectionString.Contains("Pwd=", StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

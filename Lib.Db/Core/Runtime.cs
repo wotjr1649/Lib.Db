@@ -263,7 +263,7 @@ public static class LibDbRuntime
     /// 테스트/개발 환경에서 Lib.Db의 정적 상태를 초기화합니다.
     /// <para>
     /// - TVP 검증 콜백 제거 (<see cref="DbBinder.ValidatorCallback"/> = null)<br/>
-    /// - TVP/버퍼 관련 캐시 모두 초기화 (<see cref="DbBinder.ClearTvpCaches"/>)<br/>
+    /// - TVP/버퍼 관련 캐시 모두 초기화 (<see cref="DbBinder.ClearTvpCaches()"/>)<br/>
     /// - 메트릭 전역 설정 초기화 (<see cref="DbMetrics.ResetForTesting"/> 호출)<br/>
     /// </para>
     /// <para>

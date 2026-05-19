@@ -108,6 +108,25 @@ internal static class NegativeCache
     }
 
     /// <summary>
+    /// 특정 객체의 '존재하지 않음' 캐시 항목을 제거합니다.
+    /// </summary>
+    /// <param name="dbHash">대상 데이터베이스 인스턴스의 식별자 또는 해시값</param>
+    /// <param name="objectName">객체 이름</param>
+    /// <param name="objectType">객체 타입</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void RemoveMissing(string dbHash, string objectName, string objectType)
+    {
+        string key = BuildKey(dbHash, objectName, objectType);
+
+        if (s_missingObjects.TryRemove(key, out _))
+        {
+            int current = Interlocked.Decrement(ref s_count);
+            if (current < 0)
+                Interlocked.Exchange(ref s_count, 0);
+        }
+    }
+
+    /// <summary>
     /// 지정된 객체가 '존재하지 않음'으로 캐시되어 있는지 확인하고, 그렇다면 즉시 예외를 던집니다.
     /// <para>
     /// <b>[성능 보장]</b><br/>

@@ -7,6 +7,7 @@
 #nullable enable
 
 using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
 using Lib.Db.Contracts.Core;
@@ -312,6 +313,10 @@ internal sealed class FormattableStringParameterStage : IParameterStage
         return merged;
     }
 
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2075",
+        Justification = "Anonymous-object parameter enumeration is a JIT convenience path. Native AOT callers should pass dictionaries or generated parameter mappers.")]
     private static IEnumerable<KeyValuePair<string, object?>> EnumerateNamedParameters(object parameters)
     {
         if (parameters is IEnumerable<KeyValuePair<string, object?>> typedPairs)

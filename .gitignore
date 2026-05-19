@@ -15,6 +15,9 @@
 
 ## Test Results
 TestResults/
+BenchmarkDotNet.Artifacts/
+artifacts/
+Verification/artifacts/
 *.trdx
 *.coverage
 *.bak

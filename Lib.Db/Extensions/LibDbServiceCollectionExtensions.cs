@@ -13,8 +13,10 @@ using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Schema;
 using Lib.Db.Execution.Binding;
+using Lib.Db.Execution.Tvp;
 using Lib.Db.Hosting;
 using Lib.Db.Schema;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -42,6 +44,10 @@ public static class LibDbServiceCollectionExtensions
     /// <param name="services">서비스 컬렉션</param>
     /// <param name="configuration">Lib.Db 설정을 포함한 애플리케이션 구성</param>
     /// <returns>체이닝을 위한 <see cref="IServiceCollection"/></returns>
+    [RequiresUnreferencedCode(
+        "ConfigurationBinder-based AddLibDb overload is a configuration convenience API. Use AddLibDb(Action<LibDbOptions>) for Native AOT.")]
+    [RequiresDynamicCode(
+        "ConfigurationBinder-based AddLibDb overload can require runtime code generation. Use AddLibDb(Action<LibDbOptions>) for Native AOT.")]
     public static IServiceCollection AddLibDb(this IServiceCollection services, IConfiguration configuration)
     {
         return services.AddHighPerformanceDb(options =>
@@ -66,6 +72,21 @@ public static class LibDbServiceCollectionExtensions
             }
         });
     }
+
+    /// <summary>
+    /// 코드 기반 옵션 설정으로 Lib.Db 필수 서비스를 일괄 등록합니다.
+    /// <para>
+    /// 런타임 TVP fast-path는 <c>services.AddLibDb(o => o.Tvp.Map&lt;TRow&gt;("dbo.Type"))</c>
+    /// 형태로 등록할 수 있습니다.
+    /// </para>
+    /// </summary>
+    /// <param name="services">서비스 컬렉션</param>
+    /// <param name="configure">Lib.Db 옵션 설정 델리게이트</param>
+    /// <returns>체이닝을 위한 <see cref="IServiceCollection"/></returns>
+    public static IServiceCollection AddLibDb(
+        this IServiceCollection services,
+        Action<LibDbOptions> configure)
+        => services.AddHighPerformanceDb(configure);
 
     /// <summary>
     /// Lib.Db 필수 서비스를 일괄 등록합니다.
@@ -109,6 +130,9 @@ public static class LibDbServiceCollectionExtensions
             options.ConnectionStrings = corrected;
         });
 
+        // Runtime TVP fast-path 등 정적 바인딩 정책을 최종 옵션으로 반영합니다.
+        services.PostConfigure<LibDbOptions>(DbBinder.ConfigureTvp);
+
         // 2. 핵심 서비스 등록
         services.RegisterLibDbCoreServices();
 
@@ -143,6 +167,7 @@ public static class LibDbServiceCollectionExtensions
         services.TryAddSingleton<ISchemaRepository, SqlSchemaRepository>();
         services.TryAddSingleton<ISchemaService, SchemaService>();
         services.TryAddSingleton<ITvpSchemaValidator, TvpSchemaValidator>();
+        services.TryAddSingleton<ITvpSchemaProvider, TvpSchemaProvider>();
 
         // Session (Scoped)
         services.TryAddScoped<DbSession>();
@@ -298,7 +323,8 @@ public static class LibDbServiceCollectionExtensions
     /// <typeparam name="TInterceptor">인터셉터 구현 타입</typeparam>
     /// <param name="services">서비스 컬렉션</param>
     /// <returns>체이닝을 위한 IServiceCollection</returns>
-    public static IServiceCollection AddLibDbInterceptor<TInterceptor>(
+    public static IServiceCollection AddLibDbInterceptor<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TInterceptor>(
         this IServiceCollection services)
         where TInterceptor : class, Lib.Db.Contracts.Infrastructure.IDbInterceptor
     {

@@ -22,6 +22,7 @@ public static partial class BenchmarkDatabase
     private const string ConnectionStringName = "Benchmark";
     private const string EnvironmentVariableName = "LIBDB_BENCHMARK_CONNECTION";
     private const string AllowResetEnvironmentVariableName = "LIBDB_BENCHMARK_ALLOW_RESET";
+    private const string ExpectedBenchmarkCatalog = "LIBDB_BENCH_TEST";
     private const string FullMatrixScriptFileName = "setup-libdb-bench-test.sql";
     private const string ResetNarrowWideBenchmarkObjectsSql = """
         IF OBJECT_ID('[dbo].[libdb_bench_InsertWideOrderItems]', 'P') IS NOT NULL
@@ -249,12 +250,41 @@ public static partial class BenchmarkDatabase
                 $"Benchmark reset requires {AllowResetEnvironmentVariableName}=true because it drops and recreates benchmark objects.");
         }
 
-        string catalog = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
-        if (!catalog.Contains("BENCH", StringComparison.OrdinalIgnoreCase))
+        SqlConnectionStringBuilder builder = new(connectionString);
+        if (!IsLocalDataSource(builder.DataSource))
         {
             throw new InvalidOperationException(
-                "Benchmark reset requires a database name containing 'BENCH'. Refusing to run destructive benchmark DDL on the configured catalog.");
+                "Benchmark reset requires a local SQL Server data source. Refusing to run destructive benchmark DDL on a remote or shared server.");
         }
+
+        string catalog = builder.InitialCatalog;
+        if (!string.Equals(catalog, ExpectedBenchmarkCatalog, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Benchmark reset requires the local '{ExpectedBenchmarkCatalog}' catalog. Refusing to run destructive benchmark DDL on the configured catalog.");
+        }
+    }
+
+    private static bool IsLocalDataSource(string dataSource)
+    {
+        if (string.IsNullOrWhiteSpace(dataSource))
+            return false;
+
+        string normalized = dataSource.Trim();
+        if (normalized.StartsWith("tcp:", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("np:", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("lpc:", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[4..];
+        }
+
+        string host = normalized.Split([',', '\\'], 2, StringSplitOptions.TrimEntries)[0].Trim('[', ']');
+        return string.Equals(host, ".", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "(local)", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase) ||
+            host.StartsWith("(localdb)", StringComparison.OrdinalIgnoreCase);
     }
 
     public sealed record DatabaseObjectInfo(string ObjectType, string SchemaName, string ObjectName);

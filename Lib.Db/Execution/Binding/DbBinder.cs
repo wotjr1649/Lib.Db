@@ -102,6 +102,10 @@ namespace Lib.Db.Execution.Binding;
 public static partial class DbBinder
 {
     private const string RedactedCommandText = "[redacted]";
+    private const string ReflectionTvpFallbackRequiresUnreferencedCodeMessage =
+        "Reflection-based TVP fallback inspects row metadata. Use LibDb.Tvp(..., shape) or options.Tvp.Map<T>().Column(...) for Native AOT.";
+    private const string ReflectionTvpFallbackRequiresDynamicCodeMessage =
+        "Reflection-based TVP fallback builds generic readers at runtime. Use static TVP shape mapping for Native AOT.";
 
     // =========================================================================
     // 0. 정적 설정 및 브리지
@@ -148,6 +152,11 @@ public static partial class DbBinder
     /// </summary>
     public static void ClearTvpCaches() => Tvp.ClearCaches();
 
+    /// <summary>
+    /// 지정한 TVP 타입의 descriptor 기반 row accessor 캐시를 초기화합니다.
+    /// </summary>
+    public static void ClearTvpCaches(TvpTypeName typeName) => Tvp.ClearCaches(typeName);
+
     #endregion
 
     // =========================================================================
@@ -170,6 +179,14 @@ public static partial class DbBinder
     /// <param name="meta">SP 파라미터 메타데이터</param>
     /// <param name="rawValue">원본 값(호출자 전달 값)</param>
     /// <param name="strictCheck">true인 경우 NOT NULL 위반 시 예외를 발생시킵니다.</param>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2026",
+        Justification = "Dynamic JSON fallback is reached only for string-column complex values after structured TVP handling.")]
+    [UnconditionalSuppressMessage(
+        "AOT",
+        "IL3050",
+        Justification = "Dynamic JSON fallback is reached only for string-column complex values after structured TVP handling.")]
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static void BindParameter(SqlCommand cmd, SpParameterMetadata meta, object? rawValue, bool strictCheck)
     {
@@ -190,11 +207,26 @@ public static partial class DbBinder
         }
 
         object finalValue = rawValue ?? DBNull.Value;
+        string? structuredTypeNameOverride = null;
+        bool explicitTvpBound = false;
 
         // 2. 값 변환 및 유효성 검증 (실제 값이 있을 때만)
         if (finalValue != DBNull.Value)
         {
-            if (finalValue is DateOnly dateOnly)
+            if (finalValue is LibDbTvpValue explicitTvp)
+            {
+                if (meta.SqlDbType != SqlDbType.Structured)
+                {
+                    Context ctx = Context.FromMeta(meta, typeof(LibDbTvpValue));
+                    throw new InvalidOperationException(
+                        ctx.CreateErrorMessage("TVP value can only be bound to a structured parameter.", "[TVP 바인딩 오류]"));
+                }
+
+                structuredTypeNameOverride = ResolveExplicitTvpTypeName(meta.UdtTypeName, explicitTvp.TypeName);
+                finalValue = TvpRowBinding.CreateParameterValue(explicitTvp);
+                explicitTvpBound = true;
+            }
+            else if (finalValue is DateOnly dateOnly)
             {
                 finalValue = dateOnly.ToDateTime(TimeOnly.MinValue);
             }
@@ -228,14 +260,30 @@ public static partial class DbBinder
                 finalValue = JsonSerializer.Serialize(finalValue);
             }
             // TVP(Table-Valued Parameter)
-            else if (meta.SqlDbType == SqlDbType.Structured)
+            else if (!explicitTvpBound && meta.SqlDbType == SqlDbType.Structured)
             {
-                finalValue = finalValue switch
+                if (finalValue is DataTable dt)
                 {
-                    DataTable dt => ConfigureDataTableTvp(dt, meta.UdtTypeName),
-                    IEnumerable list => Tvp.CreateReader(list, meta),
-                    _ => finalValue
-                };
+                    finalValue = ConfigureDataTableTvp(dt, NormalizeOptionalTvpTypeName(meta.UdtTypeName));
+                }
+                else if (finalValue is IDataReader reader)
+                {
+                    finalValue = reader;
+                }
+                else if (finalValue is IEnumerable list &&
+                         Tvp.TryCreateRuntimeValue(list, out object? runtimeTvpValue, out string? runtimeTypeName))
+                {
+                    if (!string.IsNullOrWhiteSpace(runtimeTypeName))
+                        structuredTypeNameOverride = ResolveExplicitTvpTypeName(
+                            meta.UdtTypeName,
+                            TvpTypeName.Parse(runtimeTypeName));
+
+                    finalValue = runtimeTvpValue;
+                }
+                else if (finalValue is IEnumerable legacyList)
+                {
+                    finalValue = Tvp.CreateReader(legacyList, meta);
+                }
             }
             // Stream 파라미터는 그대로 통과 (SqlClient가 VarBinary/Binary로 처리)
 
@@ -252,7 +300,9 @@ public static partial class DbBinder
 
         if (meta.SqlDbType == SqlDbType.Structured)
         {
-            sqlParam.TypeName = meta.UdtTypeName;
+            string? structuredTypeName = structuredTypeNameOverride ?? NormalizeOptionalTvpTypeName(meta.UdtTypeName);
+            if (!string.IsNullOrEmpty(structuredTypeName))
+                sqlParam.TypeName = structuredTypeName;
         }
         else
         {
@@ -294,6 +344,14 @@ public static partial class DbBinder
     /// <param name="name">파라미터 이름(@ 유무는 자동 보정)</param>
     /// <param name="value">파라미터 값</param>
     /// <param name="metaOverride">옵션 메타데이터(Attribute). 설정되어 있으면 추론보다 우선합니다.</param>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2026",
+        Justification = "Dynamic JSON fallback is reached only for complex non-TVP values after explicit and registered TVP fast paths.")]
+    [UnconditionalSuppressMessage(
+        "AOT",
+        "IL3050",
+        Justification = "Dynamic JSON fallback is reached only for complex non-TVP values after explicit and registered TVP fast paths.")]
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static void BindRawParameter(
         SqlCommand cmd,
@@ -315,14 +373,21 @@ public static partial class DbBinder
         object finalValue = value ?? DBNull.Value;
         SqlDbType? inferredDbType = null;
 
-        // 2. 문자열 전처리
-        if (finalValue is string strVal)
+        // 2. 명시적 런타임 TVP wrapper는 JSON/복합 객체 처리보다 우선합니다.
+        if (finalValue is LibDbTvpValue explicitTvp)
+        {
+            finalValue = TvpRowBinding.CreateParameterValue(explicitTvp);
+            inferredDbType = SqlDbType.Structured;
+            tvpTypeName = explicitTvp.TypeName.FullName;
+        }
+        // 3. 문자열 전처리
+        else if (finalValue is string strVal)
         {
             ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(strVal);
             if (processedSpan.Length != strVal.Length)
                 finalValue = processedSpan.ToString();
         }
-        // 3. SQL Server date/time 스칼라 보정
+        // 4. SQL Server date/time 스칼라 보정
         else if (finalValue is DateOnly dateOnly)
         {
             finalValue = dateOnly.ToDateTime(TimeOnly.MinValue);
@@ -333,19 +398,20 @@ public static partial class DbBinder
             finalValue = timeOnly.ToTimeSpan();
             inferredDbType = SqlDbType.Time;
         }
-        // 4. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
+        // 5. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
         //    List<Dto>를 넘겼을 때 JSON으로 오판하여 AOT 에러가 나는 것을 방지
-        else if (IsTvpCollection(finalValue, out IDataReader? tvpReader, out tvpTypeName))
+        else if (IsTvpCollection(finalValue, out object? tvpValue, out tvpTypeName))
         {
-            finalValue = tvpReader;
+            finalValue = tvpValue;
+            inferredDbType = SqlDbType.Structured;
         }
-        // 5. JSON 직렬화 (복합 객체이면서 TVP/Stream/바이너리가 아닌 경우)
+        // 6. JSON 직렬화 (복합 객체이면서 TVP/Stream/바이너리가 아닌 경우)
         else if (IsComplexObject(finalValue))
         {
             finalValue = JsonSerializer.Serialize(finalValue);
         }
 
-        // 6. 타입 및 메타데이터 결정
+        // 7. 타입 및 메타데이터 결정
         SqlDbType dbType;
         int size = 0;
         byte precision = 0;
@@ -423,7 +489,7 @@ public static partial class DbBinder
         // [보정] TVP TypeName 명시적 설정 (Ad-hoc 쿼리에서 필수)
         if (dbType == SqlDbType.Structured && !string.IsNullOrEmpty(tvpTypeName))
         {
-            p.TypeName = tvpTypeName;
+            p.TypeName = TvpTypeName.Parse(tvpTypeName).FullName;
         }
 
         if (precision > 0)
@@ -687,6 +753,24 @@ public static partial class DbBinder
         t is SqlDbType.NVarChar or SqlDbType.VarChar or SqlDbType.Char or SqlDbType.NChar
             or SqlDbType.Text or SqlDbType.NText;
 
+    private static string ResolveExplicitTvpTypeName(string? metadataTypeName, TvpTypeName explicitTypeName)
+    {
+        if (string.IsNullOrWhiteSpace(metadataTypeName))
+            return explicitTypeName.FullName;
+
+        TvpTypeName metadata = TvpTypeName.Parse(metadataTypeName);
+        if (!metadata.Equals(explicitTypeName))
+        {
+            throw new InvalidOperationException(
+                $"TVP type name mismatch. Metadata expects '{metadata.FullName}', but explicit value uses '{explicitTypeName.FullName}'.");
+        }
+
+        return metadata.FullName;
+    }
+
+    private static string? NormalizeOptionalTvpTypeName(string? typeName)
+        => string.IsNullOrWhiteSpace(typeName) ? null : TvpTypeName.Parse(typeName).FullName;
+
     private static SqlDbType InferSqlDbType(object v) => v switch
     {
         DataTable or IDataReader => SqlDbType.Structured, // IDataReader 지원 추가
@@ -711,7 +795,15 @@ public static partial class DbBinder
     /// 객체가 <see cref="TvpRowAttribute"/>가 적용된 항목의 컬렉션인지 확인하고, 맞다면 Reader로 변환합니다.
     /// <para>Raw SQL 바인딩 시 JSON 직렬화 오류를 방지하기 위해 사용됩니다.</para>
     /// </summary>
-    private static bool IsTvpCollection(object value, [NotNullWhen(true)] out IDataReader? reader, out string? sqlTypeName)
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2026",
+        Justification = "The annotated branch is reached only after explicit and registered static-shape TVP fast paths have failed.")]
+    [UnconditionalSuppressMessage(
+        "AOT",
+        "IL3050",
+        Justification = "The annotated branch is reached only after explicit and registered static-shape TVP fast paths have failed.")]
+    private static bool IsTvpCollection(object value, [NotNullWhen(true)] out object? parameterValue, out string? sqlTypeName)
     {
         // 0. [AOT/Fast Path] Check Source Generator Registry
         //    SG가 생성한 ModuleInitializer에 의해 등록된 Factory가 있다면 Reflection 없이 즉시 변환
@@ -721,7 +813,7 @@ public static partial class DbBinder
             {
                 if (TvpFactoryRegistry.TryGet(value.GetType(), out Func<object, IDataReader>? factory, out sqlTypeName))
                 {
-                    reader = factory!(value);
+                    parameterValue = factory!(value);
                     return true;
                 }
             }
@@ -732,47 +824,65 @@ public static partial class DbBinder
             }
         }
 
-        reader = null;
+        parameterValue = null;
         sqlTypeName = null;
         if (value is IEnumerable and not (string or byte[]))
         {
-            Type type = value.GetType();
-            // 배열 또는 제네릭 리스트의 요소 타입 확인
-            Type? elementType = type.IsArray
-                ? type.GetElementType()
-                : (type.IsGenericType ? type.GetGenericArguments()[0] : null);
-
-            // 요소 타입을 찾지 못했다면 인터페이스 탐색
-            if (elementType == null)
-            {
-                foreach (Type iface in type.GetInterfaces())
-                {
-                    if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IEnumerable<>))
-                    {
-                        elementType = iface.GetGenericArguments()[0];
-                        break;
-                    }
-                }
-            }
-
-            // [TvpRow] 특성이 확인되면 TVP Reader 생성
-            if (elementType != null && Attribute.IsDefined(elementType, typeof(TvpRowAttribute)))
-            {
-                // [AOT Note] MakeGenericMethod는 AOT에서 경고를 유발할 수 있으나,
-                // TvpRow가 적용된 타입은 보통 Source Generator에 의해 보존되므로 안전할 가능성이 높습니다.
-                MethodInfo method = typeof(Tvp).GetMethod(nameof(Tvp.CreateReaderForBulk), BindingFlags.NonPublic | BindingFlags.Static)!
-                    .MakeGenericMethod(elementType);
-
-                reader = (IDataReader)method.Invoke(null, [value])!;
-
-                // [추가] TvpRowAttribute에서 TypeName 추출
-                TvpRowAttribute? attr = elementType.GetCustomAttribute<TvpRowAttribute>();
-                sqlTypeName = attr?.TypeName;
-
+            if (Tvp.TryCreateRuntimeValue(value, out parameterValue, out sqlTypeName))
                 return true;
-            }
+
+            if (TryBindTvpRowAttributeFallback(value, out parameterValue, out sqlTypeName))
+                return true;
         }
         return false;
+    }
+
+    [RequiresUnreferencedCode(ReflectionTvpFallbackRequiresUnreferencedCodeMessage)]
+    [RequiresDynamicCode(ReflectionTvpFallbackRequiresDynamicCodeMessage)]
+    private static bool TryBindTvpRowAttributeFallback(
+        object value,
+        [NotNullWhen(true)] out object? parameterValue,
+        out string? sqlTypeName)
+    {
+        parameterValue = null;
+        sqlTypeName = null;
+
+        Type type = value.GetType();
+        Type? elementType = type.IsArray
+            ? type.GetElementType()
+            : (type.IsGenericType ? type.GetGenericArguments()[0] : null);
+
+        if (elementType == null)
+        {
+            foreach (Type iface in type.GetInterfaces())
+            {
+                if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+                {
+                    elementType = iface.GetGenericArguments()[0];
+                    break;
+                }
+            }
+        }
+
+        if (elementType == null || !Attribute.IsDefined(elementType, typeof(TvpRowAttribute)))
+            return false;
+
+        if (!RuntimeFeature.IsDynamicCodeSupported)
+        {
+            throw new NotSupportedException(
+                "Reflection-based TVP fallback is not supported when dynamic code is unavailable. Use static TVP shape mapping.");
+        }
+
+        MethodInfo method = typeof(Tvp).GetMethod(nameof(Tvp.CreateReaderForBulk), BindingFlags.NonPublic | BindingFlags.Static)!
+            .MakeGenericMethod(elementType);
+
+        parameterValue = (IDataReader)method.Invoke(null, [value])!;
+
+        TvpRowAttribute? attr = elementType.GetCustomAttribute<TvpRowAttribute>();
+        if (!string.IsNullOrWhiteSpace(attr?.TypeName))
+            sqlTypeName = TvpTypeName.Parse(attr.TypeName).FullName;
+
+        return true;
     }
 
     #endregion
@@ -804,11 +914,17 @@ public static partial class DbBinder
         /// <summary>DTO Type → TVP Reader 팩터리 캐시입니다.</summary>
         private static readonly ConcurrentDictionary<Type, Func<IEnumerable, IDataReader>> s_readerCache = new();
 
+        /// <summary>Concrete collection type → registered runtime TVP binding 캐시입니다.</summary>
+        private static readonly ConcurrentDictionary<Type, RuntimeCollectionBinding> s_runtimeCollectionCache = new();
+
         /// <summary>외부에서 주입되는 TVP 스키마 검증 콜백입니다.</summary>
         internal static Func<Type, string, bool>? ValidatorCallback { get; set; }
 
         /// <summary>Source Generator 기반 TVP 바인딩 사용 여부입니다.</summary>
         internal static bool s_enableGeneratedBinder = true;
+
+        /// <summary>런타임 TVP fast-path 옵션입니다.</summary>
+        private static TvpOptions s_runtimeOptions = new();
 
         #endregion
 
@@ -823,6 +939,91 @@ public static partial class DbBinder
             // MinCacheSize 등의 별도 검증은 LibDbOptions에서 이미 수행한다고 가정합니다.
             s_maxCacheSize = options.MaxCacheSize;
             s_enableGeneratedBinder = options.EnableGeneratedTvpBinder;
+            s_runtimeOptions = options.Tvp;
+            s_runtimeCollectionCache.Clear();
+        }
+
+        /// <summary>
+        /// 등록된 CLR row type 매핑을 사용해 런타임 TVP reader를 생성합니다.
+        /// </summary>
+        internal static bool TryCreateRuntimeReader(
+            object value,
+            [NotNullWhen(true)] out IDataReader? reader,
+            out string? sqlTypeName)
+        {
+            if (TryCreateRuntimeValue(value, out object? parameterValue, out sqlTypeName) &&
+                parameterValue is IDataReader dataReader)
+            {
+                reader = dataReader;
+                return true;
+            }
+
+            reader = null;
+            return false;
+        }
+
+        internal static bool TryCreateRuntimeValue(
+            object value,
+            [NotNullWhen(true)] out object? parameterValue,
+            out string? sqlTypeName)
+        {
+            parameterValue = null;
+            sqlTypeName = null;
+
+            TvpOptions options = s_runtimeOptions;
+            if (!options.EnableAutoTvpBinding)
+                return false;
+
+            if (value is not IEnumerable rows)
+                return false;
+
+            Type concreteType = value.GetType();
+            RuntimeCollectionBinding binding = s_runtimeCollectionCache.GetOrAdd(
+                concreteType,
+                static (type, state) => ResolveRuntimeCollectionBinding(type, state),
+                options);
+
+            if (!binding.Found)
+                return false;
+
+            parameterValue = TvpRowBinding.CreateParameterValue(new LibDbTvpValue(
+                binding.TypeName,
+                rows,
+                binding.ElementType,
+                binding.Policy)
+            {
+                RowShape = binding.Shape
+            });
+            sqlTypeName = binding.TypeName.FullName;
+            return true;
+        }
+
+        private static RuntimeCollectionBinding ResolveRuntimeCollectionBinding(
+            Type concreteType,
+            TvpOptions options)
+        {
+            Type? elementType = TryGetElementType(concreteType);
+            if (elementType is null)
+                return RuntimeCollectionBinding.Missing;
+
+            return options.Registry.TryResolve(
+                elementType,
+                out TvpTypeName typeName,
+                out TvpBindingPolicy policy,
+                out RuntimeTvpRowShape? shape)
+                ? new RuntimeCollectionBinding(true, elementType, typeName, policy, shape)
+                : RuntimeCollectionBinding.Missing;
+        }
+
+        private readonly record struct RuntimeCollectionBinding(
+            bool Found,
+            Type ElementType,
+            TvpTypeName TypeName,
+            TvpBindingPolicy Policy,
+            RuntimeTvpRowShape? Shape)
+        {
+            public static RuntimeCollectionBinding Missing { get; } =
+                new(false, typeof(object), default, TvpBindingPolicy.Strict, Shape: null);
         }
 
         /// <summary>
@@ -831,9 +1032,17 @@ public static partial class DbBinder
         internal static void ClearCaches()
         {
             s_readerCache.Clear();
+            s_runtimeCollectionCache.Clear();
+            TvpRowBinding.ClearCache();
+            TvpRowAccessorCache.Clear();
             BufferAdderCache.Clear();
             ColumnBufferFactory.Clear();
         }
+
+        /// <summary>
+        /// 지정한 TVP 타입의 descriptor 기반 row accessor 캐시를 초기화합니다.
+        /// </summary>
+        internal static void ClearCaches(TvpTypeName typeName) => TvpRowAccessorCache.Clear(typeName);
 
         #endregion
 
@@ -1025,6 +1234,14 @@ public static partial class DbBinder
         /// <param name="propertyType">프로퍼티의 타입</param>
         /// <returns>필요 시 JSON 직렬화된 값, 아니면 원본 값</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [UnconditionalSuppressMessage(
+            "Trimming",
+            "IL2026",
+            Justification = "Columnar TVP dynamic JSON fallback is outside the static-shape Native AOT path.")]
+        [UnconditionalSuppressMessage(
+            "AOT",
+            "IL3050",
+            Justification = "Columnar TVP dynamic JSON fallback is outside the static-shape Native AOT path.")]
         private static object? AutoSerializeIfNeeded(object? value, Type propertyType)
         {
             // null 또는 DBNull은 그대로 반환
@@ -1073,6 +1290,10 @@ public static partial class DbBinder
 
         #region [5-5. 헬퍼 - 요소 타입 추론 및 팩터리 생성]
 
+        [UnconditionalSuppressMessage(
+            "Trimming",
+            "IL2070",
+            Justification = "Collection interface lookup is used only to identify IEnumerable<T> wrappers before choosing registered/static TVP paths.")]
         private static Type? TryGetElementType(Type type)
         {
             if (type.IsArray)
@@ -1090,6 +1311,10 @@ public static partial class DbBinder
             return null;
         }
 
+        [UnconditionalSuppressMessage(
+            "AOT",
+            "IL3050",
+            Justification = "Dynamic columnar factory creation is the legacy reflection fallback, not the Native AOT static-shape path.")]
         private static Func<IEnumerable, IDataReader> CreateFactory(Type type)
         {
             MethodInfo method = typeof(Tvp)
@@ -1172,6 +1397,10 @@ public static partial class DbBinder
             /// <summary>
             /// 지정된 CLR 타입에 대한 ColumnBuffer Adder를 생성합니다.
             /// </summary>
+            [UnconditionalSuppressMessage(
+                "AOT",
+                "IL3050",
+                Justification = "Dynamic buffer adders are used by the legacy columnar fallback, not the Native AOT static-shape path.")]
             private static Action<ColumnBuffer, object?> CreateAdder(Type type)
             {
                 ParameterExpression pBuf = Expression.Parameter(typeof(ColumnBuffer), "buf");
@@ -1216,6 +1445,10 @@ public static partial class DbBinder
             /// <summary>
             /// 지정된 CLR 타입과 초기 용량으로 ColumnBuffer를 생성합니다.
             /// </summary>
+            [UnconditionalSuppressMessage(
+                "AOT",
+                "IL3050",
+                Justification = "Dynamic column buffer construction is used by the legacy columnar fallback, not the Native AOT static-shape path.")]
             public static ColumnBuffer Create(Type type, int capacity)
             {
                 if (!s_cache.TryGetValue(type, out Func<int, ColumnBuffer>? factory))

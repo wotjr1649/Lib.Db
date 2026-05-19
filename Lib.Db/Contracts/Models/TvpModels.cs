@@ -11,6 +11,7 @@
 #nullable enable
 
 using System.Collections.Frozen;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Lib.Db.Contracts.Schema;
 
@@ -152,6 +153,10 @@ public record TvpAccessors
     /// </summary>
     /// <param name="props">TVP 행(DTO)의 프로퍼티 목록</param>
     /// <returns>TVP 바인딩에 사용할 스키마 테이블</returns>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2111",
+        Justification = "SchemaTable stores Type metadata for ADO.NET consumers only; Lib.Db does not reflect over returned Type members here.")]
     public static DataTable BuildSchemaTable(PropertyInfo[] props)
     {
         DataTable schemaTable = new DataTable();

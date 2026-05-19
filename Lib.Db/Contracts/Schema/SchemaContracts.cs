@@ -99,6 +99,14 @@ public interface ISchemaService
     Task FlushSchemaAsync(string instanceHash, CancellationToken ct);
 
     /// <summary>
+    /// 지정된 TVP 타입의 스키마 캐시만 선택적으로 제거합니다.
+    /// </summary>
+    /// <param name="tvpName">대상 TVP 타입 이름</param>
+    /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
+    /// <param name="ct">취소 토큰</param>
+    Task FlushTvpAsync(string tvpName, string instanceHash, CancellationToken ct);
+
+    /// <summary>
     /// 특정 SP의 스키마만 선택적으로 무효화합니다.
     /// <para>
     /// 파라미터 불일치 오류 발생 시 자동 복구(Self-Healing)를 유도할 때 사용합니다.
@@ -107,6 +115,13 @@ public interface ISchemaService
     /// <param name="spName">대상 SP 이름</param>
     /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
     void InvalidateSpSchema(string spName, string instanceHash);
+
+    /// <summary>
+    /// 특정 TVP 타입의 스키마만 선택적으로 무효화합니다.
+    /// </summary>
+    /// <param name="tvpName">대상 TVP 타입 이름</param>
+    /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
+    void InvalidateTvpSchema(string tvpName, string instanceHash);
 
     #endregion
 
@@ -180,6 +195,15 @@ public interface ISchemaService
     /// <param name="ct">취소 토큰</param>
     async Task FlushSchemaAsync(DbInstanceId instance, CancellationToken ct)
         => await FlushSchemaAsync(instance.Value, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// <see cref="TvpName"/> 및 <see cref="DbInstanceId"/>를 사용하는 TVP Flush 오버로드입니다.
+    /// </summary>
+    /// <param name="tvpName">대상 TVP 타입 이름</param>
+    /// <param name="instance">DB 인스턴스 식별 값 객체</param>
+    /// <param name="ct">취소 토큰</param>
+    async Task FlushTvpAsync(TvpName tvpName, DbInstanceId instance, CancellationToken ct)
+        => await FlushTvpAsync(tvpName.FullName, instance.Value, ct).ConfigureAwait(false);
 
     #endregion
 }
@@ -332,6 +356,14 @@ public interface ISchemaFlushCoordinator
     /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
     /// <param name="ct">취소 토큰</param>
     Task FlushAsync(string instanceHash, CancellationToken ct = default);
+
+    /// <summary>
+    /// 지정된 TVP 타입의 스키마 캐시를 무효화하고 Epoch를 증가시킵니다.
+    /// </summary>
+    /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
+    /// <param name="tvpName">대상 TVP 타입 이름</param>
+    /// <param name="ct">취소 토큰</param>
+    Task FlushTvpAsync(string instanceHash, string tvpName, CancellationToken ct = default);
 
     /// <summary>
     /// 현재 Epoch 값을 가져옵니다.

@@ -11,6 +11,7 @@
 
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -220,6 +221,14 @@ public static class TvpAccessorCache
     /// <summary>
     /// 타입의 모든 읽기 가능한 Public 프로퍼티를 가져와서 안정적으로 정렬합니다.
     /// </summary>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2070",
+        Justification = "Runtime TVP accessor discovery is a JIT fallback. Native AOT uses registered static shapes.")]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2075",
+        Justification = "Runtime TVP accessor discovery walks base types only in the JIT fallback path. Native AOT uses registered static shapes.")]
     private static List<PropertyInfo> GetAllPublicReadablePropsRuntime(Type t)
     {
         List<PropertyInfo> list = new List<PropertyInfo>();

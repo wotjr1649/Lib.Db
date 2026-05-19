@@ -10,6 +10,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Diagnostics.CodeAnalysis;
+using Lib.Db.Execution.Tvp;
 
 namespace Lib.Db.Execution.Binding;
 
@@ -47,9 +49,13 @@ public static class TvpFactoryRegistry
     [EditorBrowsable(EditorBrowsableState.Never)]
     public static void Register(Type type, Func<object, IDataReader> factory, string typeName)
     {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentNullException.ThrowIfNull(factory);
+        string normalizedTypeName = TvpTypeName.Parse(typeName).FullName;
+
         lock (s_registry)
         {
-            s_registry[type] = (factory, typeName);
+            s_registry[type] = (factory, normalizedTypeName);
         }
     }
 
@@ -74,6 +80,10 @@ public static class TvpFactoryRegistry
 
     #region 내부 로직 (Resolve & Cache)
 
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2070",
+        Justification = "Source-generated TVP factories are registered explicitly; interface scanning only matches concrete IEnumerable<T> wrappers to those factories.")]
     private static bool TryResolveAndCache(Type concreteType, out Func<object, IDataReader>? factory, out string? typeName)
     {
         // Check direct registry match (rare for List<T>)

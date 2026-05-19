@@ -13,6 +13,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Lib.Db.Execution.Tvp;
 
 namespace Lib.Db.Configuration;
 
@@ -62,6 +63,25 @@ public sealed class LibDbOptions
     /// </para>
     /// </summary>
     public MarsPolicy Mars { get; set; } = MarsPolicy.Auto;
+
+    /// <summary>
+    /// 런타임 TVP 바인딩 옵션입니다.
+    /// <para>
+    /// 명시 API(<c>LibDb.Tvp(...)</c>)는 이 설정 없이도 동작하며,
+    /// 반복 사용 fast-path가 필요한 경우
+    /// <c>AddLibDb(o => o.Tvp.Map&lt;TRow&gt;("dbo.Type").Column(...))</c>
+    /// 형태로 CLR row type과 SQL Server TVP type name 및 정적 컬럼 shape를 등록합니다.
+    /// </para>
+    /// </summary>
+    [JsonIgnore]
+    public TvpOptions Tvp
+    {
+        get;
+        set
+        {
+            field = value ?? throw new ArgumentNullException(nameof(value), "TVP 옵션은 null일 수 없습니다.");
+        }
+    } = new();
 
     /// <summary>
     /// 연결 문자열 보안 검증 프로필입니다. (기본값: <see cref="ConnectionSecurityProfile.Development"/>)
