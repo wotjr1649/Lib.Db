@@ -9,14 +9,14 @@ $ErrorActionPreference = 'Stop'
 $verificationRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $scriptPath = Join-Path $verificationRoot 'scripts\Invoke-VerificationDb.ps1'
 
-$forwardArgs = @('-Db', 'Verification')
+$forwardArgs = @{ Db = 'Verification' }
 
 if ($Setup) {
-  $forwardArgs += '-Setup'
+  $forwardArgs.Setup = $true
 }
 
 if ($Verify) {
-  $forwardArgs += '-Verify'
+  $forwardArgs.Verify = $true
 }
 
 $global:LASTEXITCODE = 0

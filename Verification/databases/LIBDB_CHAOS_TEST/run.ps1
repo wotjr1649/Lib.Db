@@ -12,26 +12,26 @@ $ErrorActionPreference = 'Stop'
 $verificationRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $scriptPath = Join-Path $verificationRoot 'scripts\Invoke-VerificationDb.ps1'
 
-$forwardArgs = @('-Db', 'Chaos')
+$forwardArgs = @{ Db = 'Chaos' }
 
 if ($Setup) {
-  $forwardArgs += '-Setup'
+  $forwardArgs.Setup = $true
 }
 
 if ($Verify) {
-  $forwardArgs += '-Verify'
+  $forwardArgs.Verify = $true
 }
 
 if ($ServerChaosSetup) {
-  $forwardArgs += '-ServerChaosSetup'
+  $forwardArgs.ServerChaosSetup = $true
 }
 
 if ($ServerChaosVerify) {
-  $forwardArgs += '-ServerChaosVerify'
+  $forwardArgs.ServerChaosVerify = $true
 }
 
 if ($ServerChaosTeardown) {
-  $forwardArgs += '-ServerChaosTeardown'
+  $forwardArgs.ServerChaosTeardown = $true
 }
 
 $global:LASTEXITCODE = 0

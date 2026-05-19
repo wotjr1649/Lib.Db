@@ -11,22 +11,22 @@ $ErrorActionPreference = 'Stop'
 $verificationRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $scriptPath = Join-Path $verificationRoot 'scripts\Invoke-VerificationDb.ps1'
 
-$forwardArgs = @('-Db', 'Bench')
+$forwardArgs = @{ Db = 'Bench' }
 
 if ($Setup) {
-  $forwardArgs += '-Setup'
+  $forwardArgs.Setup = $true
 }
 
 if ($Verify) {
-  $forwardArgs += '-Verify'
+  $forwardArgs.Verify = $true
 }
 
 if ($VerifyFinal) {
-  $forwardArgs += '-VerifyFinal'
+  $forwardArgs.VerifyFinal = $true
 }
 
 if ($MemoryOptimizedTvpOptIn) {
-  $forwardArgs += '-MemoryOptimizedTvpOptIn'
+  $forwardArgs.MemoryOptimizedTvpOptIn = $true
 }
 
 $global:LASTEXITCODE = 0
