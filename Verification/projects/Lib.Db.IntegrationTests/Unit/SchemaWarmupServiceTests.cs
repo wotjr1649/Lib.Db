@@ -13,7 +13,7 @@ public sealed class SchemaWarmupServiceTests
     [Fact]
     public void CreateDiagnosticRequestInfo_ShouldRedactRawInstanceInDiagnostics()
     {
-        string rawInstance = "Raw:InstanceMaterialForWarmupTest;Segment=Delta;";
+        string rawInstance = "raw:InstanceMaterialForWarmupTest;Segment=Delta;";
 
         DbRequestInfo info = SchemaWarmupService.CreateDiagnosticRequestInfo(rawInstance, schemaCount: 2);
 

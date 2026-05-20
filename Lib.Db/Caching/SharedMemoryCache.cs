@@ -11,6 +11,7 @@ using System.Diagnostics;
 using System.IO.Hashing;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
+using Lib.Db.Diagnostics;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 
@@ -40,12 +41,6 @@ namespace Lib.Db.Caching;
 /// </remarks>
 public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 {
-    #region 정적 필드
-
-    private static readonly ActivitySource s_activitySource = new("Lib.Db.SharedMemoryCache");
-
-    #endregion
-
     #region 상수 및 필드
 
     private const uint MAGIC = 0x4244424C;
@@ -158,8 +153,10 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     /// <inheritdoc />
     public byte[]? Get(string key)
     {
-        using Activity? activity = s_activitySource.StartActivity("CacheGet");
-        activity?.SetTag("db.cache.key", key);
+        using Activity? activity = _options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("CacheGet")
+            : null;
+        activity?.SetTag("db.cache.key_hash", HashKeyForDiagnostics(key));
 
         if (_isFallbackMode)
         {
@@ -269,7 +266,10 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     /// <inheritdoc />
     public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
     {
-        using Activity? activity = s_activitySource.StartActivity("CacheSet");
+        using Activity? activity = _options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("CacheSet")
+            : null;
+        activity?.SetTag("db.cache.key_hash", HashKeyForDiagnostics(key));
 
         if (_isFallbackMode)
         {
@@ -541,6 +541,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         return Path.Combine(_basePath, hex + ".cache");
     }
 
+    private static string HashKeyForDiagnostics(string key)
+        => Convert.ToHexString(XxHash64.Hash(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
+
     private static long GetExpiryTicks(DistributedCacheEntryOptions options)
     {
         // 절대 만료 우선
@@ -570,7 +573,6 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
                 m?.Dispose();
             }
         }
-        s_activitySource.Dispose();
     }
 
     #endregion

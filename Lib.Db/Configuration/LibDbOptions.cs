@@ -47,9 +47,11 @@ public sealed class LibDbOptions
         get;
         set
         {
-            field = value ?? throw new ArgumentNullException(nameof(value), "연결 문자열 딕셔너리는 null일 수 없습니다.");
+            field = value is null
+                ? throw new ArgumentNullException(nameof(value), "연결 문자열 딕셔너리는 null일 수 없습니다.")
+                : new Dictionary<string, string>(value, StringComparer.OrdinalIgnoreCase);
         }
-    } = [];
+    } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// MARS(다중 활성 결과 집합) 정책입니다. (기본값: <see cref="MarsPolicy.Auto"/>)
@@ -277,9 +279,9 @@ public sealed class LibDbOptions
     public TvpValidationMode TvpValidationMode { get; set; } = TvpValidationMode.Strict;
 
     /// <summary>
-    /// 등록된 Fast TVP Binder 사용 여부 (기본값: true)
+    /// 등록된 Fast TVP runtime binder 사용 여부 (기본값: true)
     /// <para>
-    /// <c>true</c>: <c>TvpFactoryRegistry</c>에 명시 등록된 팩토리를 통해 Reflection 없이 TVP를 바인딩합니다.<br/>
+    /// <c>true</c>: 런타임에 명시 등록된 정적 shape/factory를 통해 Reflection 없이 TVP를 바인딩합니다.<br/>
     /// <c>false</c>: 런타임 Reflection 기반 바인딩을 강제합니다. 등록 팩토리 호환성 문제가 있을 때만 사용하세요.
     /// </para>
     /// </summary>
@@ -694,10 +696,11 @@ public sealed class LibDbOptions
     } = 2;
 
     /// <summary>
-    /// 관측 가능성(Logging, Metrics, Tracing) 기능 활성화 여부 (기본값: false)
+    /// 관측 가능성 메트릭/추적 활성화 여부 (기본값: false)
     /// <para>
     /// <b>[설계 의도]</b> <c>EnableOpenTelemetry</c>를 대체하는 단일 마스터 스위치입니다.
     /// <c>true</c> 설정 시 ActivitySource("Lib.Db")와 Meter("Lib.Db")를 통해 텔레메트리 데이터를 생성합니다.
+    /// 일반 ILogger 로그는 이 옵션과 별개로 기존 로깅 설정을 따릅니다.
     /// 비활성 시 오버헤드는 0에 가깝습니다 (분기 1회).
     /// </para>
     /// </summary>
@@ -935,6 +938,12 @@ public sealed class SharedMemoryCacheOptions : Microsoft.Extensions.Options.IOpt
     /// (내부용) 격리 키. ConnectionString 해시 등이 설정됩니다.
     /// </summary>
     public string? IsolationKey { get; set; }
+
+    /// <summary>
+    /// SharedMemoryCache 내부 Activity 계측 활성화 여부입니다. 기본값은 false입니다.
+    /// <para>일반 사용자는 <see cref="LibDbOptions.EnableObservability"/>를 통해 제어합니다.</para>
+    /// </summary>
+    public bool EnableObservability { get; set; } = false;
 
     SharedMemoryCacheOptions Microsoft.Extensions.Options.IOptions<SharedMemoryCacheOptions>.Value => this;
 }

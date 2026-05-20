@@ -4,19 +4,15 @@ The default verification path must stay database-scoped. Server-level chaos is o
 
 ## Scope
 
-- Target database: `LIBDB_CHAOS_TEST`
-- Server observer: Extended Events session `libdb_chaos_observer`
-- SQL files:
-  - `Verification/databases/LIBDB_CHAOS_TEST/server-optin/setup-libdb-chaos-server-optin.sql`
-  - `Verification/databases/LIBDB_CHAOS_TEST/server-optin/verify-libdb-chaos-server-optin.sql`
-  - `Verification/databases/LIBDB_CHAOS_TEST/server-optin/teardown-libdb-chaos-server-optin.sql`
-- Harness project: `Verification/projects/Lib.Db.ChaosHarness`
+- Target: a local disposable chaos verification database only.
+- Server observer: a dedicated Extended Events session created and removed by the internal runbook.
+- SQL files and Harness commands live under the internal verification tree and are not consumer-facing API.
 
 ## Safety Gates
 
 - Every SQL file requires `EnableServerChaos=1`.
 - Every Harness command requires `--enable-server-chaos`.
-- The SQL files reject databases other than `LIBDB_CHAOS_TEST`.
+- The SQL files reject databases outside the dedicated disposable chaos target.
 - `KILL` stimulus is skipped unless the Harness also receives `--allow-kill`.
 - Teardown is a separate command even when `all` is used.
 
@@ -30,19 +26,6 @@ The default verification path must stay database-scoped. Server-level chaos is o
 
 ## Harness Flow
 
-Set either `LIBDB_CHAOS_CONNECTION`, or set `LIBDB_CHAOS_PASSWORD` and pass optional `--server` and `--user`. Direct Harness commands accept explicit connection input, so keep the target to a local disposable SQL Server instance only; do not point the Harness at shared, staging, production, or customer servers.
+The executable flow is an internal maintainer runbook, not consumer API documentation, and should not be copied into application projects.
 
-```powershell
-dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- setup --enable-server-chaos
-dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- run --enable-server-chaos
-dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- verify --enable-server-chaos
-dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- teardown --enable-server-chaos
-```
-
-To include the destructive session termination probe:
-
-```powershell
-dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- run --enable-server-chaos --allow-kill
-```
-
-The Harness does not print connection strings or passwords.
+Use only a local disposable SQL Server instance. Do not point server-level chaos validation at shared, staging, production, or customer servers. The Harness must not print connection strings or passwords.

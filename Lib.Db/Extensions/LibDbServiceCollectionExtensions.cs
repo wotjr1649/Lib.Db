@@ -12,6 +12,7 @@ using Lib.Db.Contracts.Entry;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Schema;
+using Lib.Db.Diagnostics;
 using Lib.Db.Execution.Binding;
 using Lib.Db.Execution.Tvp;
 using Lib.Db.Hosting;
@@ -109,7 +110,7 @@ public static class LibDbServiceCollectionExtensions
                 return;
 
             // 기존 딕셔너리를 순회하며 MARS가 누락된 연결 문자열에만 자동 주입
-            Dictionary<string, string> corrected = new(options.ConnectionStrings.Count);
+            Dictionary<string, string> corrected = new(options.ConnectionStrings.Count, StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, string> kvp in options.ConnectionStrings)
             {
                 Microsoft.Data.SqlClient.SqlConnectionStringBuilder builder =
@@ -132,6 +133,10 @@ public static class LibDbServiceCollectionExtensions
 
         // Runtime TVP fast-path 등 정적 바인딩 정책을 최종 옵션으로 반영합니다.
         services.PostConfigure<LibDbOptions>(DbBinder.ConfigureTvp);
+
+        // EnableObservability는 ActivitySource뿐 아니라 DbMetrics 전역 게이트까지 제어합니다.
+        services.PostConfigure<LibDbOptions>(static options =>
+            DbMetrics.IsEnabled = options.EnableObservability);
 
         // 2. 핵심 서비스 등록
         services.RegisterLibDbCoreServices();
@@ -183,10 +188,10 @@ public static class LibDbServiceCollectionExtensions
         // HybridCache AOT Serializers
         ServiceRegistrationHelpers.RegisterAotSerializers(services);
 
-        // v9 FINAL+: 조건부 공유 메모리 캐시 (크로스 플랫폼 지원)
+        // 조건부 공유 메모리 캐시 (크로스 플랫폼 지원)
         ServiceRegistrationHelpers.RegisterConditionalSharedMemoryCache(services);
 
-        // v9: Epoch-based Schema Flush Coordination
+        // Epoch 기반 Schema Flush Coordination
         services.AddSchemaFlushCoordination();
 
         return services;
@@ -231,7 +236,7 @@ public static class LibDbServiceCollectionExtensions
     }
 
     /// <summary>
-    /// v9 FINAL+: Epoch 기반 분산 스키마 캐시 조정 서비스를 등록합니다.
+    /// Epoch 기반 분산 스키마 캐시 조정 서비스를 등록합니다.
     /// <para>
     /// <b>[플랫폼 자동 감지]</b><br/>
     /// <see cref="LibDbOptions.EnableEpochCoordination"/>가 <c>null</c>이면:<br/>

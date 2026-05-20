@@ -2,7 +2,7 @@
 
 Updated: 2026-05-20
 
-This document describes the public policy for Lib.Db release verification. The executable maintainer runbook, local database setup commands, coverage commands, and benchmark commands live under the repository's internal `Verification/` tree and are intentionally not part of the consumer API or the agent/Claude skill surface.
+This is an internal maintainer policy, not consumer API documentation. Consumer applications do not need this workflow to install or use `Lib.Db`.
 
 ## Public Contract
 
@@ -22,7 +22,8 @@ Release-grade maintainer validation covers:
 4. Coverage gates for agreed high-risk areas, with overall `Lib.Db` line coverage held above the release threshold.
 5. Native AOT publish/run validation and review of remaining provider-owned warnings.
 6. BenchmarkDotNet comparison between the generated-accessor baseline, runtime object streaming, and registered runtime fast-path.
-7. Secret-pattern scanning of generated benchmark artifacts before preserving or sharing reports.
+7. Secret-pattern scanning of generated verification artifacts before preserving or sharing reports.
+8. Generated artifact tracking gates so benchmark, test, coverage, and AOT outputs are not committed as source.
 
 ## Official References
 
@@ -47,10 +48,9 @@ If a new Lib.Db-owned warning appears, or the provider warning set changes mater
 
 ## Artifact Policy
 
-Generated verification artifacts are internal maintainer evidence. They are not source, they are not part of the package, and they must not contain secret values. Benchmark artifacts must be scanned for secret-pattern paths before they are retained or shared.
+Generated verification artifacts are internal maintainer evidence. They are not source, they are not part of the package, and they must not contain secret values. Benchmark, test, coverage, and AOT artifacts must be scanned for secret-pattern paths before they are retained or shared. Generated artifact directories must remain ignored/untracked.
 
 ## Related Documents
 
 - [AOT/TVP Risk Ledger](./security/aot-tvp-risk-ledger.md)
-- [Server Chaos Harness](./security/libdb-server-chaos-harness.md)
 - [History](./history.md)

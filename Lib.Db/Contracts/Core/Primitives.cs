@@ -241,8 +241,8 @@ public readonly record struct DbInstanceId(string Value)
         ? throw new ArgumentNullException(nameof(Value), "DB 인스턴스 ID는 비어 있을 수 없습니다.")
         : Value;
 
-    /// <summary>"Raw:" 접두사가 붙은 Ad-hoc 연결 문자열인지 확인합니다 (고속 비교).</summary>
-    public bool IsRawConnectionString => Value.StartsWith("Raw:", StringComparison.Ordinal);
+    /// <summary>레거시 진단/redaction 대상인 "Raw:" 접두사 값인지 확인합니다.</summary>
+    public bool IsRawConnectionString => Value.StartsWith("Raw:", StringComparison.OrdinalIgnoreCase);
 
     /// <inheritdoc />
     public override string ToString() => Value;

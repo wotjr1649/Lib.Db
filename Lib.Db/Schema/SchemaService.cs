@@ -152,7 +152,9 @@ internal sealed class SchemaService(
     /// </remarks>
     public async Task<SpSchema> GetSpSchemaAsync(string spName, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("GetSpSchema");
+        using Activity? activity = options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("GetSpSchema")
+            : null;
         string normalized = Normalize(spName);
 
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
@@ -202,7 +204,9 @@ internal sealed class SchemaService(
     /// </remarks>
     public async Task<TvpSchema> GetTvpSchemaAsync(string tvpName, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("GetTvpSchema");
+        using Activity? activity = options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("GetTvpSchema")
+            : null;
         string normalized = Normalize(tvpName);
 
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
@@ -324,7 +328,9 @@ internal sealed class SchemaService(
     /// <inheritdoc />
     public async Task<PreloadResult> PreloadSchemaAsync(IEnumerable<string> schemaNames, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("PreloadSchema");
+        using Activity? activity = options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("PreloadSchema")
+            : null;
 
         // [Smart Deduplication]
         // 1. 중복 제거: "dbo", "dbo" -> "dbo" (Distinct)
@@ -1587,12 +1593,16 @@ internal static class SchemaCacheIdentity
 {
     public static string ForCache(string instanceHash)
     {
-        if (!instanceHash.StartsWith("Raw:", StringComparison.Ordinal))
+        if (!DbDiagnosticRedactor.IsSensitiveInstanceId(instanceHash))
             return instanceHash;
 
         byte[] digest = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(instanceHash));
 
-        return "raw-sha256-" + Convert.ToHexString(digest);
+        string prefix = instanceHash.StartsWith("Raw:", StringComparison.OrdinalIgnoreCase)
+            ? "raw-sha256-"
+            : "connection-sha256-";
+
+        return prefix + Convert.ToHexString(digest);
     }
 }

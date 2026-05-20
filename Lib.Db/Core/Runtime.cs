@@ -191,7 +191,7 @@ public static class LibDbRuntime
     /// </param>
     /// <param name="enableMetrics">
     /// <c>true</c> 인 경우 메트릭을 활성화하고, <c>false</c> 인 경우 메트릭을 전역 비활성화합니다.<br/>
-    /// <c>null</c> 이면 이전 설정을 유지합니다.
+    /// <c>null</c> 이면 <paramref name="options"/>의 <see cref="LibDbOptions.EnableObservability"/> 값을 따릅니다.
     /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="options"/> 가 <see langword="null"/> 인 경우 발생합니다.
@@ -214,8 +214,7 @@ public static class LibDbRuntime
             DbBinder.ValidatorCallback = tvpValidator;
 
             // 3) 메트릭 전역 On/Off
-            if (enableMetrics is { } flag)
-                DbMetrics.IsEnabled = flag;
+            DbMetrics.IsEnabled = enableMetrics ?? options.EnableObservability;
 
             IsConfigured = true;
         }

@@ -250,7 +250,8 @@ internal static class ServiceRegistrationHelpers
             SharedMemoryCacheOptions cacheOptions = new SharedMemoryCacheOptions
             {
                 BasePath = basePath,
-                IsolationKey = isolationKey ?? "Shared"
+                IsolationKey = isolationKey ?? "Shared",
+                EnableObservability = options.EnableObservability
             };
 
             return new SharedMemoryCache(Microsoft.Extensions.Options.Options.Create(cacheOptions), logger);

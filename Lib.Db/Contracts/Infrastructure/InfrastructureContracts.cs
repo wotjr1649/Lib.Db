@@ -166,10 +166,9 @@ public sealed class SchemaBulkData
 internal interface IDbConnectionFactory
 {
     /// <summary>
-    /// 인스턴스 해시 또는 Raw ConnectionString을 사용하여
-    /// 새로운 DB 연결을 비동기로 생성합니다.
+    /// 등록된 인스턴스 키 또는 Ad-hoc 등록 키를 사용하여 새로운 DB 연결을 비동기로 생성합니다.
     /// </summary>
-    /// <param name="instanceHash">DB 인스턴스 해시 또는 Raw 연결 문자열</param>
+    /// <param name="instanceHash">DB 인스턴스 키 또는 Ad-hoc 등록 키</param>
     /// <param name="ct">취소 토큰</param>
     Task<Microsoft.Data.SqlClient.SqlConnection> CreateConnectionAsync(
         string instanceHash,

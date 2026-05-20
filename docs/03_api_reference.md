@@ -224,7 +224,7 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `EnableSharedMemoryCache` | `bool?` | `null` (자동) | L2 공유 메모리 캐시 |
 | `EnableEpochCoordination` | `bool?` | `null` | 프로세스 간 Epoch 동기화 |
 | `EnableDryRun` | `bool` | `false` | 모의 실행 모드 |
-| `EnableObservability` | `bool` | `false` | 관측 가능성(Logging, Metrics, Tracing) 마스터 스위치 |
+| `EnableObservability` | `bool` | `false` | ActivitySource/Meter 기반 tracing/metrics 활성화 스위치. 일반 ILogger 로그는 별도 로깅 설정을 따름 |
 | `EnableOpenTelemetry` | `bool` | `false` | ⚠️ **Deprecated** — `EnableObservability`를 사용하세요. 향후 breaking release에서 제거 예정입니다. |
 | `Mars` | `MarsPolicy` | `Auto` | MARS 정책 (`Disabled`/`Auto`/`ForceEnable`) |
 | `HealthCheckThrottleSeconds` | `int` | `1` | HealthCheck 최소 실행 간격 (초) |
@@ -374,3 +374,4 @@ OpenTelemetry 기반 관측 가능성을 위한 정적 클래스입니다.
 | `libdb.cache_op_duration_ms` | `Histogram<double>` | ms | 캐시 연산 소요 시간 |
 | `libdb.cache_cleanup_total` | `Counter<long>` | - | 캐시 정리 사이클 수 |
 | `libdb.cache_bytes_freed` | `ObservableGauge<long>` | bytes | 캐시 정리 시 해제된 바이트 |
+| `libdb.cache.bytes_freed` | `Counter<long>` | bytes | 캐시 정리 이벤트 누적 해제 바이트 |

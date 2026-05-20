@@ -67,6 +67,8 @@ Do not concatenate user input into SQL text.
 ## Sensitive APIs
 
 - `UseConnectionString(string)`: accepts a full connection string. Prefer named instances. Never print the value.
+- `Use(string)` and `UseSchema(string)` accept registered instance names, not `Raw:` connection string shortcuts.
+- In `ConnectionSecurityProfile.Production`, ad-hoc `UseConnectionString(...)` values are validated by the same encryption, certificate, and high-privilege login rules as configured connection strings.
 - `IncludeParametersInTrace`: keep `false` except in tightly controlled diagnostics.
 - `UseSnapshotOnlyUnsafe`, `UseServiceOnlyUnsafe`, `UseSnapshotPreferredUnsafe`: advanced schema lookup overrides. Keep inside domain-owned helpers.
 - `BulkInsertAsync<T>`: validate tenant boundaries and destination table.

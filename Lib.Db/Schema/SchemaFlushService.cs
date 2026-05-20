@@ -16,14 +16,13 @@ namespace Lib.Db.Schema;
 
 /// <summary>
 ///  Epoch 기반 분산 스키마 캐시 무효화 서비스.
-/// <para>
-/// v9 FINAL: 프로세스 간 Epoch 동기화로 분산 환경에서 스키마 일관성 보장
-/// </para>
+/// <para>프로세스 간 Epoch 동기화로 분산 환경에서 스키마 일관성을 보장합니다.</para>
 /// </summary>
 public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
 {
     private readonly EpochStore _epochStore;
     private readonly ISchemaService _schemaService;
+    private readonly LibDbOptions _options;
     private readonly ILogger<SchemaFlushService> _logger;
     private readonly MemoryCache _lastKnownEpochs;
 
@@ -32,14 +31,17 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
     /// </summary>
     /// <param name="epochStore">프로세스 간 Epoch 저장소</param>
     /// <param name="schemaService">스키마 캐시 플러시 대상 서비스</param>
+    /// <param name="options">관측 가능성 및 런타임 동작 옵션</param>
     /// <param name="logger">로그 기록기</param>
     public SchemaFlushService(
         EpochStore epochStore,
         ISchemaService schemaService,
+        LibDbOptions options,
         ILogger<SchemaFlushService> logger)
     {
         _epochStore = epochStore ?? throw new ArgumentNullException(nameof(epochStore));
         _schemaService = schemaService ?? throw new ArgumentNullException(nameof(schemaService));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         // 마지막으로 알려진 Epoch 캐시 (인스턴스당)
@@ -52,7 +54,9 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
     /// <inheritdoc />
     public async Task FlushAsync(string instanceHash, CancellationToken ct = default)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("Flush");
+        using Activity? activity = _options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("Flush")
+            : null;
         string diagnosticInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
         activity?.SetTag("instance", diagnosticInstance);
 
@@ -104,7 +108,9 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
     /// <inheritdoc />
     public async Task FlushTvpAsync(string instanceHash, string tvpName, CancellationToken ct = default)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("FlushTvp");
+        using Activity? activity = _options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("FlushTvp")
+            : null;
         string diagnosticInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
         activity?.SetTag("instance", diagnosticInstance);
         activity?.SetTag("tvp", tvpName);
@@ -158,7 +164,9 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
     /// <inheritdoc />
     public async Task<bool> CheckAndSyncEpochAsync(string instanceHash, CancellationToken ct = default)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("CheckEpoch");
+        using Activity? activity = _options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("CheckEpoch")
+            : null;
         string diagnosticInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
         activity?.SetTag("instance", diagnosticInstance);
 
@@ -214,7 +222,7 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
 /// <summary>
 /// Epoch 변경을 주기적으로 감시하는 백그라운드 서비스 (선택적).
 /// <para>
-/// v9 FINAL: Polling 방식으로 Epoch 변경 감지 및 자동 Flush
+/// Polling 방식으로 Epoch 변경을 감지하고 자동 Flush를 수행합니다.
 /// </para>
 /// </summary>
 public sealed class EpochWatcherService : BackgroundService

@@ -105,12 +105,12 @@ internal sealed class SqlGridReader(
 /// <para>
 /// <b>[설계의도 (Design Rationale)]</b><br/>
 /// 조건문 없이 안전하게 사용 가능한 Null Object 패턴을 적용하여, Dry-Run 모드나 결과가 없는 상황에서도
-/// 호출 코드를 단순하게 유지할 수 있습니다. 빈 컬렉션을 반환하여 메모리 할당을 최소화합니다.
+/// 호출 코드를 단순하게 유지할 수 있습니다. 빈 결과 목록을 반환합니다.
 /// </para>
 /// 
 /// <para><strong>⚡ 성능 특성</strong></para>
 /// <list type="bullet">
-/// <item><strong>메모리 할당</strong>: Zero (빈 컴렉션 재사용)</item>
+/// <item><strong>메모리 할당</strong>: 빈 <see cref="List{T}"/>와 완료된 <see cref="Task{TResult}"/> 반환</item>
 /// <item><strong>시간 복잡도</strong>: O(1)</item>
 /// <item><strong>DB I/O</strong>: None</item>
 /// </list>

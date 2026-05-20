@@ -2,7 +2,7 @@
 
 Current usage docs are intended to stay version-neutral and describe the current API. This file owns version-specific history: release changes, verification summaries, migration notes, and archived report summaries that should not remain scattered through active guides.
 
-## 2.3.0 with Added/Changed/Breaking/Removed/Migration/Verification/Security
+## 2.3.0 Summary
 
 ### Added
 
@@ -33,10 +33,8 @@ Current usage docs are intended to stay version-neutral and describe the current
 
 ### Verification
 
-- The authoritative verification root moved to `Verification/`. The primary gate restores tools, builds integration and benchmark projects, runs the v2.3.0 DB matrix tests, collects coverage, generates reports, enforces the coverage gate, runs the Native AOT publish gate when present, and runs BenchmarkDotNet setup/execution plus artifact scanning.
-- Focused verification includes the v2.3.0 TVP matrix tests, coverage generation, and benchmark smoke or short benchmark runs for `TvpBenchmarks`.
-- Coverage output is rooted under `Verification\artifacts\coverage`, with an overall `Lib.Db` line coverage gate and named v2.3.0 target areas held to full line/branch/method coverage.
-- Benchmark output is rooted under `Verification\artifacts\benchmarks\BenchmarkDotNet.Artifacts\results`. Benchmark artifact scanning reports matching file paths only and must not print secret values.
+- Maintainer release validation was consolidated into an internal runbook. Consumer applications do not need that workflow to install or use `Lib.Db`.
+- Release validation covers package readiness, Runtime TVP behavior, Native AOT readiness, performance comparison, and artifact hygiene as maintainer responsibilities.
 
 ### Security
 
@@ -46,7 +44,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 - Native AOT policy treats Lib.Db-owned IL warnings as release blockers. Provider-owned aggregate warnings such as `IL2104` and `IL3053` are visible but reviewed separately when provider packages change.
 - The documented AOT fast path is static-shape registration via `.Map<T>().Column(...)` or equivalent explicit shapes. Reflection-based fallback paths and convenience APIs remain annotated or guarded so Native AOT risks stay visible.
 
-## 2.2.1 with Fixed/Verification
+## 2.2.1 Summary
 
 ### Fixed
 
@@ -62,7 +60,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 - Added raw SQL `DateOnly` and `TimeOnly` parameter metadata tests.
 - Added real SQL Server verification that the `SET QUOTED_IDENTIFIER ON` computed-column index path creates the expected index.
 
-## 2.2.0 with Added/Changed
+## 2.2.0 Summary
 
 ### Added
 
@@ -78,7 +76,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 - Source generator work was reduced by extracting booleans instead of repeatedly passing full `Compilation` state.
 - Health check throttling changed from a hard-coded one-second behavior to the `HealthCheckThrottleSeconds` option.
 
-## 2.1 with Added/Historical QA Summary
+## 2.1 Summary
 
 ### Added
 
@@ -91,7 +89,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 - Historical performance notes reported BulkInsert 10K under 500 ms, BulkCopy and TVP bulk paths both under 500 ms in the covered cases, 100 concurrent SELECT operations succeeding, and connection-pool pressure scenarios stabilizing.
 - Older coverage reports are retained here only as summary context. Active docs should not keep detailed historical test inventories that no longer describe the current verification surface.
 
-## 1.x To 2.x with Changed
+## 1.x To 2.x Summary
 
 ### Changed
 
@@ -107,5 +105,5 @@ Current usage docs are intended to stay version-neutral and describe the current
 - Active usage docs should describe the current API and avoid embedding version-specific release history.
 - Version-specific additions, fixes, migration summaries, release notes, old QA summaries, and security verification history belong in this file.
 - Historical reports should be summarized rather than copied into active docs. Keep enough context for migration and audit work, but avoid preserving obsolete test inventories as current guidance.
-- Verification references should point to the current `Verification/` root and should distinguish full release gates from partial or focused evidence.
+- Internal release validation details belong in maintainer-only runbooks, not active consumer usage docs.
 - Never include actual secret values, tokens, passwords, or full connection string values in history. At most, document key names or presence requirements when they are needed to understand verification policy.

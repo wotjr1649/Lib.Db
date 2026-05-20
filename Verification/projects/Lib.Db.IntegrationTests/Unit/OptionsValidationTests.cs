@@ -64,6 +64,26 @@ public sealed class OptionsValidationTests
     }
 
     [Fact]
+    public void ConnectionStrings_ShouldUseOrdinalIgnoreCaseLookup()
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        string connectionString = options.ConnectionStrings["Default"];
+        options.ConnectionStrings = new Dictionary<string, string>
+        {
+            ["Primary"] = connectionString
+        };
+        options.ConnectionStringNames = ["primary"];
+
+        options.ConnectionStrings.TryGetValue("PRIMARY", out string? resolved).Should().BeTrue();
+        resolved.Should().Be(connectionString);
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        result.Failed.Should().BeFalse(string.Join("; ", result.Failures ?? []));
+    }
+
+    [Fact]
     public void PrewarmSchemas_SetNull_ShouldThrow()
     {
         LibDbOptions options = TestOptionsFactory.CreateMinimal();
@@ -183,6 +203,46 @@ public sealed class OptionsValidationTests
 
         Assert.True(result.Failed, "ConnectionStrings에 없는 키가 있으면 검증이 실패해야 합니다.");
         Assert.Contains("NonExistent", string.Join("; ", result.Failures!));
+    }
+
+    [Fact]
+    public void ConnectionStringNames_ConnectionStringShape_ShouldFailValidationWithoutLeakingSecret()
+    {
+        const string rawName =
+            "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStringNames = [rawName];
+        options.ConnectionStrings[rawName] = "Server=localhost;Database=TEST;Encrypt=True;TrustServerCertificate=False";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+        string failures = string.Join("; ", result.Failures ?? []);
+
+        result.Failed.Should().BeTrue("connection string material must never be used as a logical instance key");
+        failures.Should().Contain("ConnectionString:[redacted]");
+        failures.Should().NotContain("placeholder");
+        failures.Should().NotContain(rawName);
+    }
+
+    [Fact]
+    public void ConnectionStrings_ConnectionStringShapeKey_ShouldFailValidationWithoutLeakingSecret()
+    {
+        const string rawKey =
+            "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStringNames = ["Missing"];
+        options.ConnectionStrings.Clear();
+        options.ConnectionStrings[rawKey] =
+            "Server=localhost;Database=TEST;Encrypt=True;TrustServerCertificate=False";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+        string failures = string.Join("; ", result.Failures ?? []);
+
+        result.Failed.Should().BeTrue("connection string material must never be used as an option dictionary key");
+        failures.Should().Contain("ConnectionString:[redacted]");
+        failures.Should().NotContain("placeholder");
+        failures.Should().NotContain(rawKey);
     }
 
     [Fact]

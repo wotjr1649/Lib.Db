@@ -8,6 +8,7 @@
 
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
+using Lib.Db.Diagnostics;
 
 namespace Lib.Db.Configuration;
 
@@ -23,6 +24,17 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
     public ValidateOptionsResult Validate(string? name, LibDbOptions options)
     {
         List<string> errors = new List<string>(capacity: 10);
+
+        foreach (string key in options.ConnectionStrings.Keys)
+        {
+            if (DbDiagnosticRedactor.IsSensitiveInstanceId(key))
+            {
+                string safeKey = DbDiagnosticRedactor.RedactInstanceId(key) ?? "ConnectionString:[redacted]";
+                errors.Add(
+                    $"ConnectionStrings의 키 '{safeKey}'은(는) 등록 인스턴스 이름으로 사용할 수 없습니다. " +
+                    "연결 문자열 값은 ConnectionStrings 값에만 보관하세요.");
+            }
+        }
 
         // [1] ConnectionStringNames 검증
         if (options.ConnectionStringNames is not { Count: > 0 })
@@ -43,6 +55,15 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                     continue;
                 }
 
+                if (DbDiagnosticRedactor.IsSensitiveInstanceId(csName))
+                {
+                    string safeName = DbDiagnosticRedactor.RedactInstanceId(csName) ?? "ConnectionString:[redacted]";
+                    errors.Add(
+                        $"ConnectionStringNames[{i}]의 '{safeName}'은(는) 등록 인스턴스 이름으로 사용할 수 없습니다. " +
+                        "연결 문자열 값은 ConnectionStrings에만 보관하세요.");
+                    continue;
+                }
+
                 // 중복 검증
                 if (!seen.Add(csName))
                 {
@@ -53,7 +74,7 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                 // ConnectionStrings에 키 존재 검증
                 if (!options.ConnectionStrings.TryGetValue(csName, out string? connStr))
                 {
-                    string registeredKeys = string.Join(", ", options.ConnectionStrings.Keys);
+                    string registeredKeys = FormatInstanceKeys(options.ConnectionStrings.Keys);
                     errors.Add($"ConnectionStringNames의 '{csName}'이(가) ConnectionStrings에 없습니다. 등록된 키: [{registeredKeys}]");
                     continue;
                 }
@@ -65,16 +86,7 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                     continue;
                 }
 
-                // 연결 문자열 형식 및 보안 프로필 검증
-                try
-                {
-                    SqlConnectionStringBuilder builder = new(connStr);
-                    ValidateConnectionSecurityProfile(options, csName, builder, errors);
-                }
-                catch (ArgumentException)
-                {
-                    errors.Add($"'{csName}'의 연결 문자열 형식이 잘못되었습니다.");
-                }
+                ValidateConnectionStringSecurityProfile(options, csName, connStr, errors);
             }
         }
 
@@ -137,7 +149,8 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                 }
                 catch
                 {
-                    errors.Add($"ConnectionString '{kvp.Key}' 파싱 실패 (MARS 자동 주입 불가).");
+                    string safeKey = DbDiagnosticRedactor.RedactInstanceId(kvp.Key) ?? kvp.Key;
+                    errors.Add($"ConnectionString '{safeKey}' 파싱 실패 (MARS 자동 주입 불가).");
                 }
             }
         }
@@ -145,6 +158,45 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
         return errors.Count > 0
             ? ValidateOptionsResult.Fail(errors)
             : ValidateOptionsResult.Success;
+    }
+
+    internal static void ValidateAdHocConnectionStringOrThrow(
+        LibDbOptions options,
+        string connectionString)
+    {
+        List<string> errors = new(capacity: 3);
+        ValidateConnectionStringSecurityProfile(options, "ad-hoc", connectionString, errors);
+
+        if (errors.Count > 0)
+        {
+            throw new ArgumentException(
+                "Ad-hoc connection string failed Lib.Db security validation: " +
+                string.Join("; ", errors),
+                nameof(connectionString));
+        }
+    }
+
+    internal static void ValidateConnectionStringSecurityProfile(
+        LibDbOptions options,
+        string connectionName,
+        string connectionString,
+        List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            errors.Add($"'{connectionName}'의 연결 문자열이 비어있습니다.");
+            return;
+        }
+
+        try
+        {
+            SqlConnectionStringBuilder builder = new(connectionString);
+            ValidateConnectionSecurityProfile(options, connectionName, builder, errors);
+        }
+        catch (ArgumentException)
+        {
+            errors.Add($"'{connectionName}'의 연결 문자열 형식이 잘못되었습니다.");
+        }
     }
 
     private static void ValidateConnectionSecurityProfile(
@@ -179,4 +231,7 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                 $"ConnectionString '{connectionName}' production security profile does not allow privileged SQL login without an explicit waiver.");
         }
     }
+
+    private static string FormatInstanceKeys(IEnumerable<string> keys)
+        => string.Join(", ", keys.Select(key => DbDiagnosticRedactor.RedactInstanceId(key) ?? key));
 }

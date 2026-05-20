@@ -125,6 +125,19 @@ DbResult<int> result = await db.Default
     .ExecuteAsync(ct);
 ```
 
+## TVP With Scalars
+
+```csharp
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_ImportOrderLines")
+    .With(new
+    {
+        RequestedBy = userId,
+        Lines = LibDb.Tvp("dbo.OrderLineTvp", rows)
+    })
+    .ExecuteAsync(ct);
+```
+
 ## Bulk Insert
 
 ```csharp

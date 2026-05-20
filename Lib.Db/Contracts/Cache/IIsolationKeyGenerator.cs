@@ -39,7 +39,7 @@ public interface IIsolationKeyGenerator
     /// </summary>
     /// <param name="connectionString">
     /// 데이터베이스 연결 문자열
-    /// <br/>예: "Server=sql.example.internal;Database=ExampleDb;User Id=app_user;Encrypt=True;TrustServerCertificate=False;"
+    /// <br/>예: "Server=localhost;Database=ExampleDb;User Id=app_user;Encrypt=True;TrustServerCertificate=False;"
     /// </param>
     /// <returns>
     /// 32자 Hex 문자열 (XxHash128) 또는 null (connectionString이 null/empty인 경우)
@@ -72,7 +72,7 @@ public interface IIsolationKeyGenerator
     /// <para><b>[예시]</b></para>
     /// <code>
     /// var generator = new IsolationKeyGenerator(logger);
-    /// var key = generator.Generate("Server=sql.example.internal;Database=ExampleDb;User Id=app_user;Encrypt=True;TrustServerCertificate=False;");
+    /// var key = generator.Generate("Server=localhost;Database=ExampleDb;User Id=app_user;Encrypt=True;TrustServerCertificate=False;");
     /// // key: "a1b2c3d4e5f6g7h8..." (32자)
     /// </code>
     /// </remarks>

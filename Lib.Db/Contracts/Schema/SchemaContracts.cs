@@ -344,7 +344,7 @@ public sealed class TvpSchemaValidationException(
 /// - <b>리더 없는 조정</b>: 리더 선출 없이 Redis/DB의 원자적 카운터를 활용하여 간단하게 구현할 수 있는 Epoch 방식을 채택했습니다.
 /// </para>
 /// <para>
-/// v9 FINAL: EpochStore를 활용하여 멀티 프로세스 환경에서
+/// EpochStore를 활용하여 멀티 프로세스 환경에서
 /// 스키마 Flush를 동기화합니다.
 /// </para>
 /// </summary>

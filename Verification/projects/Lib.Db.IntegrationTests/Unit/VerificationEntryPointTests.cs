@@ -25,10 +25,10 @@ public sealed class VerificationEntryPointTests
             string scriptPath = Path.Combine(repoRoot.FullName, "Verification", "scripts", scriptName);
             File.Exists(scriptPath).Should().BeTrue("database-backed commands need wrappers that load local environment values");
 
-            string script = File.ReadAllText(scriptPath);
-            script.Should().Contain("Set-LibDbVerificationEnvironment.local.ps1");
-            script.Should().Contain(". $localEnvironmentScript");
-        }
+        string script = File.ReadAllText(scriptPath);
+        script.Should().Contain("Set-LibDbVerificationEnvironment.local.ps1");
+        script.Should().Contain(". $localEnvironmentScript");
+    }
 
         string testScript = File.ReadAllText(Path.Combine(
             repoRoot.FullName,
@@ -41,25 +41,157 @@ public sealed class VerificationEntryPointTests
     }
 
     [Fact]
+    public void ReleaseVerification_ShouldRunArtifactSecretScanAndTrackingGate()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string verificationScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Verification.ps1"));
+        string benchmarkScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Benchmarks.ps1"));
+        string manifest = File.ReadAllText(Path.Combine(repoRoot.FullName, "Verification", "manifest.json"));
+
+        verificationScript.Should().Contain("Scan-VerificationArtifacts.ps1");
+        verificationScript.Should().Contain("Assert-GeneratedArtifactsUntracked.ps1");
+        benchmarkScript.Should().Contain("Scan-VerificationArtifacts.ps1");
+
+        string scannerScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Scan-VerificationArtifacts.ps1"));
+        scannerScript.Should().Contain("'.html'");
+        scannerScript.Should().Contain("'.xml'");
+        scannerScript.Should().Contain("'.csproj'");
+        scannerScript.Should().Contain("placeholder");
+        scannerScript.Should().Contain("redacted");
+
+        benchmarkScript.Should().Contain("Get-BenchmarkFiltersToRun");
+        benchmarkScript.Should().Contain("releaseRequiredBenchmarkTypes");
+        benchmarkScript.Should().Contain("benchmark-type:");
+        benchmarkScript.Should().Contain("ExpectedBenchmarkTypes");
+        benchmarkScript.Should().Contain("TvpBenchmarks");
+        benchmarkScript.Should().Contain("WideTvpBenchmarks");
+        benchmarkScript.Should().Contain("'*WideTvpBenchmarks*'");
+        manifest.Should().Contain("artifactSecretScan");
+        manifest.Should().Contain("artifactTrackingGate");
+    }
+
+    [Fact]
+    public async Task BenchmarkWrapper_ShouldExpandCustomNarrowTvpFilterToWide()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string scriptPath = Path.Combine(repoRoot.FullName, "Verification", "scripts", "Invoke-Benchmarks.ps1");
+
+        using System.Diagnostics.Process process = new()
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "pwsh",
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            }
+        };
+
+        process.StartInfo.ArgumentList.Add("-NoProfile");
+        process.StartInfo.ArgumentList.Add("-File");
+        process.StartInfo.ArgumentList.Add(scriptPath);
+        process.StartInfo.ArgumentList.Add("-Job");
+        process.StartInfo.ArgumentList.Add("Dry");
+        process.StartInfo.ArgumentList.Add("-Filter");
+        process.StartInfo.ArgumentList.Add("*Lib.Db.Benchmarks.TvpBenchmarks*");
+        process.StartInfo.ArgumentList.Add("-SkipSetup");
+        process.StartInfo.ArgumentList.Add("-SkipRun");
+        process.StartInfo.ArgumentList.Add("-SkipSecretScan");
+        process.StartInfo.ArgumentList.Add("-AllowPartial");
+
+        process.Start();
+
+        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string combined = output + error;
+
+        process.ExitCode.Should().Be(0, combined);
+        combined.Should().Contain("ResolvedFilters=*Lib.Db.Benchmarks.TvpBenchmarks*, *Lib.Db.Benchmarks.WideTvpBenchmarks*");
+        combined.Should().Contain("ExpectedBenchmarkTypes=TvpBenchmarks, WideTvpBenchmarks");
+        combined.Should().NotContain("benchmark-type:");
+    }
+
+    [Fact]
     public void PublicVerificationDocs_ShouldHideInternalCommandsWhileInternalReadmeKeepsWrappers()
     {
         DirectoryInfo repoRoot = FindRepoRoot();
         string verificationReadme = File.ReadAllText(Path.Combine(repoRoot.FullName, "Verification", "README.md"));
-        string verificationRunbook = File.ReadAllText(Path.Combine(repoRoot.FullName, "docs", "verification.md"));
-        string readme = File.ReadAllText(Path.Combine(repoRoot.FullName, "README.md"));
-        string operations = File.ReadAllText(Path.Combine(repoRoot.FullName, "docs", "04_operations.md"));
 
         verificationReadme.Should().Contain("Invoke-Tests.ps1");
         verificationReadme.Should().Contain("Invoke-Verification.ps1");
 
-        string publicDocs = string.Join(Environment.NewLine, readme, operations, verificationRunbook);
-        publicDocs.Should().Contain("not part of the consumer API");
+        string publicDocs = string.Join(
+            Environment.NewLine,
+            EnumeratePublicDocumentationFiles(repoRoot).Select(File.ReadAllText));
         publicDocs.Should().NotContain("Verification/scripts/");
         publicDocs.Should().NotContain("Invoke-Tests.ps1");
         publicDocs.Should().NotContain("Invoke-Coverage.ps1");
         publicDocs.Should().NotContain("Invoke-Benchmarks.ps1");
         publicDocs.Should().NotContain("Invoke-Verification.ps1");
         publicDocs.Should().NotContain("BenchmarkJob");
+        publicDocs.Should().NotContain("BenchmarkDotNet");
+        publicDocs.Should().NotContain("coverage gate");
+        publicDocs.Should().NotContain("coverage gates");
+        publicDocs.Should().NotContain("Verification/");
+        publicDocs.Should().NotContain("Verification\\artifacts");
+
+        string chaosPolicy = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "docs",
+            "security",
+            "libdb-server-chaos-harness.md"));
+        chaosPolicy.Should().Contain("internal maintainer runbook");
+        chaosPolicy.Should().NotContain("dotnet run");
+        chaosPolicy.Should().NotContain("Verification/");
+        chaosPolicy.Should().NotContain("LIBDB_CHAOS_TEST");
+
+        string riskLedger = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "docs",
+            "security",
+            "aot-tvp-risk-ledger.md"));
+        riskLedger.Should().Contain("internal maintainer risk ledger");
+        riskLedger.Should().Contain("not consumer API documentation");
+    }
+
+    [Fact]
+    public void InternalDevelopmentDocs_ShouldBeExplicitlyMarkedAndExcludedFromConsumerDocs()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string docsRoot = Path.Combine(repoRoot.FullName, "docs");
+
+        string reviewsReadme = File.ReadAllText(Path.Combine(docsRoot, "reviews", "README.md"));
+        string superpowersReadme = File.ReadAllText(Path.Combine(docsRoot, "superpowers", "README.md"));
+        string verificationPolicy = File.ReadAllText(Path.Combine(docsRoot, "verification.md"));
+
+        reviewsReadme.Should().Contain("Internal Review Records");
+        reviewsReadme.Should().Contain("not consumer documentation");
+        superpowersReadme.Should().Contain("Internal Development Records");
+        superpowersReadme.Should().Contain("not consumer documentation");
+        superpowersReadme.Should().Contain("internal verification, benchmark, coverage");
+        verificationPolicy.Should().Contain("internal maintainer policy");
+        verificationPolicy.Should().Contain("not consumer API documentation");
+
+        string[] consumerDocs = EnumeratePublicDocumentationFiles(repoRoot).ToArray();
+        consumerDocs.Should().NotContain(path =>
+            path.Contains($"{Path.DirectorySeparatorChar}reviews{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+        consumerDocs.Should().NotContain(path =>
+            path.Contains($"{Path.DirectorySeparatorChar}superpowers{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+        consumerDocs.Should().NotContain(path =>
+            path.EndsWith($"{Path.DirectorySeparatorChar}verification.md", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -118,5 +250,34 @@ public sealed class VerificationEntryPointTests
         }
 
         throw new DirectoryNotFoundException("Lib.Db repository root could not be found.");
+    }
+
+    private static IEnumerable<string> EnumeratePublicDocumentationFiles(DirectoryInfo repoRoot)
+    {
+        yield return Path.Combine(repoRoot.FullName, "README.md");
+
+        string docsRoot = Path.Combine(repoRoot.FullName, "docs");
+        foreach (string file in Directory.EnumerateFiles(docsRoot, "*.md", SearchOption.TopDirectoryOnly)
+                     .Where(static file => !Path.GetFileName(file).Equals("verification.md", StringComparison.OrdinalIgnoreCase)))
+        {
+            yield return file;
+        }
+
+        string securityRoot = Path.Combine(docsRoot, "security");
+        if (!Directory.Exists(securityRoot))
+            yield break;
+
+        foreach (string file in Directory.EnumerateFiles(securityRoot, "*.md", SearchOption.TopDirectoryOnly)
+                     .Where(static file => !IsInternalSecurityDocument(file)))
+        {
+            yield return file;
+        }
+    }
+
+    private static bool IsInternalSecurityDocument(string file)
+    {
+        string name = Path.GetFileName(file);
+        return name.Equals("libdb-server-chaos-harness.md", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("aot-tvp-risk-ledger.md", StringComparison.OrdinalIgnoreCase);
     }
 }

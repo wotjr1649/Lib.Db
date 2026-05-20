@@ -1,5 +1,7 @@
 # Lib.Db AOT/TVP Risk Ledger
 
+This is an internal maintainer risk ledger, not consumer API documentation. It may mention internal verification, benchmark, coverage, database harness, or release-process details that are intentionally excluded from consumer skills and public usage docs.
+
 Scope: runtime-first TVP binding, static-shape AOT fast path, schema/cache flush, and benchmark artifacts.
 
 Status terms: `Mitigated`, `Open`, `Accepted`, `Needs owner confirmation`.

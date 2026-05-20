@@ -140,14 +140,6 @@ See [Advanced Features](https://github.com/wotjr1649/Lib.Db/blob/main/docs/02_ad
 | Connection security profile | Production defaults enforce conservative SQL Server connection behavior. |
 | SQL name mapping | Conservative column-to-property mapping supports common SQL naming conventions. |
 
-## Verification
-
-Release-grade checks are coordinated from the internal `Verification` tree. The automation avoids printing connection string values and reports expected key presence instead.
-
-Maintainers should use the internal verification runbook before publishing or cutting release artifacts. Detailed verification policy, artifact locations, Native AOT warning handling, and opt-in database boundaries are documented in [Verification](https://github.com/wotjr1649/Lib.Db/blob/main/docs/verification.md).
-
-Server-level chaos checks are intentionally outside the default gate. They require explicit approval and the dedicated harness documented in [Server Chaos Harness](https://github.com/wotjr1649/Lib.Db/blob/main/docs/security/libdb-server-chaos-harness.md).
-
 ## Documentation
 
 - [Guide](https://github.com/wotjr1649/Lib.Db/blob/main/docs/01_guide.md) introduces setup, configuration, and day-to-day usage.
@@ -157,8 +149,6 @@ Server-level chaos checks are intentionally outside the default gate. They requi
 - [Fluent API Reference](https://github.com/wotjr1649/Lib.Db/blob/main/docs/05_fluent_api_reference.md) documents the staged procedure call API.
 - [Cookbook](https://github.com/wotjr1649/Lib.Db/blob/main/docs/06_cookbook.md) provides task-focused examples.
 - [History](https://github.com/wotjr1649/Lib.Db/blob/main/docs/history.md) contains release notes and migration history.
-- [AOT/TVP Risk Ledger](https://github.com/wotjr1649/Lib.Db/blob/main/docs/security/aot-tvp-risk-ledger.md) tracks security and compatibility risks.
-- [Server Chaos Harness](https://github.com/wotjr1649/Lib.Db/blob/main/docs/security/libdb-server-chaos-harness.md) documents the opt-in server-level chaos workflow.
 
 ## License
 

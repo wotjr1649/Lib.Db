@@ -140,8 +140,8 @@ Lib.Db는 options validation 단계에서 연결 문자열 이름, 키 매핑, �
 ### 4-1. 빌드 및 테스트
 
 - [ ] `dotnet build` 경고/에러 0건
-- [ ] maintainer verification gate 전체 통과
-- [ ] AOT 빌드 시 Lib.Db-owned IL 트리밍/AOT 경고 0건, provider-owned warning은 verification 문서의 accepted-warning 정책에 따라 별도 검토
+- [ ] 릴리스 담당자는 내부 릴리스 검증 절차 전체 통과 확인
+- [ ] AOT 빌드 시 Lib.Db-owned IL 트리밍/AOT 경고 0건, provider-owned warning은 릴리스 담당자가 별도 검토
 - [ ] `[DbResult]` generated result mapper를 쓰는 DTO에 `partial` 키워드 확인
 - [ ] TVP 고빈도/Native AOT 경로는 `options.Tvp.Map<T>()` 또는 `TvpShape.For<T>()` static shape 등록 확인
 
@@ -180,15 +180,7 @@ Lib.Db는 options validation 단계에서 연결 문자열 이름, 키 매핑, �
 
 ---
 
-## 5. Verification
-
-The canonical verification root is `Verification/`. It contains maintainer-only integration tests, SQL setup/verify scripts, coverage gates, AOT checks, BenchmarkDotNet projects, and chaos harness assets.
-
-Use the internal verification runbook before publishing. Consumer applications do not need these scripts to use `Lib.Db`.
-
-Past regression details are summarized in [History](./history.md).
-
-### 5-1. Security Notes
+## 5. Security Notes
 
 - 검증 DB에서는 DDL 배포를 허용하지만, 프로덕션 DB에서 테스트 초기화 코드를 실행하지 마세요.
 - `RawSqlPolicy.DenyWriteText`는 SQL 파서가 아니라 guardrail입니다. 운영 보안 경계는 최소 권한 DB 계정, `DenyAllText`, SP 권한 분리로 구성하세요.

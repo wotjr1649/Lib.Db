@@ -21,6 +21,7 @@ public sealed class DbDiagnosticsTests
     {
         _mockLogger = new Mock<ILogger>();
         DbMetrics.ResetForTesting();
+        DbMetrics.IsEnabled = true;
     }
 
     [Fact]
@@ -127,7 +128,7 @@ public sealed class DbDiagnosticsTests
     [Fact]
     public void DD07_FromExecutionContext_ShouldRedactRawConnectionStringInstance()
     {
-        const string rawInstance = "Raw:InstanceMaterialForDiagnosticsTest;Segment=Zeta";
+        const string rawInstance = "raw:InstanceMaterialForDiagnosticsTest;Segment=Zeta";
 
         DbExecutionContext context = DbExecutionContext.ForCommand(
             rawInstance,
@@ -142,11 +143,29 @@ public sealed class DbDiagnosticsTests
     }
 
     [Fact]
+    public void DD07_FromExecutionContext_ShouldRedactConnectionStringShapedInstance()
+    {
+        const string connectionString =
+            "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True";
+
+        DbExecutionContext context = DbExecutionContext.ForCommand(
+            connectionString,
+            "dbo.usp_Test",
+            CommandType.StoredProcedure);
+
+        DbRequestInfo info = DbRequestInfo.FromExecutionContext(context);
+
+        info.InstanceId.Should().Be("ConnectionString:[redacted]");
+        info.InstanceId.Should().NotContain("placeholder");
+        info.InstanceId.Should().NotContain(connectionString);
+    }
+
+    [Fact]
     public void DD08_DbMetrics_ShouldRedactRawInstanceTag()
     {
         using TelemetryTestHarness harness = new("Lib.Db");
         DbRequestInfo info = new(
-            InstanceId: "Raw:InstanceMaterialForMetricsTest;Segment=Eta",
+            InstanceId: "raw:InstanceMaterialForMetricsTest;Segment=Eta",
             Operation: "EXEC",
             CommandKind: "StoredProcedure"
         );

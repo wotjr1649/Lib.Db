@@ -622,8 +622,11 @@ Lib.Db는 OpenTelemetry 기반의 연결 풀 모니터링 메트릭을 제공합
 | `libdb.cache_op_duration_ms` | Histogram | ms | 캐시 연산 소요 시간 |
 | `libdb.cache_cleanup_total` | Counter | - | 캐시 정리 사이클 수 |
 | `libdb.cache_bytes_freed` | Gauge | bytes | 캐시 정리 시 해제된 바이트 |
+| `libdb.cache.bytes_freed` | Counter | bytes | 캐시 정리 이벤트에서 누적 기록된 해제 바이트 |
 
 ### 11-2. OpenTelemetry 연동
+
+`EnableObservability = true`이면 Lib.Db ActivitySource/Meter 기반 추적과 메트릭 기록이 활성화됩니다. 일반 `ILogger` 로그는 이 옵션과 별개로 애플리케이션 로깅 설정을 따릅니다.
 
 ```csharp
 builder.Services.AddOpenTelemetry()

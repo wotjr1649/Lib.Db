@@ -175,6 +175,21 @@ public sealed class DbSchemaTests
         first.Should().NotContain("Segment=Gamma");
     }
 
+    [Fact]
+    public void DS_06_ConnectionStringInstance_ShouldUseDeterministicSafeSchemaCacheIdentity()
+    {
+        const string connectionString =
+            "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True";
+
+        string first = SchemaCacheIdentity.ForCache(connectionString);
+        string second = SchemaCacheIdentity.ForCache(connectionString);
+
+        first.Should().Be(second);
+        first.Should().StartWith("connection-sha256-");
+        first.Should().NotContain(connectionString);
+        first.Should().NotContain("placeholder");
+    }
+
     #endregion
 
     #region DS-02: Warm Cache Hit

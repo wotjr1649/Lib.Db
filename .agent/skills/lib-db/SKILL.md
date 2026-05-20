@@ -34,7 +34,7 @@ Exact-name index for validation and routing: `DbResultAttribute`, `Configuration
 - Anonymous objects, `SqlParameter`, SQL types, nulls: `references/parameters-and-binding.md`
 - `DbResult<T>`, `DbError`, failure handling: `references/result-handling.md`
 - DTO mapping, JSON helpers, generated result mapper contracts: `references/mapping-contracts.md`
-- TVP runtime APIs, legacy compatibility markers, static shapes: `references/tvp-source-generation.md`
+- Runtime TVP APIs, old TvpGen migration, static shapes: `references/tvp-source-generation.md`
 - `BulkInsertAsync<T>` and `BulkInsertOptions`: `references/bulk-insert.md`
 - `db.Schema`, `UseSchema`, schema cache flush: `references/schema-maintenance.md`
 - Query cache, HybridCache, shared-memory cache: `references/caching.md`

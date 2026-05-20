@@ -5,6 +5,7 @@
 // ============================================================================
 
 using System.IO;
+using System.Diagnostics;
 using System.Text;
 using Lib.Db.Caching;
 using Microsoft.Extensions.Caching.Distributed;
@@ -31,13 +32,14 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
         }
     }
 
-    private SharedMemoryCache CreateCache(string? path = null)
+    private SharedMemoryCache CreateCache(string? path = null, bool enableObservability = false)
     {
         SharedMemoryCacheOptions options = new()
         {
             BasePath = path ?? _basePath,
             Scope = CacheScope.User,
             IsolationKey = "TestKey",
+            EnableObservability = enableObservability,
             FallbackCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()))
         };
         return new SharedMemoryCache(
@@ -176,5 +178,66 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => cache.RefreshAsync("sm06-key", token));
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 2)]
+    public void SM07_ShouldHonorEnableObservabilityAndNeverTagRawCacheKey(bool enabled, int expectedActivityCount)
+    {
+        using SharedMemoryCache cache = CreateCache(enableObservability: enabled);
+        using ActivityCapture capture = new("Lib.Db");
+        string key = "tenant:secret-sensitive-cache-key";
+
+        cache.Set(key, [1, 2, 3], new DistributedCacheEntryOptions());
+        _ = cache.Get(key);
+
+        capture.StartedCount.Should().Be(expectedActivityCount);
+        capture.RawKeyTagCount.Should().Be(0);
+        if (enabled)
+            capture.KeyHashTagCount.Should().Be(expectedActivityCount);
+    }
+
+    private sealed class ActivityCapture : IDisposable
+    {
+        private readonly ActivityListener _listener;
+
+        public int StartedCount { get; private set; }
+        public int RawKeyTagCount { get; private set; }
+        public int KeyHashTagCount { get; private set; }
+
+        public ActivityCapture(string sourceName)
+        {
+            _listener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name == sourceName,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                    ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStarted = activity =>
+                {
+                    if (activity.OperationName is "CacheGet" or "CacheSet")
+                        StartedCount++;
+                },
+                ActivityStopped = activity =>
+                {
+                    if (activity.OperationName is not ("CacheGet" or "CacheSet"))
+                        return;
+
+                    foreach (KeyValuePair<string, object?> tag in activity.TagObjects)
+                    {
+                        if (tag.Key == "db.cache.key")
+                            RawKeyTagCount++;
+                        if (tag.Key == "db.cache.key_hash")
+                            KeyHashTagCount++;
+                    }
+                }
+            };
+            ActivitySource.AddActivityListener(_listener);
+        }
+
+        public void Dispose()
+        {
+            _listener.Dispose();
+        }
     }
 }

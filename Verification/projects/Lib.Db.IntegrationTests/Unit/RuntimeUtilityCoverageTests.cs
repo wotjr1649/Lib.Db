@@ -17,6 +17,7 @@ using Lib.Db.Execution.Executors;
 using Lib.Db.Extensions;
 using Lib.Db.Fluent;
 using Lib.Db.Infrastructure;
+using Lib.Db.IntegrationTests.Infrastructure;
 using Microsoft.Extensions.Caching.Hybrid;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -33,6 +34,7 @@ public sealed class RuntimeUtilityCoverageTests
         {
             LibDbRuntime.ResetForTesting();
             LibDbRuntime.IsConfigured.Should().BeFalse();
+            DbMetrics.IsEnabled.Should().BeFalse();
 
             LibDbRuntime.Configure(new LibDbOptions { MaxCacheSize = 1_000 }, static (_, _) => true, enableMetrics: false);
             LibDbRuntime.IsConfigured.Should().BeTrue();
@@ -43,10 +45,83 @@ public sealed class RuntimeUtilityCoverageTests
 
             LibDbRuntime.ConfigureMetrics(enabled: true);
             DbMetrics.IsEnabled.Should().BeTrue();
+
+            LibDbRuntime.Configure(new LibDbOptions { EnableObservability = false });
+            DbMetrics.IsEnabled.Should().BeFalse();
+
+            LibDbRuntime.Configure(new LibDbOptions { EnableObservability = false }, enableMetrics: true);
+            DbMetrics.IsEnabled.Should().BeTrue();
         }
         finally
         {
             LibDbRuntime.ResetForTesting();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AddHighPerformanceDb_ShouldApplyEnableObservabilityToDbMetrics(bool enabled)
+    {
+        try
+        {
+            DbMetrics.ResetForTesting();
+
+            ServiceCollection services = new();
+            services.AddLogging();
+            services.AddLibDb(options =>
+            {
+                LibDbOptions valid = TestOptionsFactory.CreateValidOptions();
+                options.ConnectionStringNames = valid.ConnectionStringNames;
+                options.ConnectionStrings = valid.ConnectionStrings;
+                options.EnableObservability = enabled;
+                options.EnableSharedMemoryCache = false;
+            });
+
+            using ServiceProvider provider = services.BuildServiceProvider(validateScopes: true);
+            _ = provider.GetRequiredService<LibDbOptions>();
+
+            DbMetrics.IsEnabled.Should().Be(enabled);
+        }
+        finally
+        {
+            DbMetrics.ResetForTesting();
+        }
+    }
+
+    [Fact]
+    public void AddLibDbConfiguration_ShouldLetExplicitEnableObservabilityFalseOverrideLegacyOpenTelemetry()
+    {
+        try
+        {
+            DbMetrics.ResetForTesting();
+            DbMetrics.IsEnabled = true;
+
+            IConfiguration configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:Default"] =
+                        "Server=localhost;Database=TEST;Integrated Security=True;Encrypt=True;TrustServerCertificate=True",
+                    ["LibDb:ConnectionStringNames:0"] = "Default",
+                    ["LibDb:EnableOpenTelemetry"] = "true",
+                    ["LibDb:EnableObservability"] = "false",
+                    ["LibDb:EnableSharedMemoryCache"] = "false"
+                })
+                .Build();
+
+            ServiceCollection services = new();
+            services.AddLogging();
+            services.AddLibDb(configuration);
+
+            using ServiceProvider provider = services.BuildServiceProvider(validateScopes: true);
+            LibDbOptions options = provider.GetRequiredService<LibDbOptions>();
+
+            options.EnableObservability.Should().BeFalse();
+            DbMetrics.IsEnabled.Should().BeFalse();
+        }
+        finally
+        {
+            DbMetrics.ResetForTesting();
         }
     }
 

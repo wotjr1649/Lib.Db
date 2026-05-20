@@ -17,6 +17,8 @@ $benchmarkProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.Benchmarks
 $coverageScript = Join-Path $PSScriptRoot 'Invoke-Coverage.ps1'
 $benchmarkScript = Join-Path $PSScriptRoot 'Invoke-Benchmarks.ps1'
 $aotScript = Join-Path $PSScriptRoot 'Invoke-Aot.ps1'
+$artifactScanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
+$artifactTrackingGate = Join-Path $PSScriptRoot 'Assert-GeneratedArtifactsUntracked.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
 $matrixResultsDirectory = Join-Path $repoRoot 'Verification\artifacts\test-results\matrix'
 
@@ -110,6 +112,16 @@ if (-not $SkipBenchmark) {
 }
 else {
     $skippedGates.Add('benchmark')
+}
+
+& pwsh -NoProfile -File $artifactScanner
+if ($LASTEXITCODE -ne 0) {
+    throw "Verification artifact secret scan failed with exit code $LASTEXITCODE."
+}
+
+& pwsh -NoProfile -File $artifactTrackingGate
+if ($LASTEXITCODE -ne 0) {
+    throw "Generated artifact tracking gate failed with exit code $LASTEXITCODE."
 }
 
 if ($skippedGates.Count -gt 0) {

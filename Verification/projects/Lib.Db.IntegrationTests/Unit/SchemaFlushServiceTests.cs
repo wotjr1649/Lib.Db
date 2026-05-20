@@ -31,6 +31,7 @@ public sealed class SchemaFlushServiceTests
         SchemaFlushService flushService = new(
             epochStore,
             schemaService,
+            new LibDbOptions(),
             NullLogger<SchemaFlushService>.Instance);
 
         try
@@ -116,6 +117,7 @@ public sealed class SchemaFlushServiceTests
         SchemaFlushService flushService = new(
             epochStore,
             schemaService,
+            new LibDbOptions(),
             NullLogger<SchemaFlushService>.Instance);
 
         try
@@ -136,6 +138,39 @@ public sealed class SchemaFlushServiceTests
             schemaService.TvpFlushCalls.Should().Be(1);
             schemaService.LastFlushedInstance.Should().Be(rawInstance);
             schemaService.LastFlushedTvp.Should().Be("tvp.Tvp_Tvp_AllTypes");
+        }
+        finally
+        {
+            flushService.Dispose();
+            epochStore.Dispose();
+            if (Directory.Exists(basePath))
+                Directory.Delete(basePath, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 1)]
+    public async Task FlushAsync_ShouldHonorEnableObservability(bool enabled, int expectedActivityCount)
+    {
+        string basePath = Path.Combine(
+            Path.GetTempPath(),
+            "LibDbEpochTelemetryTests",
+            Guid.NewGuid().ToString("N"));
+        EpochStore epochStore = new(basePath, NullLogger<EpochStore>.Instance);
+        RecordingSchemaService schemaService = new();
+        SchemaFlushService flushService = new(
+            epochStore,
+            schemaService,
+            new LibDbOptions { EnableObservability = enabled },
+            NullLogger<SchemaFlushService>.Instance);
+        using ActivityCapture capture = new("Lib.Db", "Flush");
+
+        try
+        {
+            await flushService.FlushAsync("Primary", TestContext.Current.CancellationToken);
+
+            capture.StartedCount.Should().Be(expectedActivityCount);
         }
         finally
         {
@@ -203,5 +238,35 @@ public sealed class SchemaFlushServiceTests
 
         public void InvalidateTvpSchema(string tvpName, string instanceHash) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class ActivityCapture : IDisposable
+    {
+        private readonly System.Diagnostics.ActivityListener _listener;
+        private readonly string _activityName;
+
+        public int StartedCount { get; private set; }
+
+        public ActivityCapture(string sourceName, string activityName)
+        {
+            _activityName = activityName;
+            _listener = new System.Diagnostics.ActivityListener
+            {
+                ShouldListenTo = source => source.Name == sourceName,
+                Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                    System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStarted = activity =>
+                {
+                    if (activity.OperationName == _activityName)
+                        StartedCount++;
+                }
+            };
+            System.Diagnostics.ActivitySource.AddActivityListener(_listener);
+        }
+
+        public void Dispose()
+        {
+            _listener.Dispose();
+        }
     }
 }

@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $project = Join-Path $repoRoot 'Verification\projects\Lib.Db.Benchmarks\Lib.Db.Benchmarks.csproj'
 $artifactRoot = Join-Path $repoRoot 'Verification\artifacts\benchmarks\BenchmarkDotNet.Artifacts'
-$scanner = Join-Path $repoRoot 'Verification\projects\Lib.Db.Benchmarks\ScanBenchmarkArtifacts.ps1'
+$scanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
 
 if (Test-Path -LiteralPath $localEnvironmentScript) {
@@ -49,47 +49,148 @@ function Assert-BenchmarkConnectionConfigured {
     }
 }
 
+function Add-UniqueString {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.List[string]] $Items,
+        [Parameter(Mandatory = $true)]
+        [string] $Value
+    )
+
+    if (-not $Items.Contains($Value)) {
+        $Items.Add($Value)
+    }
+}
+
+function Get-BenchmarkFiltersToRun {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $BenchmarkFilter
+    )
+
+    if ([string]::IsNullOrWhiteSpace($BenchmarkFilter)) {
+        throw 'Benchmark filter must not be empty.'
+    }
+
+    $normalized = $BenchmarkFilter.Trim()
+    if ($normalized.Equals('*TvpBenchmarks*', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $normalized.Equals('TvpBenchmarks', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $normalized.Equals('Lib.Db.Benchmarks.TvpBenchmarks*', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return @('*TvpBenchmarks*', '*WideTvpBenchmarks*')
+    }
+
+    if ($normalized.Contains('TvpBenchmarks', [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not $normalized.Contains('WideTvpBenchmarks', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $wideFilter = [System.Text.RegularExpressions.Regex]::Replace(
+            $normalized,
+            'TvpBenchmarks',
+            'WideTvpBenchmarks',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        return @($BenchmarkFilter, $wideFilter)
+    }
+
+    return @($BenchmarkFilter)
+}
+
+function Get-ExpectedBenchmarkTypes {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]] $BenchmarkFilters
+    )
+
+    $types = [System.Collections.Generic.List[string]]::new()
+    foreach ($benchmarkFilter in $BenchmarkFilters) {
+        if ([string]::IsNullOrWhiteSpace($benchmarkFilter)) {
+            continue
+        }
+
+        $normalized = $benchmarkFilter.Trim()
+        $isBroadBenchmarkFilter =
+            $normalized.Equals('*', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $normalized.Equals('*Benchmarks*', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $normalized.Equals('Lib.Db.Benchmarks.*', [System.StringComparison]::OrdinalIgnoreCase)
+
+        if ($isBroadBenchmarkFilter -or
+            ($normalized.Contains('TvpBenchmarks', [System.StringComparison]::OrdinalIgnoreCase) -and
+             -not $normalized.Contains('WideTvpBenchmarks', [System.StringComparison]::OrdinalIgnoreCase))) {
+            Add-UniqueString -Items $types -Value 'TvpBenchmarks'
+        }
+
+        if ($isBroadBenchmarkFilter -or
+            $normalized.Contains('WideTvpBenchmarks', [System.StringComparison]::OrdinalIgnoreCase)) {
+            Add-UniqueString -Items $types -Value 'WideTvpBenchmarks'
+        }
+    }
+
+    return $types.ToArray()
+}
+
 function Assert-BenchmarkReportHasMeasurements {
-    param([Parameter(Mandatory = $true)] [DateTime] $RunStartedUtc)
+    param(
+        [Parameter(Mandatory = $true)]
+        [DateTime] $RunStartedUtc,
+        [Parameter(Mandatory = $true)]
+        [string[]] $ExpectedBenchmarkTypes
+    )
 
     if (-not (Test-Path -LiteralPath $artifactRoot)) {
         throw "Benchmark artifact path was not created: $artifactRoot"
     }
 
-    $report = Get-ChildItem -LiteralPath (Join-Path $artifactRoot 'results') -File -Filter '*-report-github.md' -ErrorAction Stop |
+    $reports = @(Get-ChildItem -LiteralPath (Join-Path $artifactRoot 'results') -File -Filter '*-report-github.md' -ErrorAction Stop |
         Where-Object { $_.LastWriteTimeUtc -ge $RunStartedUtc } |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First 1
+        Sort-Object LastWriteTimeUtc -Descending)
 
-    if ($null -eq $report) {
+    if ($reports.Count -eq 0) {
         throw 'BenchmarkDotNet GitHub markdown report was not produced.'
     }
 
-    $content = [System.IO.File]::ReadAllText($report.FullName)
-    if ($content.Contains('There are not any results runs', [System.StringComparison]::OrdinalIgnoreCase) -or
-        $content.Contains('Build Error', [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "BenchmarkDotNet report contains no valid measurements: $($report.FullName)"
+    foreach ($benchmarkType in $ExpectedBenchmarkTypes) {
+        $matching = @($reports | Where-Object {
+            $_.BaseName.Contains(".$benchmarkType-report-github", [System.StringComparison]::OrdinalIgnoreCase)
+        })
+
+        if ($matching.Count -eq 0) {
+            throw "BenchmarkDotNet report for $benchmarkType was not produced in this run."
+        }
     }
 
-    $measurementLine = $content -split "`n" |
-        Where-Object {
-            $columns = $_ -split '\|'
-            if ($columns.Length -lt 4) {
-                return $false
+    $expectedMethods = @(
+        'GeneratedAccessorBaseline',
+        'RuntimeObjectStreaming',
+        'RuntimeRegisteredFastPath'
+    )
+
+    foreach ($report in $reports) {
+        $content = [System.IO.File]::ReadAllText($report.FullName)
+        if ($content.Contains('There are not any results runs', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $content.Contains('Build Error', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "BenchmarkDotNet report contains no valid measurements: $($report.FullName)"
+        }
+
+        foreach ($method in $expectedMethods) {
+            $methodLine = $content -split "`n" |
+                Where-Object {
+                    $columns = $_ -split '\|'
+                    if ($columns.Length -lt 4) {
+                        return $false
+                    }
+
+                    $methodName = ($columns[1] -replace '[*`]', '').Trim()
+                    if ($methodName -ne $method) {
+                        return $false
+                    }
+
+                    $mean = ($columns[3] -replace '[*`]', '').Trim()
+                    return $mean.Length -gt 0 -and $mean -ne 'NA'
+                } |
+                Select-Object -First 1
+
+            if ($null -eq $methodLine) {
+                throw "BenchmarkDotNet report did not contain measured method ${method}: $($report.FullName)"
             }
-
-            $method = ($columns[1] -replace '[*`]', '').Trim()
-            if ($method -notin @('GeneratedAccessorBaseline', 'RuntimeObjectStreaming', 'RuntimeRegisteredFastPath')) {
-                return $false
-            }
-
-            $mean = ($columns[3] -replace '[*`]', '').Trim()
-            return $mean.Length -gt 0 -and $mean -ne 'NA'
-        } |
-        Select-Object -First 1
-
-    if ($null -eq $measurementLine) {
-        throw "BenchmarkDotNet report did not contain a measured baseline/runtime row: $($report.FullName)"
+        }
     }
 }
 
@@ -103,6 +204,20 @@ Write-Host "BenchmarkArtifacts=$artifactRoot"
 $env:LIBDB_BENCHMARK_ARTIFACTS_PATH = $artifactRoot
 $runStartedUtc = [DateTime]::UtcNow.AddSeconds(-5)
 $skippedGates = [System.Collections.Generic.List[string]]::new()
+$benchmarkFiltersToRun = @(Get-BenchmarkFiltersToRun -BenchmarkFilter $Filter)
+$expectedBenchmarkTypes = @(Get-ExpectedBenchmarkTypes -BenchmarkFilters $benchmarkFiltersToRun)
+$releaseRequiredBenchmarkTypes = @('TvpBenchmarks', 'WideTvpBenchmarks')
+
+Write-Host "ResolvedFilters=$($benchmarkFiltersToRun -join ', ')"
+if ($expectedBenchmarkTypes.Count -gt 0) {
+    Write-Host "ExpectedBenchmarkTypes=$($expectedBenchmarkTypes -join ', ')"
+}
+
+foreach ($requiredBenchmarkType in $releaseRequiredBenchmarkTypes) {
+    if ($expectedBenchmarkTypes -notcontains $requiredBenchmarkType) {
+        $skippedGates.Add("benchmark-type:$requiredBenchmarkType")
+    }
+}
 
 if (-not $SkipSetup -or -not $SkipRun) {
     $env:LIBDB_BENCHMARK_ALLOW_RESET = 'true'
@@ -118,16 +233,18 @@ else {
 
 if (-not $SkipRun) {
     $env:LIBDB_BENCHMARK_JOB = $Job
-    Invoke-Checked 'dotnet' @(
-        'run',
-        '-c', 'Release',
-        '--no-restore',
-        '--project', $project,
-        '--',
-        '--filter', $Filter
-    )
+    foreach ($benchmarkFilter in $benchmarkFiltersToRun) {
+        Invoke-Checked 'dotnet' @(
+            'run',
+            '-c', 'Release',
+            '--no-restore',
+            '--project', $project,
+            '--',
+            '--filter', $benchmarkFilter
+        )
+    }
 
-    Assert-BenchmarkReportHasMeasurements -RunStartedUtc $runStartedUtc
+    Assert-BenchmarkReportHasMeasurements -RunStartedUtc $runStartedUtc -ExpectedBenchmarkTypes $expectedBenchmarkTypes
 }
 else {
     $skippedGates.Add('run')

@@ -1,4 +1,4 @@
-# TVP And Source Generation
+# Runtime TVP And TvpGen Migration
 
 Use this file for table-valued parameters, `LibDb.Tvp(...)`, static TVP shapes, option-level TVP mappings, and legacy compatibility markers.
 
@@ -10,6 +10,23 @@ using Lib.Db;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution.Tvp;
 ```
+
+## Default Runtime TVP Wrapper
+
+Use `LibDb.Tvp(...)` inside the normal `.With(...)` parameter object. Scalar parameters and TVP parameters can be passed together.
+
+```csharp
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_ImportOrderLines")
+    .With(new
+    {
+        RequestedBy = userId,
+        Lines = LibDb.Tvp("dbo.OrderLineTvp", rows)
+    })
+    .ExecuteAsync(ct);
+```
+
+Use this form for migration, low-frequency calls, and simple application paths.
 
 ## Preferred Explicit TVP Wrapper
 
@@ -71,6 +88,17 @@ TvpSchemaDescriptor descriptor = await db.Schema.GetTvpAsync("dbo.OrderLineTvp",
 ```
 
 Descriptor members include `TypeName`, `VersionToken`, `Columns`, and `Fingerprint`.
+
+## Migrating From `Lib.Db.TvpGen`
+
+`Lib.Db.TvpGen` is not required for current TVP usage. For application code:
+
+1. Remove the `Lib.Db.TvpGen` package/analyzer reference.
+2. Replace generated accessor calls with `LibDb.Tvp("schema.TypeName", rows)` for the default runtime path.
+3. For hot paths or Native AOT, register `options.Tvp.Map<T>()` or pass a `TvpShape<T>` built with static lambdas.
+4. Keep SQL Server permissions explicit: callers need `EXECUTE` on the procedure and `REFERENCES` on the TVP type, schema, or database.
+
+Generated-accessor code may remain only as a historical compatibility reference. Do not add new source-generator setup to consumer applications.
 
 ## Legacy Compatibility Markers
 

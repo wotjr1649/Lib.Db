@@ -57,14 +57,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
             .With(new { UserId = 1 })
             .QueryMultipleAsync();
 
-        if (!result.IsSuccess)
-        {
-            // MARS 미설정 환경에서는 QueryMultipleAsync가 실패할 수 있음 — 예상된 실패
-            result.Error.Should().NotBeNull();
-            result.Error!.Value.Kind.Should().Be(DbErrorKind.Unknown,
-                "MARS 미활성화 또는 기타 사유로 QueryMultiple이 실패할 수 있습니다.");
-            return;
-        }
+        result.IsSuccess.Should().BeTrue("release verification must provide MARS-capable QueryMultiple connections");
 
         await using (IMultipleResultReader reader = result.Value!)
         {
@@ -98,13 +91,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
             .With(new { })
             .QueryMultipleAsync();
 
-        if (!result.IsSuccess)
-        {
-            result.Error.Should().NotBeNull();
-            result.Error!.Value.Kind.Should().Be(DbErrorKind.Unknown,
-                "MARS 미활성화 또는 기타 사유로 QueryMultiple이 실패할 수 있습니다.");
-            return;
-        }
+        result.IsSuccess.Should().BeTrue("extra result sets must be ignored only after QueryMultiple succeeds");
 
         await using (IMultipleResultReader reader = result.Value!)
         {
