@@ -114,7 +114,7 @@ Remove from working tree if present and ignored:
 
 Add `using Lib.Db.Diagnostics;` to `PoolMetricsTests.cs`.
 
-Add this test to the class:
+Add this success-path test to the class:
 
 ```csharp
 [Theory]
@@ -138,6 +138,8 @@ public async Task PM03_ConnectionMetrics_ShouldHonorDbMetricsGate(bool enabled)
 
         IReadOnlyList<CapturedMeasurement<double>> measurements =
             harness.GetDoubles("libdb.connection.acquire_duration_ms");
+        IReadOnlyList<CapturedMeasurement<long>> poolWaits =
+            harness.GetLongs("libdb.connection.pool_waits");
 
         if (enabled)
         {
@@ -148,6 +150,7 @@ public async Task PM03_ConnectionMetrics_ShouldHonorDbMetricsGate(bool enabled)
         else
         {
             measurements.Should().BeEmpty();
+            poolWaits.Should().BeEmpty();
         }
     }
     finally
@@ -155,6 +158,70 @@ public async Task PM03_ConnectionMetrics_ShouldHonorDbMetricsGate(bool enabled)
         DbMetrics.IsEnabled = previous;
     }
 }
+```
+
+Add this failure-path test to prove timeout/error metrics are also gated:
+
+```csharp
+[Theory]
+[InlineData(false)]
+[InlineData(true)]
+public async Task PM04_ConnectionFailureMetrics_ShouldHonorDbMetricsGate(bool enabled)
+{
+    bool previous = DbMetrics.IsEnabled;
+    DbMetrics.IsEnabled = enabled;
+
+    try
+    {
+        LibDbOptions options = TestOptionsFactory.CreateValidWithOverrides(o =>
+        {
+            o.ConnectionStringNames = ["BrokenLocal"];
+            o.ConnectionStrings = new Dictionary<string, string>
+            {
+                ["BrokenLocal"] =
+                    "Server=127.0.0.1,1;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True;Connect Timeout=1"
+            };
+        });
+        Lib.Db.Repository.DbConnectionFactory factory = new(options);
+
+        using TelemetryTestHarness harness = new("Lib.Db");
+
+        Func<Task> act = async () =>
+        {
+            await using SqlConnection connection = await factory.CreateConnectionAsync(
+                "BrokenLocal",
+                TestContext.Current.CancellationToken);
+        };
+
+        await act.Should().ThrowAsync<Exception>();
+
+        IReadOnlyList<CapturedMeasurement<long>> timeouts =
+            harness.GetLongs("libdb.connection.pool_timeouts");
+
+        if (enabled)
+        {
+            timeouts.Should().NotBeEmpty();
+            timeouts.Should().OnlyContain(m =>
+                m.Tags.Any(t => t.Key == "instance" && t.Value is string) &&
+                m.Tags.Any(t => t.Key == "reason" && t.Value is string));
+        }
+        else
+        {
+            timeouts.Should().BeEmpty();
+        }
+    }
+    finally
+    {
+        DbMetrics.IsEnabled = previous;
+    }
+}
+```
+
+Add these usings if missing:
+
+```csharp
+using Lib.Db.Diagnostics;
+using Microsoft.Data.SqlClient;
 ```
 
 - [ ] **Step 2: Run the focused test and verify it fails**
@@ -165,7 +232,16 @@ Run:
 pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Filter "PoolMetricsTests"
 ```
 
-Expected before implementation: `PM03_ConnectionMetrics_ShouldHonorDbMetricsGate(false)` fails because `libdb.connection.acquire_duration_ms` is recorded even when metrics are disabled.
+Expected before implementation:
+
+- `PM03_ConnectionMetrics_ShouldHonorDbMetricsGate(false)` fails because
+  `libdb.connection.acquire_duration_ms` is recorded even when metrics are disabled.
+- `PM04_ConnectionFailureMetrics_ShouldHonorDbMetricsGate(false)` fails because
+  `libdb.connection.pool_timeouts` is recorded even when metrics are disabled.
+
+`libdb.connection.pool_waits` is gated by the same success-path `if (DbMetrics.IsEnabled)`
+block as acquisition duration. The disabled test asserts no accidental pool-wait event is
+emitted; deterministic positive pool-wait generation is not required for this task.
 
 - [ ] **Step 3: Gate successful connection metrics**
 
@@ -483,10 +559,23 @@ public void ArchivedReviewDocs_ShouldBeMarkedAsHistoricalAndExcludedFromConsumer
     publicDocs.Should().NotContain("tvpgen-guide.md");
     publicDocs.Should().NotContain("runtime-api.md");
     publicDocs.Should().NotContain("security-guardrails.md");
+
+    string activeSkillGuidance = string.Join(
+        Environment.NewLine,
+        Directory.GetFiles(Path.Combine(repoRoot.FullName, ".agent"), "*.md", SearchOption.AllDirectories)
+            .Concat(Directory.GetFiles(Path.Combine(repoRoot.FullName, ".claude"), "*.md", SearchOption.AllDirectories))
+            .Select(File.ReadAllText));
+    activeSkillGuidance.Should().NotContain("tvpgen-guide.md");
+    activeSkillGuidance.Should().NotContain("runtime-api.md");
+    activeSkillGuidance.Should().NotContain("security-guardrails.md");
+    activeSkillGuidance.Should().NotContain("BenchmarkDotNet");
+    activeSkillGuidance.Should().NotContain("Invoke-Verification.ps1");
 }
 ```
 
-Ensure `EnumeratePublicDocumentationFiles` continues to exclude `docs/reviews`.
+Ensure `EnumeratePublicDocumentationFiles` continues to exclude `docs/reviews`, and
+ensure only the active `.agent` and `.claude` skill roots are scanned. Do not scan the
+legacy `TEST\.agents\skills\lib-db` path.
 
 - [ ] **Step 5: Run focused verification**
 
@@ -552,8 +641,19 @@ public void ReleasePackageScript_ShouldValidatePackageMetadataAndUnsignedPolicy(
     script.Should().Contain("dotnet nuget verify");
     script.Should().Contain("NU3004");
     script.Should().Contain("AllowUnsigned");
+    script.Should().Contain("Test-OnlyAcceptedUnsignedNuGetFailure");
+    script.Should().Contain("Package repository commit does not match HEAD");
 }
 ```
+
+Add behavioral script-helper tests if the release package script exposes helper functions
+through a script-private test hook, or equivalent unit coverage in
+`VerificationEntryPointTests.cs`:
+
+- mixed `NU3004` plus another `NUxxxx` code must fail,
+- `NU3004` plus fatal/error text that is not part of the unsigned-package message must fail,
+- a package repository commit shorter than HEAD must fail,
+- a package repository commit different from HEAD must fail.
 
 - [ ] **Step 2: Run tests and verify failure**
 
@@ -670,8 +770,23 @@ function Test-OnlyAcceptedUnsignedNuGetFailure {
     $nuCodes = [regex]::Matches($VerifyText, 'NU\d{4}') |
         ForEach-Object { $_.Value } |
         Sort-Object -Unique
+    $failureLines = $VerifyText -split "(`r`n|`n|`r)" |
+        Where-Object {
+            $_ -match '(?i)(error|failed|failure|fatal|NU\d{4})' -and
+            -not [string]::IsNullOrWhiteSpace($_)
+        }
 
-    return @($nuCodes).Count -eq 1 -and $nuCodes[0] -eq 'NU3004'
+    if (@($nuCodes).Count -ne 1 -or $nuCodes[0] -ne 'NU3004') {
+        return $false
+    }
+
+    foreach ($line in $failureLines) {
+        if ($line -notmatch 'NU3004') {
+            return $false
+        }
+    }
+
+    return @($failureLines).Count -gt 0
 }
 
 function Expand-Nupkg {
@@ -730,9 +845,10 @@ if ($metadata.version -ne $version) { throw "Unexpected package version: $($meta
 if ([string]::IsNullOrWhiteSpace($metadata.license.expression)) { throw 'Package license expression is missing.' }
 if ([string]::IsNullOrWhiteSpace($metadata.readme)) { throw 'Package readme metadata is missing.' }
 if ([string]::IsNullOrWhiteSpace($metadata.repository.url)) { throw 'Package repository URL is missing.' }
-if (-not [string]::IsNullOrWhiteSpace($metadata.repository.commit) -and
-    -not $head.StartsWith($metadata.repository.commit, [System.StringComparison]::OrdinalIgnoreCase) -and
-    -not $metadata.repository.commit.StartsWith($head, [System.StringComparison]::OrdinalIgnoreCase)) {
+if ([string]::IsNullOrWhiteSpace($metadata.repository.commit)) {
+    throw 'Package repository commit is missing.'
+}
+if (-not $metadata.repository.commit.Equals($head, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Package repository commit does not match HEAD."
 }
 Assert-PackageDependenciesMatchProject -ProjectXml $projectXml -NuspecXml $nuspec
@@ -788,6 +904,13 @@ Run:
 $repoRoot = 'C:\Users\js\Documents\Codex\Lib.Db'
 $artifactPath = Join-Path $repoRoot 'artifacts\package-consumer-check'
 if (Test-Path -LiteralPath $artifactPath) {
+    $repoFullPath = [System.IO.Path]::GetFullPath($repoRoot)
+    $artifactFullPath = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $artifactPath).Path)
+    $relativeArtifactPath = [System.IO.Path]::GetRelativePath($repoFullPath, $artifactFullPath)
+    if ($relativeArtifactPath.StartsWith('..') -or [System.IO.Path]::IsPathFullyQualified($relativeArtifactPath)) {
+        throw 'Refusing to remove package-consumer-check because it resolved outside the repository root.'
+    }
+
     git -C $repoRoot check-ignore -q artifacts/package-consumer-check
     if ($LASTEXITCODE -ne 0) {
         throw 'Refusing to remove package-consumer-check because it is not ignored.'
@@ -844,10 +967,29 @@ public void AotVerification_ShouldUseWarningBaseline()
     script.Should().Contain("aot-warnings.json");
     script.Should().Contain("Assert-AotWarningsMatchBaseline");
     script.Should().Contain("Lib.Db");
+    script.Should().Contain("Trim analysis warning");
+    script.Should().Contain("AOT analysis warning");
     verificationDoc.Should().Contain("AOT warning baseline");
     verificationDoc.Should().Contain("Verification/baselines/aot-warnings.json");
 }
 ```
+
+Add a parser self-test path to `Invoke-Aot.ps1` and cover it from
+`VerificationEntryPointTests.cs` by executing:
+
+```powershell
+pwsh -NoProfile -File Verification/scripts/Invoke-Aot.ps1 -ParserSelfTest
+```
+
+The self-test must include representative lines for all supported formats:
+
+- `C:\packages\Provider.One.dll : warning IL2104: Assembly 'Provider.One' produced trim warnings.`,
+- `warning IL3053: Assembly 'Provider.Assembly' produced AOT analysis warnings`,
+- `Trim analysis warning IL2026: Assembly 'Provider.Three' uses reflection.`,
+- `AOT analysis warning IL3050: Assembly 'Provider.Four' requires dynamic code.`
+
+Expected: parser self-test exits 0 and proves id/assembly extraction. Add a negative
+sample that would be rejected by the baseline assertion.
 
 - [ ] **Step 2: Run tests and verify failure**
 
@@ -861,7 +1003,12 @@ Expected: failure because baseline and parser are not present.
 
 - [ ] **Step 3: Create the warning baseline**
 
-Create `Verification/baselines/aot-warnings.json`:
+Create `Verification/baselines/aot-warnings.json` from a fresh local AOT publish output.
+The baseline must contain exactly the provider-owned warnings observed at implementation
+time. Do not keep unobserved entries; do add newly observed provider assemblies such as
+`Microsoft.Extensions.Caching.Hybrid` if they appear in the fresh output.
+
+Initial candidate structure:
 
 ```json
 {
@@ -891,6 +1038,12 @@ Create `Verification/baselines/aot-warnings.json`:
       "assembly": "System.Configuration.ConfigurationManager",
       "owner": "provider",
       "rationale": "Transitive framework package trim warning emitted through SqlClient dependency chain."
+    },
+    {
+      "id": "IL2104",
+      "assembly": "Microsoft.Extensions.Caching.Hybrid",
+      "owner": "provider",
+      "rationale": "Provider-owned trim warning emitted by Microsoft.Extensions.Caching.Hybrid during Native AOT publish, if observed in the fresh baseline capture."
     }
   ]
 }
@@ -924,7 +1077,8 @@ if ($publishExitCode -ne 0) {
 
 - [ ] **Step 5: Add warning parser and baseline assertion**
 
-Add these functions to `Invoke-Aot.ps1`:
+Add `[switch] $ParserSelfTest` to the `Invoke-Aot.ps1` param block. Add these functions
+to `Invoke-Aot.ps1` before the publish execution:
 
 ```powershell
 function Get-AotWarnings {
@@ -933,13 +1087,24 @@ function Get-AotWarnings {
     $warnings = [System.Collections.Generic.List[object]]::new()
     foreach ($lineObject in $PublishOutput) {
         $line = [string] $lineObject
-        if ($line -notmatch ':\s*warning\s+(IL\d+):') {
+        if ($line -notmatch '(?i)(?:warning\s+|Trim analysis warning\s+|AOT analysis warning\s+)(IL\d+):') {
             continue
         }
 
         $id = $Matches[1]
-        $pathPart = ($line -split '\s*:\s*warning\s+IL\d+:', 2)[0]
-        $assembly = [System.IO.Path]::GetFileNameWithoutExtension($pathPart)
+        $assembly = 'unknown'
+
+        if ($line -match "(?i)Assembly\s+'([^']+)'") {
+            $assembly = $Matches[1]
+        }
+        elseif ($line -match "(?i)assembly\s+([A-Za-z0-9_.]+)") {
+            $assembly = $Matches[1]
+        }
+        elseif ($line -match '\s*:\s*warning\s+IL\d+:') {
+            $pathPart = ($line -split '\s*:\s*warning\s+IL\d+:', 2)[0]
+            $assembly = [System.IO.Path]::GetFileNameWithoutExtension($pathPart)
+        }
+
         if ([string]::IsNullOrWhiteSpace($assembly)) {
             $assembly = 'unknown'
         }
@@ -952,6 +1117,21 @@ function Get-AotWarnings {
     }
 
     return $warnings.ToArray()
+}
+
+function Invoke-AotParserSelfTest {
+    $sampleLines = @(
+        "C:\packages\Provider.One.dll : warning IL2104: Assembly 'Provider.One' produced trim warnings.",
+        "warning IL3053: Assembly 'Provider.Two' produced AOT analysis warnings.",
+        "Trim analysis warning IL2026: Assembly 'Provider.Three' uses reflection.",
+        "AOT analysis warning IL3050: Assembly 'Provider.Four' requires dynamic code."
+    )
+    $parsed = @(Get-AotWarnings -PublishOutput $sampleLines)
+    if ($parsed.Count -ne 4) { throw "Parser self-test expected 4 warnings but saw $($parsed.Count)." }
+    if ($parsed[0].Id -ne 'IL2104' -or $parsed[0].Assembly -ne 'Provider.One') { throw 'Parser self-test failed for path summary warning.' }
+    if ($parsed[1].Id -ne 'IL3053' -or $parsed[1].Assembly -ne 'Provider.Two') { throw 'Parser self-test failed for assembly summary warning.' }
+    if ($parsed[2].Id -ne 'IL2026' -or $parsed[2].Assembly -ne 'Provider.Three') { throw 'Parser self-test failed for trim analysis warning.' }
+    if ($parsed[3].Id -ne 'IL3050' -or $parsed[3].Assembly -ne 'Provider.Four') { throw 'Parser self-test failed for AOT analysis warning.' }
 }
 
 function Assert-AotWarningsMatchBaseline {
@@ -990,6 +1170,17 @@ function Assert-AotWarningsMatchBaseline {
             throw "AOT warning baseline entry was not observed. Update baseline intentionally if removed: $($entry.id) assembly=$($entry.assembly)"
         }
     }
+}
+```
+
+After defining `Invoke-AotParserSelfTest`, short-circuit self-test mode before deleting
+or creating publish artifacts:
+
+```powershell
+if ($ParserSelfTest) {
+    Invoke-AotParserSelfTest
+    Write-Host 'AOT parser self-test completed.'
+    return
 }
 ```
 
@@ -1160,6 +1351,11 @@ In `docs/04_operations.md`, add a short observability note:
 `EnableObservability` is a process-wide Lib.Db switch in v2.3.0. Configure it once at
 startup through `AddLibDb`/`AddHighPerformanceDb`, or use
 `LibDbRuntime.ConfigureMetrics(bool)` as an explicit process-wide override.
+
+If multiple service providers or runtime configuration calls are used in the same
+process, the last configuration call wins. Recommended order: configure DI/runtime
+once during startup, then call `LibDbRuntime.ConfigureMetrics(bool)` only when an
+intentional process-wide override is required.
 ```
 
 - [ ] **Step 2: Run full focused tests before the expensive gate**
