@@ -1,65 +1,77 @@
 # Mapping and Binding Contracts
 
-Use this file when work touches result mapping, parameter binding, `DbDataReader`, source-generated `[DbResult]` contracts, `DateOnly`/`TimeOnly`, or verification DB blocker coverage.
+Use this file when application code maps SQL Server result sets to DTOs, binds parameters, or uses generated result mappers.
 
 ## Result Column Name Resolution
 
-Default runtime result mapping uses this order:
+Lib.Db result mapping should be treated as a public consumer contract:
 
-1. exact case-insensitive property name match
-2. normalized match that removes underscores and compares case-insensitively
+1. Exact case-insensitive column/property names are preferred.
+2. If no exact match exists, underscore-insensitive normalized names may match, such as `CELL_NO` to `CellNo`.
+3. Normalized-name collisions must not silently bind ambiguous properties.
+
+Prefer SQL aliases when database names are unclear:
+
+```sql
+SELECT
+    CELL_NO AS CellNo,
+    CUSTOMER_CD AS CustomerCd
+FROM dbo.Customer;
+```
+
+DTO shape:
+
+```csharp
+public sealed class CustomerDto
+{
+    public string CellNo { get; init; } = "";
+    public string CustomerCd { get; init; } = "";
+}
+```
+
+## Generated Result Mapper Contract
+
+Generated `[DbResult]` mappers should operate through `DbDataReader`.
+
+Consumer guidance:
+
+- Do not cast diagnostic or wrapped readers to concrete SQL reader types.
+- Treat `DbDataReader` as the compatibility boundary.
+- Keep generated and reflection-based mapping behavior aligned from the consumer perspective.
+
+## DateOnly and TimeOnly Binding
+
+Raw `DateOnly` values bind as SQL `date`.
+
+Raw `TimeOnly` values bind as SQL `time`.
 
 Example:
 
 ```csharp
-public sealed record SuspendRow(int CellNo, string SlotName);
+DbResult<IAsyncEnumerable<ScheduleDto>> result = await db.Default
+    .Procedure("dbo.usp_SearchSchedule")
+    .With(new
+    {
+        WorkDate = DateOnly.FromDateTime(dateTime),
+        StartAt = TimeOnly.FromDateTime(dateTime)
+    })
+    .QueryAsync<ScheduleDto>(ct);
 ```
 
-SQL result columns such as `CELL_NO` and `SLOT_NAME` should map to `CellNo` and `SlotName`.
-
-Collision rule: if two properties normalize to the same key, do not silently pick an arbitrary property. Preserve deterministic first-match behavior only where the runtime explicitly guards the ambiguity.
-
-## Generated Result Mapper Contract
-
-`[DbResult]` generated code must expose:
-
-```csharp
-public static MyRow Map(DbDataReader reader);
-public static MyRow Map(SqlDataReader reader);
-```
-
-`Map(DbDataReader)` is the primary contract. `Map(SqlDataReader)` is a compatibility shim.
-
-Runtime generated result mapping must work with any `DbDataReader`, including diagnostic wrappers such as `MonitoredSqlDataReader`.
-
-If old generated code only has `Map(SqlDataReader)`, regenerate with the current `Lib.Db.TvpGen` package.
-
-## DateOnly and TimeOnly Binding
-
-Raw SQL and stored procedure parameter binding should treat:
-
-- `DateOnly` as SQL `date`
-- `TimeOnly` as SQL `time`
-
-Runtime conversion expectations:
-
-- `DateOnly` binds through a `DateTime` value at midnight with `SqlDbType.Date`
-- `TimeOnly` binds through a `TimeSpan` value with `SqlDbType.Time`
-- neither type should be treated as a complex object parameter container
+Use explicit SQL aliases and matching DTO property types when provider behavior matters.
 
 ## DTO Design Guidance
 
-- Keep DTO property names aligned with database result semantics.
-- Prefer explicit DTOs over dynamic dictionaries for public APIs.
-- Positional records are supported, but constructor parameter names must be meaningful.
-- For ambiguous legacy result sets, consider SQL aliases rather than relying on normalization.
+- Prefer DTOs with clear property names.
+- Use nullable reference types to express database nullability.
+- Avoid ambiguous names that differ only by underscores or casing.
+- Prefer SQL aliases when mapping legacy database columns.
+- Keep DTO constructors and init-only properties compatible with the mapper behavior used by the application.
 
-## Verification Targets
+## Consumer Checklist
 
-When changing this area, include focused coverage for:
-
-- `CELL_NO` to `CellNo` mapping
-- duplicate normalized column/property collision behavior
-- generated `[DbResult]` with a `DbDataReader` wrapper
-- raw `DateOnly` and `TimeOnly` parameters
-- real SQL Server verification when provider behavior matters
+- Do SQL result columns clearly map to DTO properties?
+- Are ambiguous normalized names avoided?
+- Are nullability expectations explicit?
+- Are `DateOnly` and `TimeOnly` parameters intentional?
+- Do generated mappers use `DbDataReader` as the compatibility boundary?

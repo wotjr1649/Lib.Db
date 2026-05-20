@@ -1,46 +1,93 @@
 # Lib.Db.TvpGen Guide
 
-Use this file when work touches `Lib.Db.TvpGen`, `[TvpRow]`, `[DbResult]`, generated source text, or generator tests.
+Use this file when application code uses Lib.Db source generation for TVP rows or generated result mappers.
 
-## Generator Responsibilities
+## Consumer Responsibilities
 
-`Lib.Db.TvpGen` owns compile-time generation for:
+Application code owns:
 
-- TVP row binding from `[TvpRow]`
-- result row mapping from `[DbResult]`
-- SQL Server type mapping for supported CLR types
-- generated source diagnostics and compatibility shims
+- CLR row types used for TVP input
+- DTO types used for result mapping
+- alignment with SQL Server user-defined table types and stored procedure contracts
+- nullability choices
+- keeping generated code warnings visible during application builds
 
-The runtime library owns execution, connection policy, diagnostics, and fallback reflection mapping.
+Lib.Db.TvpGen owns compile-time generation for supported patterns.
 
 ## TVP Rules
 
-- Keep generated TVP binding deterministic.
-- Preserve column order expected by SQL Server TVP types.
-- Keep nullable handling explicit.
-- Support modern CLR types already covered by the runtime, including `DateOnly` and `TimeOnly`.
-- Do not introduce runtime reflection into generated hot paths unless there is no compile-time alternative.
+Use `[TvpRow]` for CLR types that represent SQL Server table-valued parameter rows.
+
+Consumer guidance:
+
+- Keep property names and order aligned with the SQL Server table type expected by stored procedures.
+- Use supported CLR types only.
+- Keep nullable CLR properties aligned with SQL Server nullability.
+- Prefer immutable or init-only DTO-like row types when practical.
+
+Example shape:
+
+```csharp
+[TvpRow("dbo.OrderLineTvp")]
+public sealed class OrderLineRow
+{
+    public int LineNo { get; init; }
+    public string ItemCode { get; init; } = "";
+    public decimal Quantity { get; init; }
+}
+```
+
+Stored procedure call shape:
+
+```csharp
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_SaveOrderLines")
+    .With(new
+    {
+        OrderNo = orderNo,
+        Lines = orderLines
+    })
+    .ExecuteAsync(ct);
+```
 
 ## DbResult Rules
 
-Generated `[DbResult]` mappers must emit `Map(DbDataReader)` as the primary overload and `Map(SqlDataReader)` as a shim.
+Use `[DbResult]` for DTOs that should have generated result mapping.
 
-Generated code should prefer reader APIs selected by the type mapping registry. If provider behavior differs between mock readers and SQL Server readers, add both generated-source assertions and runtime tests.
+Consumer guidance:
 
-## Compatibility
+- Generated result mappers should operate through `DbDataReader`.
+- Concrete SQL reader types are compatibility details, not the primary consumer boundary.
+- Keep SQL aliases aligned with DTO property names.
+- Avoid ambiguous normalized names.
 
-Do not remove existing generated public members without a deliberate breaking-change note.
+Example shape:
 
-If runtime behavior changes, update:
+```csharp
+[DbResult]
+public sealed class OrderSummaryDto
+{
+    public string OrderNo { get; init; } = "";
+    public DateOnly OrderDate { get; init; }
+    public decimal TotalAmount { get; init; }
+}
+```
 
-- generator source
-- generator unit tests that assert generated source
-- runtime mapper tests
-- README/API docs that describe generated contracts
+## Troubleshooting
 
-## Review Checklist
+If generated code fails or mapping is unexpected:
 
-- Generated source compiles without warnings.
-- Generated source does not require a concrete `SqlDataReader` when a `DbDataReader` wrapper is passed.
-- Generated code has no hidden dependency on full connection strings or runtime secrets.
-- Type mappings for `date` and `time` remain aligned with runtime binding.
+- check unsupported CLR property types
+- check SQL Server table type and CLR row shape mismatch
+- check nullable property mismatch
+- check ambiguous result column names
+- check whether SQL aliases should be added
+- check whether the application build is suppressing generator diagnostics
+
+## Consumer Checklist
+
+- Are TVP row types aligned with SQL Server table types?
+- Are `[DbResult]` DTOs aligned with result column names?
+- Are unsupported types avoided?
+- Are nullable values intentional?
+- Are generated mapper diagnostics visible in the consuming application build?

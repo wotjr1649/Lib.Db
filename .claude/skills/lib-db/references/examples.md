@@ -1,99 +1,165 @@
 # Examples
 
-Use these as safe, compact patterns. Adapt names to the local code and tests.
+Use these examples as small consumer-facing templates. Keep secrets, full connection strings, high-privilege logins, certificate bypass defaults, repository paths, and package-source commands out of examples.
 
-## Query Single Row by Stored Procedure
+## Dependency Injection
 
 ```csharp
-public async Task<UserDto?> GetUserAsync(int userId, CancellationToken ct)
+builder.Services.AddLibDb(options =>
 {
-    DbResult<UserDto?> result = await db.Default
-        .Procedure("dbo.usp_GetUser")
-        .With(new { UserId = userId })
-        .QuerySingleAsync<UserDto>(ct);
-
-    return result is { IsSuccess: true } ? result.Value : null;
-}
-```
-
-## Stream Rows
-
-```csharp
-public async IAsyncEnumerable<OrderDto> GetOrdersAsync(
-    string status,
-    [EnumeratorCancellation] CancellationToken ct = default)
-{
-    DbResult<IAsyncEnumerable<OrderDto>> result = await db.Default
-        .Procedure("dbo.usp_GetOrders")
-        .With(new { Status = status })
-        .QueryAsync<OrderDto>(ct);
-
-    if (!result.IsSuccess || result.Value is null)
-        yield break;
-
-    await foreach (OrderDto order in result.Value.WithCancellation(ct))
-        yield return order;
-}
-```
-
-## Parameterized Text SQL
-
-Use this only when text SQL is intentional and allowed by `RawSqlPolicy`.
-
-```csharp
-DbResult<int?> count = await db.Default
-    .SqlInterpolated($"SELECT COUNT_BIG(*) FROM dbo.Orders WHERE Status = {status}")
-    .ExecuteScalarAsync<int>(ct);
-```
-
-Avoid text SQL for writes in examples. Prefer stored procedures.
-
-## Production-Oriented Options
-
-```csharp
-builder.Services.AddHighPerformanceDb(options =>
-{
-    options.ConnectionStringNames = ["Default"];
+    options.ConnectionStringNames = new[] { "Default" };
+    options.ConnectionStrings["Default"] =
+        builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string key 'Default' is missing.");
     options.UseProductionSecurityDefaults();
-    options.Mars = MarsPolicy.ForceEnable;
+    options.RawSqlPolicy = RawSqlPolicy.DenyWriteText;
     options.EnableObservability = true;
 });
 ```
 
-The connection string value should be supplied by configuration providers such as environment variables, user secrets, or CI secrets.
+## Production-Oriented Configuration
 
-## DateOnly and TimeOnly Parameters
+```json
+{
+  "LibDb": {
+    "ConnectionStringNames": [ "Default" ],
+    "ConnectionSecurityProfile": "Production",
+    "RawSqlPolicy": "DenyWriteText",
+    "EnableObservability": true
+  }
+}
+```
+
+Store the actual connection string in the application's approved secret/configuration provider. Do not print it.
+
+## Query Single Row By Stored Procedure
 
 ```csharp
-DbResult<IAsyncEnumerable<ScheduleRow>> result = await db.Default
-    .Procedure("dbo.usp_GetSchedule")
+DbResult<UserDto?> result = await db.Default
+    .Procedure("dbo.usp_GetUser")
+    .With(new { UserId = userId })
+    .QuerySingleAsync<UserDto>(ct);
+
+if (!result.IsSuccess)
+{
+    logger.LogWarning("User lookup failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
+    return null;
+}
+
+return result.Value;
+```
+
+## Execute A Stored Procedure Write
+
+```csharp
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_InsertOrder")
+    .With(new { request.OrderNo, request.CustomerCd })
+    .ExecuteAsync(ct);
+
+if (!result.IsSuccess)
+{
+    logger.LogWarning("Order insert failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
+}
+```
+
+## Intentional Parameterized Text SQL Read
+
+```csharp
+DbResult<long?> result = await db.Default
+    .SqlInterpolated($"SELECT COUNT_BIG(*) FROM dbo.Orders WHERE Status = {status}")
+    .ExecuteScalarAsync<long>(ct);
+```
+
+Use text SQL only when intentional and allowed by application raw SQL policy.
+
+## Stream Rows
+
+```csharp
+DbResult<IAsyncEnumerable<OrderDto>> result = await db.Default
+    .Procedure("dbo.usp_StreamOrders")
+    .With(new { Status = status })
+    .QueryAsync<OrderDto>(ct);
+
+if (!result.IsSuccess || result.Value is null)
+{
+    logger.LogWarning("Order stream failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
+    return;
+}
+
+await foreach (OrderDto order in result.Value.WithCancellation(ct))
+{
+    await processor.HandleAsync(order, ct);
+}
+```
+
+## DateOnly And TimeOnly Parameters
+
+```csharp
+DbResult<IAsyncEnumerable<ScheduleDto>> result = await db.Default
+    .Procedure("dbo.usp_SearchSchedule")
     .With(new
     {
-        BusinessDate = DateOnly.FromDateTime(DateTime.UtcNow),
-        StartTime = new TimeOnly(9, 0)
+        WorkDate = DateOnly.FromDateTime(request.WorkDate),
+        StartAt = TimeOnly.FromDateTime(request.StartAt)
     })
-    .QueryAsync<ScheduleRow>(ct);
+    .QueryAsync<ScheduleDto>(ct);
 ```
 
 ## Result Mapping With SQL Aliases
 
-Normalization supports common SQL identifier styles, but aliases are still the clearest contract for public queries.
+SQL shape:
 
 ```sql
 SELECT
     CELL_NO AS CellNo,
-    SLOT_NAME AS SlotName
-FROM verify.ResultMappingRows;
+    CUSTOMER_CD AS CustomerCd
+FROM dbo.Customer;
+```
+
+DTO shape:
+
+```csharp
+public sealed class CustomerDto
+{
+    public string CellNo { get; init; } = "";
+    public string CustomerCd { get; init; } = "";
+}
 ```
 
 ## Generated Result DTO
 
 ```csharp
 [DbResult]
-public sealed partial record UserResult(
-    int UserId,
-    string UserName,
-    string Email);
+public sealed class OrderSummaryDto
+{
+    public string OrderNo { get; init; } = "";
+    public DateOnly OrderDate { get; init; }
+    public decimal TotalAmount { get; init; }
+}
 ```
 
-The generated code must include `Map(DbDataReader)` and remain compatible with `MonitoredSqlDataReader`.
+## TVP Row
+
+```csharp
+[TvpRow("dbo.OrderLineTvp")]
+public sealed class OrderLineRow
+{
+    public int LineNo { get; init; }
+    public string ItemCode { get; init; } = "";
+    public decimal Quantity { get; init; }
+}
+```
+
+Usage shape:
+
+```csharp
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_SaveOrderLines")
+    .With(new
+    {
+        OrderNo = orderNo,
+        Lines = orderLines
+    })
+    .ExecuteAsync(ct);
+```

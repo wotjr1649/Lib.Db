@@ -1,36 +1,41 @@
 # Runtime API Reference
 
-Use this file when work touches `Lib.Db/Lib.Db`, dependency injection, fluent execution, options, transactions, resilience, observability, or caching.
+Use this file when application code consumes Lib.Db runtime APIs: dependency injection, fluent execution, options, transactions, resilience, observability, or caching.
 
 ## Package Boundary
 
-- `Lib.Db` is the runtime SQL Server data access library.
-- `IDbSession` is the main application entry point.
-- `Lib.Db.TvpGen` generates TVP and `[DbResult]` mapping code but does not own runtime connection policy.
+Treat Lib.Db as a NuGet dependency. Use public APIs from application code and avoid relying on package-source-only structure or maintenance tooling.
 
 ## Dependency Injection
 
-Common registration paths:
+Prefer registering Lib.Db through the application host and configuration system.
+
+Typical shape:
 
 ```csharp
 builder.Services.AddLibDb(builder.Configuration);
 ```
 
+When custom options are needed, keep them explicit and production-safe:
+
 ```csharp
-builder.Services.AddHighPerformanceDb(options =>
+builder.Services.AddLibDb(options =>
 {
-    options.ConnectionStringNames = ["Default"];
+    options.ConnectionStringNames = new[] { "Default" };
+    options.ConnectionStrings["Default"] =
+        builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string key 'Default' is missing.");
     options.UseProductionSecurityDefaults();
-    options.EnableSchemaCaching = true;
-    options.PrewarmSchemas = ["dbo"];
+    options.RawSqlPolicy = RawSqlPolicy.DenyWriteText;
+    options.EnableObservability = true;
 });
 ```
 
-Do not place full connection string values in examples. Configuration keys may be shown, values should come from secret or environment providers.
+Do not place full connection strings or passwords directly in source code examples.
 
 ## Fluent Execution Shape
 
-Core flow:
+Core stored procedure flow:
 
 ```csharp
 DbResult<UserDto?> result = await db.Default
@@ -39,15 +44,7 @@ DbResult<UserDto?> result = await db.Default
     .QuerySingleAsync<UserDto>(ct);
 ```
 
-Raw SQL should be explicit and policy-aware:
-
-```csharp
-DbResult<int?> count = await db.Default
-    .SqlInterpolated($"SELECT COUNT_BIG(*) FROM dbo.Orders WHERE Status = {status}")
-    .ExecuteScalarAsync<int>(ct);
-```
-
-Prefer stored procedures for writes:
+Stored procedure write flow:
 
 ```csharp
 DbResult<int> result = await db.Default
@@ -56,41 +53,113 @@ DbResult<int> result = await db.Default
     .ExecuteAsync(ct);
 ```
 
-## Important Options
+Intentional parameterized text SQL read:
 
-| Option | Default | Guidance |
-| --- | --- | --- |
-| `ConnectionStringNames` | `["Default"]` | First name is the default instance. |
-| `ConnectionSecurityProfile` | `Development` | Use `Production` for production validation. |
-| `RawSqlPolicy` | `Allow` | Use `DenyWriteText` or `DenyAllText` for operational guardrails. |
-| `Mars` | `MarsPolicy.Auto` | Use `MarsPolicy.ForceEnable` when multi-result workflows are required. |
-| `StrictRequiredParameterCheck` | `true` | Keep enabled unless compatibility requires otherwise. |
-| `EnableSchemaCaching` | `true` | Keep enabled for repeated stored procedure metadata lookup. |
-| `EnableObservability` | `false` | Single observability master switch. |
-| `EnableOpenTelemetry` | obsolete alias | Do not add new usage. |
+```csharp
+DbResult<long?> result = await db.Default
+    .SqlInterpolated($"SELECT COUNT_BIG(*) FROM dbo.Orders WHERE Status = {status}")
+    .ExecuteScalarAsync<long>(ct);
+```
+
+Use raw SQL only when it is intentional and allowed by application policy.
+
+## `DbResult<T>` Handling
+
+Handle success and failure explicitly:
+
+```csharp
+DbResult<UserDto?> result = await db.Default
+    .Procedure("dbo.usp_GetUser")
+    .With(new { UserId = userId })
+    .QuerySingleAsync<UserDto>(ct);
+
+if (!result.IsSuccess)
+{
+    logger.LogWarning("User lookup failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
+    return null;
+}
+
+return result.Value;
+```
+
+Do not assume every command returns a non-null value. Distinguish missing rows, null database values, failed commands, and cancellation according to the consuming application's behavior.
+
+## Streaming Rows
+
+Use streaming APIs when result sets can be large and the consuming code can process rows incrementally:
+
+```csharp
+DbResult<IAsyncEnumerable<OrderDto>> result = await db.Default
+    .Procedure("dbo.usp_StreamOrders")
+    .With(new { Status = status })
+    .QueryAsync<OrderDto>(ct);
+
+if (!result.IsSuccess || result.Value is null)
+{
+    logger.LogWarning("Order stream failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
+    return;
+}
+
+await foreach (OrderDto order in result.Value.WithCancellation(ct))
+{
+    await processor.HandleAsync(order, ct);
+}
+```
+
+Keep cancellation tokens flowing through the entire call chain.
 
 ## Transactions
 
-Use `BeginTransactionAsync` when multiple commands must commit or roll back together.
+Use Lib.Db transaction APIs when multiple commands must share one SQL transaction. Keep transaction scope small and avoid long-running work inside the transaction.
+
+Example shape:
 
 ```csharp
 await using IDbTransactionScope tx = await db.BeginTransactionAsync("Default", ct);
 
-await tx.Procedure("dbo.usp_InsertOrder")
-    .With(new { request.OrderNo })
+DbResult<int> orderResult = await tx.Procedure("dbo.usp_InsertOrder")
+    .With(new { request.OrderNo, request.CustomerCd })
     .ExecuteAsync(ct);
 
-await tx.CommitAsync(ct);
-```
+if (!orderResult.IsSuccess)
+{
+    return;
+}
 
-Keep transaction scopes small. Avoid streaming large result sets while holding a transaction unless the caller explicitly needs that consistency boundary.
+DbResult<int> auditResult = await tx.Procedure("dbo.usp_InsertOrderAudit")
+    .With(new { request.OrderNo, Action = "Created" })
+    .ExecuteAsync(ct);
+
+if (!auditResult.IsSuccess)
+{
+    return;
+}
+
+DbResult<bool> commitResult = await tx.CommitAsync(ct);
+```
 
 ## Observability
 
-Use `EnableObservability` for activity/metric emission. Do not introduce new `EnableOpenTelemetry` usage except migration documentation.
+Enable observability through public options and application logging infrastructure. Prefer structured metadata over raw SQL text or parameter values.
 
-Do not log secret values, full connection strings, or sensitive parameter payloads.
+Useful metadata:
+
+- command type
+- configured instance name
+- elapsed time
+- row count
+- success or error classification
 
 ## Caching
 
-Use cache helpers only when the result is safe to cache for the requested scope and the cache key does not expose sensitive data. Include invalidation or freshness expectations in docs and tests when adding caching behavior.
+Use caching only for reads where staleness is acceptable. Do not cache tenant-sensitive or permission-sensitive results unless the cache key includes the relevant tenant, user, permission, and query dimensions.
+
+## Consumer Checklist
+
+- Is Lib.Db configured through application DI/configuration?
+- Are secrets externalized?
+- Are writes routed through stored procedures?
+- Is raw SQL policy explicit?
+- Are `DbResult<T>` failures handled?
+- Are cancellation tokens passed through?
+- Are logs structured and redacted?
