@@ -80,7 +80,7 @@ public sealed class VerificationEntryPointTests
         benchmarkScript.Should().Contain("ExpectedBenchmarkTypes");
         benchmarkScript.Should().Contain("TvpBenchmarks");
         benchmarkScript.Should().Contain("WideTvpBenchmarks");
-        benchmarkScript.Should().Contain("'*WideTvpBenchmarks*'");
+        benchmarkScript.Should().Contain("'*Lib.Db.Benchmarks.WideTvpBenchmarks*'");
         manifest.Should().Contain("artifactSecretScan");
         manifest.Should().Contain("artifactTrackingGate");
     }
@@ -296,6 +296,46 @@ public sealed class VerificationEntryPointTests
         combined.Should().Contain("ResolvedFilters=*Lib.Db.Benchmarks.TvpBenchmarks*, *Lib.Db.Benchmarks.WideTvpBenchmarks*");
         combined.Should().Contain("ExpectedBenchmarkTypes=TvpBenchmarks, WideTvpBenchmarks");
         combined.Should().NotContain("benchmark-type:");
+    }
+
+    [Fact]
+    public async Task BenchmarkWrapper_DefaultTvpFilter_ShouldUseNonOverlappingClassFilters()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string scriptPath = Path.Combine(repoRoot.FullName, "Verification", "scripts", "Invoke-Benchmarks.ps1");
+
+        using System.Diagnostics.Process process = new()
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "pwsh",
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            }
+        };
+
+        process.StartInfo.ArgumentList.Add("-NoProfile");
+        process.StartInfo.ArgumentList.Add("-File");
+        process.StartInfo.ArgumentList.Add(scriptPath);
+        process.StartInfo.ArgumentList.Add("-Job");
+        process.StartInfo.ArgumentList.Add("Dry");
+        process.StartInfo.ArgumentList.Add("-SkipSetup");
+        process.StartInfo.ArgumentList.Add("-SkipRun");
+        process.StartInfo.ArgumentList.Add("-SkipSecretScan");
+        process.StartInfo.ArgumentList.Add("-AllowPartial");
+
+        process.Start();
+
+        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string combined = output + error;
+
+        process.ExitCode.Should().Be(0, combined);
+        combined.Should().Contain(
+            "ResolvedFilters=*Lib.Db.Benchmarks.TvpBenchmarks*, *Lib.Db.Benchmarks.WideTvpBenchmarks*");
+        combined.Should().Contain("ExpectedBenchmarkTypes=TvpBenchmarks, WideTvpBenchmarks");
     }
 
     [Fact]

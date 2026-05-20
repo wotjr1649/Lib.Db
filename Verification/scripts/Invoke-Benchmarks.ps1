@@ -77,7 +77,7 @@ function Get-BenchmarkFiltersToRun {
     if ($normalized.Equals('*TvpBenchmarks*', [System.StringComparison]::OrdinalIgnoreCase) -or
         $normalized.Equals('TvpBenchmarks', [System.StringComparison]::OrdinalIgnoreCase) -or
         $normalized.Equals('Lib.Db.Benchmarks.TvpBenchmarks*', [System.StringComparison]::OrdinalIgnoreCase)) {
-        return @('*TvpBenchmarks*', '*WideTvpBenchmarks*')
+        return @('*Lib.Db.Benchmarks.TvpBenchmarks*', '*Lib.Db.Benchmarks.WideTvpBenchmarks*')
     }
 
     if ($normalized.Contains('TvpBenchmarks', [System.StringComparison]::OrdinalIgnoreCase) -and
