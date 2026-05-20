@@ -1,6 +1,6 @@
 # Examples
 
-Use these examples as small consumer-facing templates. Keep secrets, full connection strings, high-privilege logins, certificate bypass defaults, repository paths, and package-source commands out of examples.
+Use these as small consumer-facing templates. Do not include secrets, full connection strings, high-privilege logins, certificate bypass defaults, direct SQL tool workflows, or package maintenance commands.
 
 ## Dependency Injection
 
@@ -17,22 +17,7 @@ builder.Services.AddLibDb(options =>
 });
 ```
 
-## Production-Oriented Configuration
-
-```json
-{
-  "LibDb": {
-    "ConnectionStringNames": [ "Default" ],
-    "ConnectionSecurityProfile": "Production",
-    "RawSqlPolicy": "DenyWriteText",
-    "EnableObservability": true
-  }
-}
-```
-
-Store the actual connection string in the application's approved secret/configuration provider. Do not print it.
-
-## Query Single Row By Stored Procedure
+## Query Single Row
 
 ```csharp
 DbResult<UserDto?> result = await db.Default
@@ -49,21 +34,24 @@ if (!result.IsSuccess)
 return result.Value;
 ```
 
-## Execute A Stored Procedure Write
+## Execute Write Stored Procedure
 
 ```csharp
 DbResult<int> result = await db.Default
-    .Procedure("dbo.usp_InsertOrder")
-    .With(new { request.OrderNo, request.CustomerCd })
+    .Procedure("dbo.usp_UpdateOrderStatus")
+    .With(new { OrderId = orderId, Status = status })
     .ExecuteAsync(ct);
 
 if (!result.IsSuccess)
 {
-    logger.LogWarning("Order insert failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
+    logger.LogWarning(
+        "Order update failed. Kind={Kind}, SqlErrorCode={SqlErrorCode}",
+        result.Error?.Kind,
+        result.Error?.SqlErrorCode);
 }
 ```
 
-## Intentional Parameterized Text SQL Read
+## Parameterized Text Read
 
 ```csharp
 DbResult<long?> result = await db.Default
@@ -71,95 +59,91 @@ DbResult<long?> result = await db.Default
     .ExecuteScalarAsync<long>(ct);
 ```
 
-Use text SQL only when intentional and allowed by application raw SQL policy.
-
 ## Stream Rows
 
 ```csharp
 DbResult<IAsyncEnumerable<OrderDto>> result = await db.Default
     .Procedure("dbo.usp_StreamOrders")
-    .With(new { Status = status })
+    .With(new { CustomerId = customerId })
     .QueryAsync<OrderDto>(ct);
 
-if (!result.IsSuccess || result.Value is null)
+if (result.IsSuccess)
 {
-    logger.LogWarning("Order stream failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
-    return;
-}
-
-await foreach (OrderDto order in result.Value.WithCancellation(ct))
-{
-    await processor.HandleAsync(order, ct);
-}
-```
-
-## DateOnly And TimeOnly Parameters
-
-```csharp
-DbResult<IAsyncEnumerable<ScheduleDto>> result = await db.Default
-    .Procedure("dbo.usp_SearchSchedule")
-    .With(new
+    await foreach (OrderDto row in result.Value!.WithCancellation(ct))
     {
-        WorkDate = DateOnly.FromDateTime(request.WorkDate),
-        StartAt = TimeOnly.FromDateTime(request.StartAt)
-    })
-    .QueryAsync<ScheduleDto>(ct);
-```
-
-## Result Mapping With SQL Aliases
-
-SQL shape:
-
-```sql
-SELECT
-    CELL_NO AS CellNo,
-    CUSTOMER_CD AS CustomerCd
-FROM dbo.Customer;
-```
-
-DTO shape:
-
-```csharp
-public sealed class CustomerDto
-{
-    public string CellNo { get; init; } = "";
-    public string CustomerCd { get; init; } = "";
+        Handle(row);
+    }
 }
 ```
 
-## Generated Result DTO
+## Multiple Result Sets
 
 ```csharp
-[DbResult]
-public sealed class OrderSummaryDto
+DbResult<IMultipleResultReader> result = await db.Default
+    .Procedure("dbo.usp_GetDashboard")
+    .With(new { CustomerId = customerId })
+    .QueryMultipleAsync(ct);
+
+if (result.IsSuccess)
 {
-    public string OrderNo { get; init; } = "";
-    public DateOnly OrderDate { get; init; }
-    public decimal TotalAmount { get; init; }
+    await using IMultipleResultReader grid = result.Value!;
+    List<OrderDto> orders = await grid.ReadAsync<OrderDto>(ct);
+    OrderSummaryDto? summary = await grid.ReadSingleAsync<OrderSummaryDto>(ct);
 }
 ```
 
-## TVP Row
+## Transaction
 
 ```csharp
-[TvpRow("dbo.OrderLineTvp")]
-public sealed class OrderLineRow
-{
-    public int LineNo { get; init; }
-    public string ItemCode { get; init; } = "";
-    public decimal Quantity { get; init; }
-}
-```
+await using IDbTransactionScope tx = await db.BeginTransactionAsync("Default", ct);
 
-Usage shape:
-
-```csharp
-DbResult<int> result = await db.Default
-    .Procedure("dbo.usp_SaveOrderLines")
-    .With(new
-    {
-        OrderNo = orderNo,
-        Lines = orderLines
-    })
+DbResult<int> write = await tx
+    .Procedure("dbo.usp_InsertOrder")
+    .With(new { request.OrderNo, request.CustomerId })
     .ExecuteAsync(ct);
+
+if (!write.IsSuccess)
+    return write;
+
+DbResult<bool> commit = await tx.CommitAsync(ct);
+```
+
+## TVP With Static Shape
+
+```csharp
+TvpShape<OrderLineRow> shape = TvpShape.For<OrderLineRow>()
+    .Column("OrderId", SqlDbType.Int, static row => row.OrderId)
+    .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64)
+    .Column("Quantity", SqlDbType.Int, static row => row.Quantity)
+    .Build();
+
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_ImportOrderLines")
+    .With(new { Lines = LibDb.Tvp("dbo.OrderLineTvp", rows, shape) })
+    .ExecuteAsync(ct);
+```
+
+## Bulk Insert
+
+```csharp
+DbResult<long> result = await db.BulkInsertAsync(
+    "Default",
+    "[dbo].[OrderImport]",
+    records,
+    new BulkInsertOptions { BatchSize = 10_000, CheckConstraints = true },
+    ct);
+```
+
+## Cache-Aside
+
+```csharp
+DbResult<UserDto?> result = await QueryCacheExtensions.GetOrQueryAsync(
+    cache,
+    $"user:{userId}",
+    TimeSpan.FromMinutes(5),
+    () => db.Default
+        .Procedure("dbo.usp_GetUser")
+        .With(new { UserId = userId })
+        .QuerySingleAsync<UserDto>(ct),
+    ct: ct);
 ```

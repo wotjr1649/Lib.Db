@@ -1,94 +1,69 @@
 ---
 name: lib-db
-description: Use when using the Lib.Db NuGet package in application code, especially for dependency injection, SQL Server connection security, stored procedure execution, raw SQL policy, result mapping, DbResult handling, TVP rows, source-generated mappers, or production-safe examples.
+description: Use when using the Lib.Db NuGet package in application code, especially for SQL Server data access, dependency injection, options, connection security, fluent queries, parameters, DbResult handling, mapping, TVP, bulk insert, schema maintenance, caching, transactions, health checks, interceptors, diagnostics, resilience, AOT/trimming, JSON helpers, or production-safe examples.
 allowed-tools:
   - Read
   - Grep
   - Glob
 ---
 
-# Lib.Db Skill
-
-## Purpose
+# Lib.Db
 
 Use this skill for application code that consumes the Lib.Db NuGet package.
 
-Lib.Db is a SQL Server focused data access library with fluent execution APIs, `DbResult<T>`, TVP/source generation, result mapping, diagnostics, and security-oriented execution guardrails.
+Keep this file as the router. Read only the reference files needed for the current task, then write application code against public APIs.
 
-This skill is for Lib.Db package consumption, not package-source maintenance. Assume the user has the Lib.Db package, application code, and this skill package. Do not require access to Lib.Db source repository internals.
+## First Step
 
-Keep this file as the entry point. Load only the reference file needed for the current task.
-
-## First Steps
-
-1. Identify the application task: dependency injection, connection security, stored procedures, raw SQL policy, result mapping, TVP/source generation, examples, or documentation.
-2. Read the relevant reference file from this skill before proposing or editing code.
-3. Follow user and repository instructions for secrets, SQL execution, encoding, and local checks.
-4. Keep changes scoped to application usage of Lib.Db public APIs.
+1. Identify the API family the user needs.
+2. Read `references/quickstart.md` when the task is broad or ambiguous.
+3. Read the narrow reference file for the chosen API family.
+4. Follow repository rules for secrets, SQL execution, encoding, and local checks.
 
 ## Reference Map
 
-- For connection security, raw SQL policy, secret handling, and production-safe defaults, read [references/security-guardrails.md](references/security-guardrails.md).
-- For dependency injection, fluent execution, options, transactions, observability, and caching, read [references/runtime-api.md](references/runtime-api.md).
-- For result mapping, parameter binding, `DateOnly`/`TimeOnly`, and generated result mapper compatibility, read [references/mapping-contracts.md](references/mapping-contracts.md).
-- For `[TvpRow]`, `[DbResult]`, TVP rows, and source-generated mapping, read [references/tvpgen-guide.md](references/tvpgen-guide.md).
-- For safe application examples and small templates, read [references/examples.md](references/examples.md).
+- Setup, DI, options: `references/options-and-registration.md`
+- Credential handling, raw SQL policy, production defaults: `references/connection-security.md`
+- Fluent calls and result-set shapes: `references/fluent-execution.md`
+- Anonymous objects, `SqlParameter`, SQL types, nulls: `references/parameters-and-binding.md`
+- `DbResult<T>`, `DbError`, failure handling: `references/result-handling.md`
+- DTO mapping, JSON helpers, generated result mapper contracts: `references/mapping-contracts.md`
+- TVP runtime APIs, legacy compatibility markers, static shapes: `references/tvp-source-generation.md`
+- `BulkInsertAsync<T>` and `BulkInsertOptions`: `references/bulk-insert.md`
+- `db.Schema`, `UseSchema`, schema cache flush: `references/schema-maintenance.md`
+- Query cache, HybridCache, shared-memory cache: `references/caching.md`
+- Transactions and rollback rules: `references/transactions.md`
+- Health checks, hosted services, interceptors, host hook: `references/operations-integration.md`
+- Observability, resilience, dry run, chaos options: `references/diagnostics-resilience.md`
+- Native AOT and trimming choices: `references/aot-trimming.md`
+- Small copy-ready patterns: `references/examples.md`
 
-## Non-Negotiable Rules
+## Hard Rules
 
-- Do not print secret values, tokens, passwords, or full connection strings. Report only key names and whether a value exists.
-- Do not recommend high-privilege SQL logins, certificate validation bypasses, or inline passwords as defaults.
-- Prefer stored procedures for write operations, administrative operations, tenant-sensitive data access, and SQL Server permission boundaries.
-- Treat raw SQL policy as a guardrail, not as a SQL parser or complete security boundary.
-- For production-oriented examples, use production security defaults or explicit production-safe options.
-- Do not treat tool allowlists, examples, or application guardrails as security boundaries by themselves.
-- Use observability APIs intended for current public use; mention older naming only when maintaining existing application code.
-- Preserve public XML documentation quality when generating public application APIs or shared wrappers.
+- Never print secret values, tokens, passwords, or full connection strings. Report only key names and whether values exist.
+- Prefer stored procedures for writes, administrative work, tenant-sensitive access, and SQL Server permission boundaries.
+- Treat `RawSqlPolicy` as a guardrail, not as a complete SQL parser or security boundary.
+- Use `SqlInterpolated(...)` or `.With(...)` for values in text SQL. Do not concatenate user input into SQL text.
+- Use `UseProductionSecurityDefaults()` for production-oriented examples unless the user explicitly asks for a constrained local-only sample.
+- Treat `UseConnectionString`, bulk insert, schema maintenance, interceptors, `IncludeParametersInTrace`, and `Use*Unsafe` snapshot extensions as sensitive APIs.
+- Do not add package maintenance, repository-internal, package build, or lifecycle workflows to this skill.
 
 ## Stable Public Contracts
 
-- Default result mapping resolves exact case-insensitive names first, then underscore-insensitive normalized names such as `CELL_NO` to `CellNo`.
-- Normalized-name collisions must not silently bind ambiguous properties.
-- Generated `[DbResult]` mappers should operate through `DbDataReader`; concrete SQL reader types are compatibility details.
-- Diagnostic reader wrappers must be treated as normal `DbDataReader` implementations.
-- Raw `DateOnly` parameters bind as SQL `date`; raw `TimeOnly` parameters bind as SQL `time`.
-- SQL Server setup that depends on computed-column indexes must use `SET QUOTED_IDENTIFIER ON`.
+- `IDbSession` is the main entry point.
+- Fluent execution returns `DbResult<T>` with `IsSuccess`, `Value`, `Error`, and `AffectedRows`.
+- `QueryAsync<T>()` returns `DbResult<IAsyncEnumerable<T>>`.
+- `QuerySingleAsync<T>()` and `ExecuteScalarAsync<T>()` return nullable value payloads.
+- `QueryMultipleAsync()` returns `DbResult<IMultipleResultReader>`.
+- `ExecuteAsync()` returns `DbResult<int>`.
+- `BulkInsertAsync<T>()` returns `DbResult<long>`.
+- Result mapping tries exact case-insensitive column/property matches first, then underscore-insensitive normalized matches.
+- `DateOnly` binds as SQL `date`; `TimeOnly` binds as SQL `time`.
 
-## Consumer Workflows
+## Completion Check
 
-### Runtime Usage
-
-1. Read [references/runtime-api.md](references/runtime-api.md) and [references/security-guardrails.md](references/security-guardrails.md).
-2. Prefer application configuration and dependency injection over inline setup.
-3. Keep SQL command shape explicit: stored procedure or intentional policy-covered text SQL.
-4. Handle `DbResult<T>` success, failure, missing-row, and cancellation cases deliberately.
-
-### Mapping or Binding Usage
-
-1. Read [references/mapping-contracts.md](references/mapping-contracts.md).
-2. Design DTOs with clear property names and nullable annotations.
-3. Use SQL aliases when database column names do not clearly map to DTO names.
-4. Avoid ambiguous normalized column names.
-
-### TVP or Source Generator Usage
-
-1. Read [references/tvpgen-guide.md](references/tvpgen-guide.md).
-2. Keep CLR row types aligned with SQL Server user-defined table types.
-3. Keep generated mapper contracts based on `DbDataReader`.
-4. Treat schema mismatch, unsupported CLR types, and nullability mismatch as consumer integration issues to fix explicitly.
-
-### Documentation or Example Usage
-
-1. Keep examples production-safe by default.
-2. Avoid full connection string values.
-3. Avoid repository-internal paths, package-source maintenance commands, release checks, or package-source project commands.
-4. Cross-link to the relevant reference file instead of duplicating long guidance.
-
-## Completion Criteria
-
-- The relevant reference files were consulted.
-- Generated code or examples use Lib.Db public APIs from the consumer application perspective.
-- Security-sensitive examples avoid high-privilege logins, certificate bypass defaults, and inline secrets.
-- Raw SQL is either avoided or explicitly intentional and covered by policy guidance.
-- Result mapping and TVP usage preserve the public contracts described above.
-- Any proof gap is stated plainly without inventing repository-internal verification steps.
+- The needed reference file was consulted.
+- Examples use real Lib.Db public API names.
+- Examples do not reveal secrets or full connection strings.
+- Raw SQL is avoided or explicitly parameterized and policy-covered.
+- Sensitive API families include safety context.

@@ -1,77 +1,95 @@
-# Mapping and Binding Contracts
+# Mapping Contracts
 
-Use this file when application code maps SQL Server result sets to DTOs, binds parameters, or uses generated result mappers.
+Use this file for DTO result mapping, generated result mapper contracts, JSON column helpers, and naming rules.
 
-## Result Column Name Resolution
+## DTO Mapping Rules
 
-Lib.Db result mapping should be treated as a public consumer contract:
+Lib.Db maps result columns to public DTO properties.
 
-1. Exact case-insensitive column/property names are preferred.
-2. If no exact match exists, underscore-insensitive normalized names may match, such as `CELL_NO` to `CellNo`.
-3. Normalized-name collisions must not silently bind ambiguous properties.
-
-Prefer SQL aliases when database names are unclear:
+1. Exact case-insensitive match first.
+2. Underscore-insensitive normalized match second, such as `CELL_NO` to `CellNo`.
+3. Ambiguous normalized matches must not silently bind.
+4. Prefer SQL aliases when names are unclear.
 
 ```sql
 SELECT
-    CELL_NO AS CellNo,
-    CUSTOMER_CD AS CustomerCd
-FROM dbo.Customer;
+    u.USER_ID AS UserId,
+    u.CELL_NO AS CellNo
+FROM dbo.Users AS u
+WHERE u.USER_ID = @UserId;
 ```
 
-DTO shape:
+```csharp
+public sealed record UserDto(int UserId, string? CellNo);
+```
+
+## Nullable Properties
+
+Match database nullability in DTOs:
 
 ```csharp
-public sealed class CustomerDto
+public sealed record ProductDto(
+    int ProductId,
+    string Sku,
+    string? Description,
+    decimal? DiscountRate);
+```
+
+## Generated Result Mapper Marker
+
+Use `[DbResult]` on result types that should use generated or static mapping paths when supported by the package:
+
+```csharp
+[DbResult]
+public partial sealed class UserDto
 {
-    public string CellNo { get; init; } = "";
-    public string CustomerCd { get; init; } = "";
+    public int UserId { get; set; }
+    public string? Name { get; set; }
 }
 ```
 
-## Generated Result Mapper Contract
+Generated mapper contracts should be compatible with `DbDataReader` wrappers. Do not assume only a concrete SQL reader reaches mapping code.
 
-Generated `[DbResult]` mappers should operate through `DbDataReader`.
+## Manual Static Mapper Contract
 
-Consumer guidance:
-
-- Do not cast diagnostic or wrapped readers to concrete SQL reader types.
-- Treat `DbDataReader` as the compatibility boundary.
-- Keep generated and reflection-based mapping behavior aligned from the consumer perspective.
-
-## DateOnly and TimeOnly Binding
-
-Raw `DateOnly` values bind as SQL `date`.
-
-Raw `TimeOnly` values bind as SQL `time`.
-
-Example:
+`IMapableResult<T>` exposes:
 
 ```csharp
-DbResult<IAsyncEnumerable<ScheduleDto>> result = await db.Default
-    .Procedure("dbo.usp_SearchSchedule")
-    .With(new
-    {
-        WorkDate = DateOnly.FromDateTime(dateTime),
-        StartAt = TimeOnly.FromDateTime(dateTime)
-    })
-    .QueryAsync<ScheduleDto>(ct);
+static abstract T Map(SqlDataReader reader);
 ```
 
-Use explicit SQL aliases and matching DTO property types when provider behavior matters.
+The package may also use `DbDataReader`-compatible wrappers internally. Keep mapper logic reader-contract focused.
 
-## DTO Design Guidance
+## JSON Helpers
 
-- Prefer DTOs with clear property names.
-- Use nullable reference types to express database nullability.
-- Avoid ambiguous names that differ only by underscores or casing.
-- Prefer SQL aliases when mapping legacy database columns.
-- Keep DTO constructors and init-only properties compatible with the mapper behavior used by the application.
+Namespace:
 
-## Consumer Checklist
+```csharp
+using Lib.Db.Extensions;
+```
 
-- Do SQL result columns clearly map to DTO properties?
-- Are ambiguous normalized names avoided?
-- Are nullability expectations explicit?
-- Are `DateOnly` and `TimeOnly` parameters intentional?
-- Do generated mappers use `DbDataReader` as the compatibility boundary?
+Dictionary result JSON column:
+
+```csharp
+DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await db.Default
+    .Procedure("dbo.usp_GetRowsWithJson")
+    .With(new { UserId = userId })
+    .QueryAsync<Dictionary<string, object?>>(ct);
+
+if (result.IsSuccess)
+{
+    await foreach (Dictionary<string, object?> row in result.Value!.WithCancellation(ct))
+    {
+        ProfileDto? profile = row.MapJsonColumn<ProfileDto>("ProfileJson");
+    }
+}
+```
+
+String helpers:
+
+```csharp
+ProfileDto? profile = row.ProfileJson.FromJson<ProfileDto>();
+string json = profile.ToJson();
+```
+
+For Native AOT-sensitive JSON mapping, prefer source-generated `JsonTypeInfo` patterns in application code where available. Read `aot-trimming.md`.

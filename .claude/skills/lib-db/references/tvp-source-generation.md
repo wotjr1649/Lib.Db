@@ -1,0 +1,92 @@
+# TVP And Source Generation
+
+Use this file for table-valued parameters, `LibDb.Tvp(...)`, static TVP shapes, option-level TVP mappings, and legacy compatibility markers.
+
+## Namespaces
+
+```csharp
+using Lib.Db;
+using Lib.Db.Contracts.Models;
+using Lib.Db.Execution.Tvp;
+```
+
+## Preferred Explicit TVP Wrapper
+
+```csharp
+TvpShape<OrderLineRow> shape = TvpShape.For<OrderLineRow>()
+    .Column("OrderId", SqlDbType.Int, static row => row.OrderId)
+    .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64)
+    .Column("Quantity", SqlDbType.Int, static row => row.Quantity)
+    .Build();
+
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_ImportOrderLines")
+    .With(new
+    {
+        Lines = LibDb.Tvp("dbo.OrderLineTvp", rows, shape)
+    })
+    .ExecuteAsync(ct);
+```
+
+Use static lambdas in AOT-sensitive paths.
+
+## TVP Wrapper APIs
+
+| API | Use |
+| --- | --- |
+| `LibDb.Tvp(string typeName, IEnumerable<T> rows, TvpBindingPolicy policy = Strict)` | Reflection-based row discovery. Avoid in Native AOT. |
+| `LibDb.Tvp(string typeName, IEnumerable<T> rows, TvpShape<T> shape, TvpBindingPolicy policy = Strict)` | Preferred AOT-friendly explicit shape. |
+| `LibDb.Tvp(TvpSchemaDescriptor descriptor, IEnumerable<T> rows, TvpBindingPolicy policy = Adaptive)` | Descriptor-driven runtime binding. Reflection-based. |
+
+`TvpBindingPolicy.Strict` fails on drift. `Adaptive` allows nullable/default-safe adjustments.
+
+## Option-Level TVP Mapping
+
+For repeated row types, register the mapping during Lib.Db setup:
+
+```csharp
+builder.Services.AddLibDb(options =>
+{
+    options.ConnectionStringNames = new[] { "Default" };
+    options.ConnectionStrings["Default"] =
+        builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string key 'Default' is missing.");
+
+    options.Tvp.Map<OrderLineRow>("dbo.OrderLineTvp")
+        .Column("OrderId", SqlDbType.Int, static row => row.OrderId)
+        .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64)
+        .Column("Quantity", SqlDbType.Int, static row => row.Quantity);
+});
+```
+
+`options.Tvp.EnableAutoTvpBinding` controls automatic binding for registered row sequences.
+
+## Runtime Descriptor
+
+```csharp
+TvpSchemaDescriptor descriptor = await db.Schema.GetTvpAsync("dbo.OrderLineTvp", ct);
+```
+
+Descriptor members include `TypeName`, `VersionToken`, `Columns`, and `Fingerprint`.
+
+## Legacy Compatibility Markers
+
+`[TvpRow]`, `[TvpLength]`, `[TvpPrecision]`, and `[GenerateTvpFromDb]` exist for compatibility with older generated or attributed TVP models. New application code should prefer `LibDb.Tvp(...)`, `TvpShape.For<T>()`, or `options.Tvp.Map<T>()`.
+
+```csharp
+[TvpRow(TypeName = "dbo.OrderLineTvp")]
+public sealed record OrderLineRow(
+    int OrderId,
+    [property: TvpLength(64)] string Sku,
+    int Quantity);
+```
+
+Treat attributed reflection fallback as convenience, not the default for AOT-sensitive or high-throughput paths.
+
+## Column Rules
+
+- TVP type names should include schema.
+- Column names must match the SQL Server TVP type.
+- Column order should match the database type when using generated or static shapes.
+- Use `allowNull: true` for nullable columns.
+- Use `size`, `precision`, and `scale` for string, binary, decimal, and time precision.
