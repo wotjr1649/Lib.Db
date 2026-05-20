@@ -102,6 +102,97 @@ public sealed class VerificationEntryPointTests
     }
 
     [Fact]
+    public void AotVerification_ShouldUseWarningBaseline()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string baselinePath = Path.Combine(repoRoot.FullName, "Verification", "baselines", "aot-warnings.json");
+        string script = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Aot.ps1"));
+        string verificationPolicy = File.ReadAllText(Path.Combine(repoRoot.FullName, "docs", "verification.md"));
+        string manifest = File.ReadAllText(Path.Combine(repoRoot.FullName, "Verification", "manifest.json"));
+        string baselineJson = File.ReadAllText(baselinePath);
+        System.Text.Json.Nodes.JsonNode? baseline = System.Text.Json.Nodes.JsonNode.Parse(baselineJson);
+        System.Text.Json.Nodes.JsonArray? allowedWarnings = baseline?["allowedWarnings"]?.AsArray();
+
+        File.Exists(baselinePath).Should().BeTrue("AOT provider warning allowances must be versioned as a release gate input");
+        allowedWarnings.Should().NotBeNull();
+        foreach (System.Text.Json.Nodes.JsonNode? warning in allowedWarnings!)
+        {
+            warning.Should().NotBeNull();
+            string? id = warning!["id"]?.GetValue<string>();
+            string? assembly = warning["assembly"]?.GetValue<string>();
+            string? sourcePackage = warning["sourcePackage"]?.GetValue<string>();
+            string? packageVersion = warning["packageVersion"]?.GetValue<string>();
+
+            id.Should().NotBeNullOrWhiteSpace();
+            assembly.Should().NotBeNullOrWhiteSpace();
+            sourcePackage.Should().NotBeNullOrWhiteSpace();
+            packageVersion.Should().NotBeNullOrWhiteSpace();
+        }
+
+        script.Should().Contain("aot-warnings.json");
+        script.Should().Contain("Get-AotPackageVersions");
+        script.Should().Contain("Assert-AotWarningsMatchBaseline");
+        script.Should().Contain("Assert-AotWarningsMatchBaseline -Warnings $aotWarnings -BaselinePath $warningBaselinePath -PackageVersions $packageVersions -RequirePackageVersions");
+        script.Should().Contain("Lib.Db");
+        script.Should().Contain("Trim analysis warning");
+        script.Should().Contain("AOT analysis warning");
+        script.Should().Contain("-p:GeneratePackageOnBuild=false");
+        script.Should().Contain("-p:WarningsAsErrors=");
+        script.Should().Contain("-RequirePackageVersions");
+        verificationPolicy.Should().Contain("AOT warning baseline");
+        verificationPolicy.Should().Contain("Verification/baselines/aot-warnings.json");
+        verificationPolicy.Should().Contain("source package");
+        verificationPolicy.Should().Contain("package version");
+        manifest.Should().Contain("aotWarnings");
+        manifest.Should().Contain("baselines/aot-warnings.json");
+    }
+
+    [Fact]
+    public async Task AotVerificationParserSelfTest_ShouldValidateWarningParsingAndBaselineRejection()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string scriptPath = Path.Combine(repoRoot.FullName, "Verification", "scripts", "Invoke-Aot.ps1");
+        File.Exists(scriptPath).Should().BeTrue("AOT parser self-test must stay executable");
+
+        using System.Diagnostics.Process process = new()
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "pwsh",
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            }
+        };
+
+        process.StartInfo.ArgumentList.Add("-NoProfile");
+        process.StartInfo.ArgumentList.Add("-File");
+        process.StartInfo.ArgumentList.Add(scriptPath);
+        process.StartInfo.ArgumentList.Add("-ParserSelfTest");
+
+        process.Start();
+
+        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string combined = output + error;
+
+        process.ExitCode.Should().Be(0, combined);
+        combined.Should().Contain("ParsedWarning=IL2104|Provider.One");
+        combined.Should().Contain("ParsedWarning=IL3053|Provider.Two");
+        combined.Should().Contain("ParsedWarning=IL2026|Provider.Three");
+        combined.Should().Contain("ParsedWarning=IL3050|Provider.Four");
+        combined.Should().Contain("RejectedLibDbOwnedWarning=True");
+        combined.Should().Contain("RejectedUnbaselinedWarning=True");
+        combined.Should().Contain("RejectedUnobservedBaselineWarning=True");
+        combined.Should().Contain("RejectedPackageVersionDrift=True");
+    }
+
+    [Fact]
     public void ReleasePackageScript_ShouldValidatePackageMetadataAndUnsignedPolicy()
     {
         DirectoryInfo repoRoot = FindRepoRoot();

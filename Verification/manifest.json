@@ -65,5 +65,8 @@
     "releasePackage": "scripts/Invoke-ReleasePackage.ps1",
     "artifactSecretScan": "scripts/Scan-VerificationArtifacts.ps1",
     "artifactTrackingGate": "scripts/Assert-GeneratedArtifactsUntracked.ps1"
+  },
+  "baselines": {
+    "aotWarnings": "baselines/aot-warnings.json"
   }
 }

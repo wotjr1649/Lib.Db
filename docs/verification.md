@@ -1,6 +1,6 @@
 # Lib.Db Verification Policy
 
-Updated: 2026-05-20
+Updated: 2026-05-21
 
 This is an internal maintainer policy, not consumer API documentation. Consumer applications do not need this workflow to install or use `Lib.Db`.
 
@@ -39,12 +39,13 @@ Release-grade maintainer validation covers:
 
 Lib.Db-owned Native AOT and trimming warnings are release blockers. Provider-owned aggregate warnings can remain only when the release gate publishes successfully, the produced executable runs successfully, and the warning set is reviewed after provider package changes.
 
-Current accepted provider warning classes:
-
-- `IL2104`
-- `IL3053`
-
 If a new Lib.Db-owned warning appears, or the provider warning set changes materially, update the risk ledger and resolve the release decision before publishing.
+
+## AOT warning baseline
+
+Native AOT publish must have zero Lib.Db-owned IL warnings. The AOT gate keeps `TrimmerSingleWarn=false`, captures detailed publish output, and compares parsed warning id plus assembly against `Verification/baselines/aot-warnings.json`.
+
+Provider-owned warnings are accepted only when the id, assembly, source package, and package version match the baseline. Stale baseline entries also fail the gate, so a provider warning disappearing is an intentional review event rather than silent drift. When provider packages are upgraded, rerun AOT and update the baseline only after reviewing owner and impact.
 
 ## Artifact Policy
 
