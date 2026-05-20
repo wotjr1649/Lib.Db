@@ -29,7 +29,7 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
         {
             if (DbDiagnosticRedactor.IsSensitiveInstanceId(key))
             {
-                string safeKey = DbDiagnosticRedactor.RedactInstanceId(key) ?? "ConnectionString:[redacted]";
+                string safeKey = SafeConnectionName(key);
                 errors.Add(
                     $"ConnectionStrings의 키 '{safeKey}'은(는) 등록 인스턴스 이름으로 사용할 수 없습니다. " +
                     "연결 문자열 값은 ConnectionStrings 값에만 보관하세요.");
@@ -47,6 +47,7 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
             for (int i = 0; i < options.ConnectionStringNames.Count; i++)
             {
                 string csName = options.ConnectionStringNames[i];
+                string safeConnectionName = SafeConnectionName(csName);
 
                 // 공백/빈 문자열 검증
                 if (string.IsNullOrWhiteSpace(csName))
@@ -57,9 +58,8 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
 
                 if (DbDiagnosticRedactor.IsSensitiveInstanceId(csName))
                 {
-                    string safeName = DbDiagnosticRedactor.RedactInstanceId(csName) ?? "ConnectionString:[redacted]";
                     errors.Add(
-                        $"ConnectionStringNames[{i}]의 '{safeName}'은(는) 등록 인스턴스 이름으로 사용할 수 없습니다. " +
+                        $"ConnectionStringNames[{i}]의 '{safeConnectionName}'은(는) 등록 인스턴스 이름으로 사용할 수 없습니다. " +
                         "연결 문자열 값은 ConnectionStrings에만 보관하세요.");
                     continue;
                 }
@@ -67,7 +67,7 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                 // 중복 검증
                 if (!seen.Add(csName))
                 {
-                    errors.Add($"ConnectionStringNames에 중복 키 '{csName}'이(가) 있습니다.");
+                    errors.Add($"ConnectionStringNames에 중복 키 '{safeConnectionName}'이(가) 있습니다.");
                     continue;
                 }
 
@@ -75,14 +75,16 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                 if (!options.ConnectionStrings.TryGetValue(csName, out string? connStr))
                 {
                     string registeredKeys = FormatInstanceKeys(options.ConnectionStrings.Keys);
-                    errors.Add($"ConnectionStringNames의 '{csName}'이(가) ConnectionStrings에 없습니다. 등록된 키: [{registeredKeys}]");
+                    errors.Add(
+                        $"ConnectionStringNames의 '{safeConnectionName}'이(가) ConnectionStrings에 없습니다. " +
+                        $"등록된 키: [{registeredKeys}]");
                     continue;
                 }
 
                 // 빈 연결 문자열 검증
                 if (string.IsNullOrWhiteSpace(connStr))
                 {
-                    errors.Add($"'{csName}'의 연결 문자열이 비어있습니다.");
+                    errors.Add($"'{safeConnectionName}'의 연결 문자열이 비어있습니다.");
                     continue;
                 }
 
@@ -149,7 +151,7 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
                 }
                 catch
                 {
-                    string safeKey = DbDiagnosticRedactor.RedactInstanceId(kvp.Key) ?? kvp.Key;
+                    string safeKey = SafeConnectionName(kvp.Key);
                     errors.Add($"ConnectionString '{safeKey}' 파싱 실패 (MARS 자동 주입 불가).");
                 }
             }
@@ -182,20 +184,22 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
         string connectionString,
         List<string> errors)
     {
+        string safeConnectionName = SafeConnectionName(connectionName);
+
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            errors.Add($"'{connectionName}'의 연결 문자열이 비어있습니다.");
+            errors.Add($"'{safeConnectionName}'의 연결 문자열이 비어있습니다.");
             return;
         }
 
         try
         {
             SqlConnectionStringBuilder builder = new(connectionString);
-            ValidateConnectionSecurityProfile(options, connectionName, builder, errors);
+            ValidateConnectionSecurityProfile(options, safeConnectionName, builder, errors);
         }
         catch (ArgumentException)
         {
-            errors.Add($"'{connectionName}'의 연결 문자열 형식이 잘못되었습니다.");
+            errors.Add($"'{safeConnectionName}'의 연결 문자열 형식이 잘못되었습니다.");
         }
     }
 
@@ -233,5 +237,8 @@ internal sealed class LibDbOptionsValidator : IValidateOptions<LibDbOptions>
     }
 
     private static string FormatInstanceKeys(IEnumerable<string> keys)
-        => string.Join(", ", keys.Select(key => DbDiagnosticRedactor.RedactInstanceId(key) ?? key));
+        => string.Join(", ", keys.Select(SafeConnectionName));
+
+    private static string SafeConnectionName(string connectionName)
+        => DbDiagnosticRedactor.RedactInstanceId(connectionName) ?? connectionName;
 }

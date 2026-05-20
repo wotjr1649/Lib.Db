@@ -170,6 +170,29 @@ public sealed class DbSessionSecurityTests
     }
 
     [Fact]
+    public async Task DbConnectionFactory_RegisterAdHocInstance_ShouldRejectMalformedConnectionStringShapeKey()
+    {
+        await using ServiceProvider provider = CreateProvider();
+        IDbConnectionFactory factory = provider.GetRequiredService<IDbConnectionFactory>();
+        const string rawConnectionString =
+            "Server='unterminated;Database=TEST;User Id=app_user;Password=placeholder";
+
+        Action act = () => factory.RegisterAdHocInstance(
+            rawConnectionString,
+            "Server=localhost;Database=TEST;Encrypt=True;TrustServerCertificate=False");
+
+        ArgumentException exception = act.Should()
+            .Throw<ArgumentException>()
+            .Which;
+
+        exception.Message.Should().Contain("ConnectionString:[redacted]");
+        exception.Message.Should().NotContain("Password=");
+        exception.Message.Should().NotContain("User Id=");
+        exception.Message.Should().NotContain("Database=TEST");
+        exception.Message.Should().NotContain(rawConnectionString);
+    }
+
+    [Fact]
     public async Task DbConnectionFactory_CreateConnectionAsync_ShouldRejectPreRegisteredSensitiveAdHocKey()
     {
         const string rawConnectionString =

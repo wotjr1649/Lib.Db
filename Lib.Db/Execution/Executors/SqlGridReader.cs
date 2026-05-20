@@ -117,7 +117,7 @@ internal sealed class SqlGridReader(
 /// </remarks>
 internal sealed class EmptyGridReader : IMultipleResultReader
 {
-    // [성능 최적화] 빈 리스트를 매번 생성하지 않고 정적 빈 배열 반환 (Zero-Allocation)
+    // Return an empty list through the async contract used by real grid readers.
     public Task<List<T>> ReadAsync<T>(CancellationToken ct = default)
         => Task.FromResult<List<T>>([]);
 

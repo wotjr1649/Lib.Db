@@ -14,6 +14,21 @@ internal static class DbDiagnosticRedactor
     public const string RedactedRawInstance = "Raw:[redacted]";
     public const string RedactedConnectionStringInstance = "ConnectionString:[redacted]";
 
+    private static readonly string[] ConnectionStringKeywords =
+    [
+        "Server",
+        "Data Source",
+        "Address",
+        "Addr",
+        "Network Address",
+        "Database",
+        "Initial Catalog",
+        "User Id",
+        "UID",
+        "Password",
+        "Pwd"
+    ];
+
     public static string? RedactInstanceId(string? instanceId)
     {
         if (string.IsNullOrWhiteSpace(instanceId))
@@ -43,11 +58,35 @@ internal static class DbDiagnosticRedactor
         try
         {
             SqlConnectionStringBuilder builder = new(value);
-            return builder.Count > 0;
+            if (builder.Count > 0)
+                return true;
         }
         catch (ArgumentException)
         {
-            return false;
         }
+
+        return ContainsKnownConnectionStringKeywordAssignment(value);
+    }
+
+    private static bool ContainsKnownConnectionStringKeywordAssignment(string value)
+    {
+        foreach (string segment in value.Split(';'))
+        {
+            string trimmed = segment.TrimStart();
+            foreach (string keyword in ConnectionStringKeywords)
+            {
+                if (!trimmed.StartsWith(keyword, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                int index = keyword.Length;
+                while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+                    index++;
+
+                if (index < trimmed.Length && trimmed[index] == '=')
+                    return true;
+            }
+        }
+
+        return false;
     }
 }

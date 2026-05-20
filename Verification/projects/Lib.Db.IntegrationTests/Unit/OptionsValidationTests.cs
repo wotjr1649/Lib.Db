@@ -205,6 +205,253 @@ public sealed class OptionsValidationTests
         Assert.Contains("NonExistent", string.Join("; ", result.Failures!));
     }
 
+    [Theory]
+    [InlineData("Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True")]
+    [InlineData("Raw:Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True")]
+    public void ConnectionStringNames_SensitiveMissingName_ShouldNotLeakRawName(string sensitiveName)
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStrings.Clear();
+        options.ConnectionStringNames = [sensitiveName];
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        string message = string.Join(";", result.Failures);
+        message.Should().Contain("[redacted]");
+        message.Should().NotContain("Password=placeholder");
+        message.Should().NotContain("User Id=app_user");
+        message.Should().NotContain("Database=TEST");
+    }
+
+    [Fact]
+    public void ConnectionStringNames_SensitiveDuplicateNames_ShouldNotLeakRawName()
+    {
+        const string sensitiveName =
+            "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStringNames = [sensitiveName, sensitiveName];
+        options.ConnectionStrings.Clear();
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        string message = string.Join(";", result.Failures);
+        message.Should().Contain("[redacted]");
+        message.Should().NotContain("Password=placeholder");
+        message.Should().NotContain("User Id=app_user");
+        message.Should().NotContain("Database=TEST");
+    }
+
+    [Fact]
+    public void ConnectionStringNames_SensitiveProductionProfileName_ShouldStopBeforeProductionMessage()
+    {
+        const string sensitiveName =
+            "Server=localhost;Database=TEST;User Id=sa;Password=placeholder;Encrypt=False;TrustServerCertificate=True";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionSecurityProfile = ConnectionSecurityProfile.Production;
+        options.ConnectionStringNames = [sensitiveName];
+        options.ConnectionStrings[sensitiveName] =
+            "Server=localhost;Database=TEST;User Id=sa;Password=placeholder;Encrypt=False;TrustServerCertificate=True";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        string message = string.Join(";", result.Failures);
+        message.Should().Contain("[redacted]");
+        message.Should().NotContain("Password=placeholder");
+        message.Should().NotContain("User Id=sa");
+        message.Should().NotContain("Database=TEST");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("=no_key_here")]
+    [InlineData("Server=localhost;Database=TEST;User Id=sa;Password=placeholder;Encrypt=False;TrustServerCertificate=True")]
+    public void ValidateConnectionStringSecurityProfile_SensitiveConnectionName_ShouldNotLeakRawName(
+        string connectionString)
+    {
+        const string sensitiveName =
+            "Server=localhost;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionSecurityProfile = ConnectionSecurityProfile.Production;
+        List<string> errors = [];
+
+        LibDbOptionsValidator.ValidateConnectionStringSecurityProfile(
+            options,
+            sensitiveName,
+            connectionString,
+            errors);
+
+        errors.Should().NotBeEmpty();
+        string message = string.Join(";", errors);
+        message.Should().Contain("[redacted]");
+        message.Should().NotContain("Password=placeholder");
+        message.Should().NotContain("User Id=app_user");
+        message.Should().NotContain("Database=TEST");
+    }
+
+    [Fact]
+    public void ConnectionStringNames_MalformedSensitiveMissingNameAndRegisteredKey_ShouldNotLeakRawFragments()
+    {
+        const string missingName =
+            "Server='unterminated;Database=TEST;User Id=app_user;Password=placeholder";
+        const string registeredKey =
+            "Data Source='unterminated;Initial Catalog=TEST;UID=app_user;Pwd=placeholder";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStrings.Clear();
+        options.ConnectionStrings[registeredKey] =
+            "Server=localhost;Database=TEST;Encrypt=True;TrustServerCertificate=False";
+        options.ConnectionStringNames = [missingName];
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        AssertMalformedSecretFragmentsRedacted(string.Join(";", result.Failures));
+    }
+
+    [Fact]
+    public void ConnectionStringNames_MalformedSensitiveDuplicateName_ShouldNotLeakRawFragments()
+    {
+        const string sensitiveName =
+            "Server='unterminated;Database=TEST;User Id=app_user;Password=placeholder";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStrings.Clear();
+        options.ConnectionStringNames = [sensitiveName, sensitiveName];
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        AssertMalformedSecretFragmentsRedacted(string.Join(";", result.Failures));
+    }
+
+    [Fact]
+    public void ConnectionStringNames_MalformedSensitiveEmptyConnectionString_ShouldNotLeakRawFragments()
+    {
+        const string sensitiveName =
+            "Server='unterminated;Database=TEST;User Id=app_user;Password=placeholder";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStrings.Clear();
+        options.ConnectionStrings[sensitiveName] = string.Empty;
+        options.ConnectionStringNames = [sensitiveName];
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        AssertMalformedSecretFragmentsRedacted(string.Join(";", result.Failures));
+    }
+
+    [Fact]
+    public void ConnectionStringNames_MalformedSensitiveNameRegisteredWithValidValue_ShouldFailValidationWithoutLeakingSecret()
+    {
+        const string sensitiveName =
+            "Server='unterminated;Database=TEST;User Id=app_user;Password=placeholder";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStrings.Clear();
+        options.ConnectionStrings[sensitiveName] =
+            "Server=localhost;Database=TEST;Encrypt=True;TrustServerCertificate=False";
+        options.ConnectionStringNames = [sensitiveName];
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+        string failures = string.Join("; ", result.Failures ?? []);
+
+        result.Failed.Should().BeTrue(
+            "malformed connection-string-like logical names must be rejected even when the configured value is valid");
+        failures.Should().Contain("ConnectionString:[redacted]");
+        failures.Should().NotContain(sensitiveName);
+        AssertMalformedSecretFragmentsRedacted(failures);
+    }
+
+    [Theory]
+    [InlineData("Address='unterminated,Initial Catalog=TEST,UID=app_user,Pwd=placeholder")]
+    [InlineData("Addr='unterminated,Initial Catalog=TEST,UID=app_user,Pwd=placeholder")]
+    [InlineData("Network Address='unterminated,Initial Catalog=TEST,UID=app_user,Pwd=placeholder")]
+    public void ConnectionStringNames_MalformedAliasOnlySensitiveName_ShouldFailValidationWithoutLeakingSecret(
+        string sensitiveName)
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStrings.Clear();
+        options.ConnectionStrings[sensitiveName] =
+            "Server=localhost;Database=TEST;Encrypt=True;TrustServerCertificate=False";
+        options.ConnectionStringNames = [sensitiveName];
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+        string failures = string.Join("; ", result.Failures ?? []);
+
+        result.Failed.Should().BeTrue(
+            "malformed alias-only connection-string-like logical names must be rejected");
+        failures.Should().Contain("ConnectionString:[redacted]");
+        failures.Should().NotContain(sensitiveName);
+        AssertMalformedSecretFragmentsRedacted(failures);
+    }
+
+    [Theory]
+    [InlineData("Address='unterminated,Initial Catalog=TEST,UID=app_user,Pwd=placeholder")]
+    [InlineData("Addr='unterminated,Initial Catalog=TEST,UID=app_user,Pwd=placeholder")]
+    [InlineData("Network Address='unterminated,Initial Catalog=TEST,UID=app_user,Pwd=placeholder")]
+    public void ConnectionStrings_MalformedAliasOnlySensitiveKey_ShouldFailValidationWithoutLeakingSecret(
+        string sensitiveKey)
+    {
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionStringNames = ["Missing"];
+        options.ConnectionStrings.Clear();
+        options.ConnectionStrings[sensitiveKey] =
+            "Server=localhost;Database=TEST;Encrypt=True;TrustServerCertificate=False";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+        string failures = string.Join("; ", result.Failures ?? []);
+
+        result.Failed.Should().BeTrue(
+            "malformed alias-only connection-string-like dictionary keys must be rejected");
+        failures.Should().Contain("ConnectionString:[redacted]");
+        failures.Should().NotContain(sensitiveKey);
+        AssertMalformedSecretFragmentsRedacted(failures);
+    }
+
+    [Fact]
+    public void ConnectionStrings_MalformedSensitiveMarsParseFailureKey_ShouldNotLeakRawFragments()
+    {
+        const string sensitiveKey =
+            "Server='unterminated;Database=TEST;User Id=app_user;Password=placeholder";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.Mars = MarsPolicy.ForceEnable;
+        options.ConnectionStrings[sensitiveKey] = "Server='unterminated";
+
+        LibDbOptionsValidator validator = new();
+        ValidateOptionsResult result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        AssertMalformedSecretFragmentsRedacted(string.Join(";", result.Failures));
+    }
+
+    [Fact]
+    public void ValidateConnectionStringSecurityProfile_MalformedSensitiveConnectionName_ShouldNotLeakRawFragments()
+    {
+        const string sensitiveName =
+            "Server='unterminated;Database=TEST;User Id=app_user;Password=placeholder";
+        LibDbOptions options = TestOptionsFactory.CreateMinimal();
+        options.ConnectionSecurityProfile = ConnectionSecurityProfile.Production;
+        List<string> errors = [];
+
+        LibDbOptionsValidator.ValidateConnectionStringSecurityProfile(
+            options,
+            sensitiveName,
+            "Server=localhost;Database=TEST;User Id=sa;Password=placeholder;Encrypt=False;TrustServerCertificate=True",
+            errors);
+
+        errors.Should().NotBeEmpty();
+        AssertMalformedSecretFragmentsRedacted(string.Join(";", errors));
+    }
+
     [Fact]
     public void ConnectionStringNames_ConnectionStringShape_ShouldFailValidationWithoutLeakingSecret()
     {
@@ -390,6 +637,20 @@ public sealed class OptionsValidationTests
         options.ConnectionStringNames = ["Admin", "Default"];
 
         Assert.Equal("Admin", options.ConnectionStringNames[0]);
+    }
+
+    private static void AssertMalformedSecretFragmentsRedacted(string message)
+    {
+        message.Should().Contain("[redacted]");
+        message.Should().NotContain("Address=");
+        message.Should().NotContain("Addr=");
+        message.Should().NotContain("Network Address=");
+        message.Should().NotContain("Password=");
+        message.Should().NotContain("Pwd=");
+        message.Should().NotContain("User Id=");
+        message.Should().NotContain("UID=");
+        message.Should().NotContain("Database=TEST");
+        message.Should().NotContain("Initial Catalog=TEST");
     }
 
     #endregion

@@ -13,15 +13,23 @@ using Lib.Db.Core;
 
 namespace Lib.Db.IntegrationTests.Diagnostics;
 
-public sealed class DbDiagnosticsTests
+public sealed class DbDiagnosticsTests : IDisposable
 {
     private readonly Mock<ILogger> _mockLogger;
+    private readonly bool _previousMetricsEnabled;
 
     public DbDiagnosticsTests()
     {
         _mockLogger = new Mock<ILogger>();
+        _previousMetricsEnabled = DbMetrics.IsEnabled;
         DbMetrics.ResetForTesting();
         DbMetrics.IsEnabled = true;
+    }
+
+    public void Dispose()
+    {
+        DbMetrics.ResetForTesting();
+        DbMetrics.IsEnabled = _previousMetricsEnabled;
     }
 
     [Fact]
