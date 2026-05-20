@@ -35,6 +35,8 @@ Current usage docs are intended to stay version-neutral and describe the current
 
 - Maintainer release validation was consolidated into an internal runbook. Consumer applications do not need that workflow to install or use `Lib.Db`.
 - Release validation covers package readiness, Runtime TVP behavior, Native AOT readiness, performance comparison, and artifact hygiene as maintainer responsibilities.
+- Release verification now includes package provenance checks, explicit unsigned package
+  policy handling, AOT warning baseline checks, and generated artifact tracking.
 
 ### Security
 

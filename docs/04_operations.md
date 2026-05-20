@@ -216,6 +216,15 @@ Lib.Db는 options validation 단계에서 연결 문자열 이름, 키 매핑, �
 
 `EnableObservability`를 `true`로 설정합니다.
 
+`EnableObservability` is a process-wide Lib.Db switch in v2.3.0. Configure it once at
+startup through `AddLibDb`/`AddHighPerformanceDb`, or use
+`LibDbRuntime.ConfigureMetrics(bool)` as an explicit process-wide override.
+
+If multiple service providers or runtime configuration calls are used in the same
+process, the last configuration call wins. Recommended order: configure DI/runtime
+once during startup, then call `LibDbRuntime.ConfigureMetrics(bool)` only when an
+intentional process-wide override is required.
+
 > ⚠️ `EnableOpenTelemetry`는 **Deprecated**되었습니다. `EnableObservability`로 대체하세요. 향후 breaking release에서 제거 예정입니다.
 
 `IncludeParametersInTrace`는 보안상 개발 환경에서만 `true`로 설정하세요.
