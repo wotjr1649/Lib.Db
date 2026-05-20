@@ -166,30 +166,36 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
             await conn.OpenAsync(ct).ConfigureAwait(false);
             sw.Stop();
 
-            // [메트릭] 연결 획득 소요 시간 기록
-            LibDbTelemetry.ConnectionAcquireDuration.Record(
-                sw.Elapsed.TotalMilliseconds,
-                new KeyValuePair<string, object?>("instance", diagnosticInstance));
-
-            // [메트릭] PoolWaitThresholdMs 이상이면 풀 대기로 간주
-            if (sw.ElapsedMilliseconds > PoolWaitThresholdMs)
+            if (DbMetrics.IsEnabled)
             {
-                LibDbTelemetry.ConnectionPoolWaits.Add(1,
+                // [메트릭] 연결 획득 소요 시간 기록
+                LibDbTelemetry.ConnectionAcquireDuration.Record(
+                    sw.Elapsed.TotalMilliseconds,
                     new KeyValuePair<string, object?>("instance", diagnosticInstance));
+
+                // [메트릭] PoolWaitThresholdMs 이상이면 풀 대기로 간주
+                if (sw.ElapsedMilliseconds > PoolWaitThresholdMs)
+                {
+                    LibDbTelemetry.ConnectionPoolWaits.Add(1,
+                        new KeyValuePair<string, object?>("instance", diagnosticInstance));
+                }
             }
         }
         catch (Exception ex)
         {
             sw.Stop();
 
-            // [메트릭] 예외 유형에 따라 분류(reason 태그)하여 기록
-            string reason = ex is Microsoft.Data.SqlClient.SqlException sqlEx
-                ? (sqlEx.Number == -2 ? "timeout" : "sql_error")
-                : "other";
+            if (DbMetrics.IsEnabled)
+            {
+                // [메트릭] 예외 유형에 따라 분류(reason 태그)하여 기록
+                string reason = ex is Microsoft.Data.SqlClient.SqlException sqlEx
+                    ? (sqlEx.Number == -2 ? "timeout" : "sql_error")
+                    : "other";
 
-            LibDbTelemetry.ConnectionPoolTimeouts.Add(1,
-                new KeyValuePair<string, object?>("instance", diagnosticInstance),
-                new KeyValuePair<string, object?>("reason", reason));
+                LibDbTelemetry.ConnectionPoolTimeouts.Add(1,
+                    new KeyValuePair<string, object?>("instance", diagnosticInstance),
+                    new KeyValuePair<string, object?>("reason", reason));
+            }
 
             // Open 실패 시 커넥션 핸들/소켓 등 리소스 누수를 막기 위해 즉시 해제합니다.
             await conn.DisposeAsync().ConfigureAwait(false);

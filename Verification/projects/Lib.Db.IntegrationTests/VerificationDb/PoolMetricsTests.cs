@@ -5,6 +5,8 @@
 // ============================================================================
 
 using Lib.Db.IntegrationTests.Infrastructure;
+using Lib.Db.Diagnostics;
+using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.VerificationDb;
 
@@ -69,6 +71,109 @@ public sealed class PoolMetricsTests(MultiDbFixture fixture)
             r.IsSuccess.Should().BeTrue();
             r.Value.Should().Be(1);
         });
+    }
+
+    #endregion
+
+    #region PM03: 관측성 비활성화 시 연결 성공 메트릭 미기록
+
+    /// <summary>
+    /// 연결 성공 메트릭이 DbMetrics 게이트를 따르는지 검증합니다.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PM03_ConnectionMetrics_ShouldHonorDbMetricsGate(bool enabled)
+    {
+        bool previous = DbMetrics.IsEnabled;
+        DbMetrics.IsEnabled = enabled;
+
+        try
+        {
+            using TelemetryTestHarness harness = new("Lib.Db");
+
+            DbResult<int> result = await _db
+                .Sql("SELECT 1")
+                .ExecuteScalarAsync<int>();
+
+            result.IsSuccess.Should().BeTrue();
+            result.Value.Should().Be(1);
+
+            IReadOnlyList<CapturedMeasurement<double>> acquireMeasurements =
+                harness.GetDoubles("libdb.connection.acquire_duration_ms");
+            IReadOnlyList<CapturedMeasurement<long>> poolWaits =
+                harness.GetLongs("libdb.connection.pool_waits");
+
+            if (enabled)
+            {
+                Assert.Contains(acquireMeasurements, m =>
+                    m.Tags.Any(t => t.Key == "instance" && t.Value is string { Length: > 0 }));
+            }
+            else
+            {
+                acquireMeasurements.Should().BeEmpty();
+                poolWaits.Should().BeEmpty();
+            }
+        }
+        finally
+        {
+            DbMetrics.IsEnabled = previous;
+        }
+    }
+
+    #endregion
+
+    #region PM04: 관측성 비활성화 시 연결 실패 메트릭 미기록
+
+    /// <summary>
+    /// 연결 실패 메트릭이 DbMetrics 게이트를 따르는지 검증합니다.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PM04_ConnectionFailureMetrics_ShouldHonorDbMetricsGate(bool enabled)
+    {
+        bool previous = DbMetrics.IsEnabled;
+        DbMetrics.IsEnabled = enabled;
+
+        try
+        {
+            LibDbOptions options = TestOptionsFactory.CreateValidWithOverrides(o =>
+            {
+                o.ConnectionStrings["BrokenLocal"] =
+                    "Server=127.0.0.1,1;Database=TEST;User Id=app_user;Password=placeholder;Encrypt=True;TrustServerCertificate=True;Connect Timeout=1";
+            });
+            Lib.Db.Repository.DbConnectionFactory factory = new(options);
+
+            using TelemetryTestHarness harness = new("Lib.Db");
+
+            Func<Task> act = async () =>
+            {
+                await using SqlConnection connection = await factory.CreateConnectionAsync(
+                    "BrokenLocal",
+                    TestContext.Current.CancellationToken);
+            };
+
+            await act.Should().ThrowAsync<Exception>();
+
+            IReadOnlyList<CapturedMeasurement<long>> timeouts =
+                harness.GetLongs("libdb.connection.pool_timeouts");
+
+            if (enabled)
+            {
+                Assert.Contains(timeouts, m =>
+                    m.Tags.Any(t => t.Key == "instance" && (string?)t.Value == "BrokenLocal") &&
+                    m.Tags.Any(t => t.Key == "reason" && t.Value is string { Length: > 0 }));
+            }
+            else
+            {
+                timeouts.Should().BeEmpty();
+            }
+        }
+        finally
+        {
+            DbMetrics.IsEnabled = previous;
+        }
     }
 
     #endregion
