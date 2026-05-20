@@ -30,7 +30,7 @@ $localServerPattern = '(?i)\b(server|data source|address|addr|network address|ho
 $textExtensions = @(
     '.txt', '.md', '.csv', '.json', '.log',
     '.out', '.err', '.trx',
-    '.html', '.htm', '.xml',
+    '.html', '.htm', '.xml', '.nuspec', '.psmdcp', '.rels',
     '.props', '.targets', '.csproj', '.config',
     '.ps1', '.sql'
 )

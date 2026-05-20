@@ -3,6 +3,7 @@ param(
     [switch] $SkipBenchmark,
     [switch] $SkipMatrixDbTests,
     [switch] $SkipAot,
+    [switch] $SkipReleasePackage,
     [ValidateSet('Dry', 'Short', 'Default')]
     [string] $BenchmarkJob = 'Short',
     [switch] $AllowPartial
@@ -17,6 +18,7 @@ $benchmarkProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.Benchmarks
 $coverageScript = Join-Path $PSScriptRoot 'Invoke-Coverage.ps1'
 $benchmarkScript = Join-Path $PSScriptRoot 'Invoke-Benchmarks.ps1'
 $aotScript = Join-Path $PSScriptRoot 'Invoke-Aot.ps1'
+$releasePackageScript = Join-Path $PSScriptRoot 'Invoke-ReleasePackage.ps1'
 $artifactScanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
 $artifactTrackingGate = Join-Path $PSScriptRoot 'Assert-GeneratedArtifactsUntracked.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
@@ -102,6 +104,16 @@ if (-not $SkipAot) {
 }
 else {
     $skippedGates.Add('aot')
+}
+
+if (-not $SkipReleasePackage) {
+    & pwsh -NoProfile -File $releasePackageScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release package verification failed with exit code $LASTEXITCODE."
+    }
+}
+else {
+    $skippedGates.Add('release-package')
 }
 
 if (-not $SkipBenchmark) {

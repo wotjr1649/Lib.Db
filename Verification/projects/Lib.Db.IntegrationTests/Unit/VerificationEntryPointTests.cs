@@ -67,6 +67,9 @@ public sealed class VerificationEntryPointTests
             "Scan-VerificationArtifacts.ps1"));
         scannerScript.Should().Contain("'.html'");
         scannerScript.Should().Contain("'.xml'");
+        scannerScript.Should().Contain("'.nuspec'");
+        scannerScript.Should().Contain("'.psmdcp'");
+        scannerScript.Should().Contain("'.rels'");
         scannerScript.Should().Contain("'.csproj'");
         scannerScript.Should().Contain("placeholder");
         scannerScript.Should().Contain("redacted");
@@ -80,6 +83,86 @@ public sealed class VerificationEntryPointTests
         benchmarkScript.Should().Contain("'*WideTvpBenchmarks*'");
         manifest.Should().Contain("artifactSecretScan");
         manifest.Should().Contain("artifactTrackingGate");
+    }
+
+    [Fact]
+    public void ReleaseVerification_ShouldRunReleasePackageGate()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string verificationScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Verification.ps1"));
+        string manifest = File.ReadAllText(Path.Combine(repoRoot.FullName, "Verification", "manifest.json"));
+
+        verificationScript.Should().Contain("Invoke-ReleasePackage.ps1");
+        manifest.Should().Contain("releasePackage");
+        manifest.Should().Contain("scripts/Invoke-ReleasePackage.ps1");
+    }
+
+    [Fact]
+    public void ReleasePackageScript_ShouldValidatePackageMetadataAndUnsignedPolicy()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string script = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-ReleasePackage.ps1"));
+
+        script.Should().Contain("dotnet");
+        script.Should().Contain("pack");
+        script.Should().Contain("RepositoryCommit");
+        script.Should().Contain("dotnet nuget verify");
+        script.Should().Contain("NU3004");
+        script.Should().Contain("AllowUnsigned");
+        script.Should().Contain("Test-OnlyAcceptedUnsignedNuGetFailure");
+        script.Should().Contain("Package repository commit does not match HEAD");
+        script.Should().Contain("must resolve under Verification artifacts");
+        script.Should().Contain("Scan-VerificationArtifacts.ps1");
+        script.Should().Contain("finally");
+        script.Should().Contain("Remove-Item -LiteralPath $expandedDirectory -Recurse -Force");
+    }
+
+    [Fact]
+    public async Task ReleasePackagePrivateSelfTest_ShouldRejectInvalidUnsignedAndRepositoryCommitCases()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string scriptPath = Path.Combine(repoRoot.FullName, "Verification", "scripts", "Invoke-ReleasePackage.ps1");
+        File.Exists(scriptPath).Should().BeTrue("release package helper self-tests must stay executable");
+
+        using System.Diagnostics.Process process = new()
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "pwsh",
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            }
+        };
+
+        process.StartInfo.ArgumentList.Add("-NoProfile");
+        process.StartInfo.ArgumentList.Add("-File");
+        process.StartInfo.ArgumentList.Add(scriptPath);
+        process.StartInfo.ArgumentList.Add("-SelfTest");
+
+        process.Start();
+
+        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string combined = output + error;
+
+        process.ExitCode.Should().Be(0, combined);
+        combined.Should().Contain("AcceptsLocalizedUnsignedNu3004WithSignatureFailureSummary");
+        combined.Should().Contain("RejectsMixedNu3004AndAnotherNuGetCode");
+        combined.Should().Contain("RejectsNu3004WithUnrelatedFatalText");
+        combined.Should().Contain("RejectsShortRepositoryCommit");
+        combined.Should().Contain("RejectsDifferentRepositoryCommit");
+        combined.Should().Contain("RejectsArtifactDirectoryOutsideVerificationArtifacts");
+        combined.Should().Contain("RejectsVerificationArtifactsRootAsArtifactDirectory");
     }
 
     [Fact]

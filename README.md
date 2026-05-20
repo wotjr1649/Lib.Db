@@ -17,7 +17,7 @@ Install the `Lib.Db` package through your normal NuGet workflow.
 </ItemGroup>
 ```
 
-Pin the package version in the application or through central package management. Do not commit real connection strings, tokens, or passwords. If a sample must mention a password, mask it as `Password=***`.
+Pin the package version in the application or through central package management. Do not commit real connection strings, tokens, or credentials. Use redacted placeholders in samples.
 
 ## Quick Start
 
@@ -52,8 +52,8 @@ using Microsoft.Extensions.Hosting;
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddLibDb(builder.Configuration);
 
-IHost host = builder.Build();
-await host.RunAsync();
+IHost app = builder.Build();
+await app.RunAsync();
 ```
 
 ### Query

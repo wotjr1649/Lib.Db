@@ -78,6 +78,30 @@ public sealed class VerificationArtifactScanTests
     }
 
     [Theory]
+    [InlineData("Lib.Db.nuspec")]
+    [InlineData("metadata.psmdcp")]
+    [InlineData(".rels")]
+    public async Task Scanner_ShouldRejectNuGetMetadataTextFiles(string fileName)
+    {
+        using TemporaryArtifactRoot root = new();
+        string file = Path.Combine(root.Path, fileName);
+        await File.WriteAllTextAsync(
+            file,
+            """
+            <metadata>
+              <repository url="https://github.com/example/lib-db" />
+              <connectionString>Server=prod-sql.internal;Database=CustomerLedger;Encrypt=True;TrustServerCertificate=False</connectionString>
+            </metadata>
+            """,
+            TestContext.Current.CancellationToken);
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain(fileName);
+    }
+
+    [Theory]
     [InlineData("""{ "ConnectionString": "redacted" }""")]
     [InlineData("""{ "ConnectionStrings": "placeholder" }""")]
     [InlineData("""connection string: Server=localhost;Database=TEST;Integrated Security=True;Encrypt=True""")]

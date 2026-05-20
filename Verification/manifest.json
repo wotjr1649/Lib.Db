@@ -62,6 +62,7 @@
     "coverage": "scripts/Invoke-Coverage.ps1",
     "benchmarks": "scripts/Invoke-Benchmarks.ps1",
     "aot": "scripts/Invoke-Aot.ps1",
+    "releasePackage": "scripts/Invoke-ReleasePackage.ps1",
     "artifactSecretScan": "scripts/Scan-VerificationArtifacts.ps1",
     "artifactTrackingGate": "scripts/Assert-GeneratedArtifactsUntracked.ps1"
   }
