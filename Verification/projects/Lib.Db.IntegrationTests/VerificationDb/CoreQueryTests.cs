@@ -50,7 +50,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
     }
 
     [Fact]
-    public async Task V05_Dashboard_ReturnsMultipleResultSets()
+    public async Task V05_Dashboard_CanIgnoreUnconsumedStoredProcedureResultSets()
     {
         DbResult<IMultipleResultReader> result = await _db
             .Procedure("core.usp_Core_Get_Dashboard")
@@ -66,9 +66,66 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
             return;
         }
 
-        await using IMultipleResultReader reader = result.Value!;
-        List<Dictionary<string, object?>> users = await reader.ReadAsync<Dictionary<string, object?>>();
-        List<Dictionary<string, object?>> orders = await reader.ReadAsync<Dictionary<string, object?>>();
+        await using (IMultipleResultReader reader = result.Value!)
+        {
+            List<DashboardUserInfo> users = await reader.ReadAsync<DashboardUserInfo>();
+            List<DashboardOrder> orders = await reader.ReadAsync<DashboardOrder>();
+
+            users.Should().ContainSingle(user => user.UserId == 1);
+            orders.Should().NotBeNull();
+        }
+
+        DbResult<int> ping = await _db
+            .Sql("SELECT CAST(1 AS INT)")
+            .With(new { })
+            .ExecuteScalarAsync<int>();
+
+        ping.IsSuccess.Should().BeTrue("unread stored procedure result sets must be discarded when the grid reader is disposed");
+        ping.Value.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task V05B_QueryMultiple_CanReadDeclaredFourResultSetsAndIgnoreFifth()
+    {
+        DbResult<IMultipleResultReader> result = await _db
+            .Sql("""
+                SELECT CAST(1 AS INT) AS [Value];
+                SELECT CAST(2 AS INT) AS [Value];
+                SELECT CAST(3 AS INT) AS [Value];
+                SELECT CAST(4 AS INT) AS [Value];
+                SELECT CAST(5 AS INT) AS [Value];
+                """)
+            .With(new { })
+            .QueryMultipleAsync();
+
+        if (!result.IsSuccess)
+        {
+            result.Error.Should().NotBeNull();
+            result.Error!.Value.Kind.Should().Be(DbErrorKind.Unknown,
+                "MARS 미활성화 또는 기타 사유로 QueryMultiple이 실패할 수 있습니다.");
+            return;
+        }
+
+        await using (IMultipleResultReader reader = result.Value!)
+        {
+            ResultSetValue? first = await reader.ReadSingleAsync<ResultSetValue>();
+            ResultSetValue? second = await reader.ReadSingleAsync<ResultSetValue>();
+            ResultSetValue? third = await reader.ReadSingleAsync<ResultSetValue>();
+            ResultSetValue? fourth = await reader.ReadSingleAsync<ResultSetValue>();
+
+            first.Should().BeEquivalentTo(new ResultSetValue(1));
+            second.Should().BeEquivalentTo(new ResultSetValue(2));
+            third.Should().BeEquivalentTo(new ResultSetValue(3));
+            fourth.Should().BeEquivalentTo(new ResultSetValue(4));
+        }
+
+        DbResult<int> ping = await _db
+            .Sql("SELECT CAST(9 AS INT)")
+            .With(new { })
+            .ExecuteScalarAsync<int>();
+
+        ping.IsSuccess.Should().BeTrue("the fifth result set is intentionally not mapped by the C# layer");
+        ping.Value.Should().Be(9);
     }
 
     [Fact]
@@ -81,4 +138,6 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
             .ExecuteAsync();
         result.IsSuccess.Should().BeTrue();
     }
+
+    private sealed record ResultSetValue(int Value);
 }
