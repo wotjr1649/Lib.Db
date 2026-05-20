@@ -45,9 +45,16 @@ public static partial class SqlScriptRunner
         DirectoryInfo? current = new(AppContext.BaseDirectory);
         while (current is not null)
         {
-            string candidate = Path.Combine(current.FullName, "Tests", "Lib.Db.IntegrationTests", "sql", scriptFileName);
-            if (File.Exists(candidate))
-                return candidate;
+            string databaseRoot = Path.Combine(current.FullName, "Verification", "databases");
+            if (Directory.Exists(databaseRoot))
+            {
+                string[] matches = Directory.GetFiles(databaseRoot, scriptFileName, SearchOption.AllDirectories);
+                if (matches.Length == 1)
+                    return matches[0];
+
+                if (matches.Length > 1)
+                    throw new InvalidOperationException($"SQL script '{scriptFileName}' matched multiple Verification database files.");
+            }
 
             current = current.Parent;
         }

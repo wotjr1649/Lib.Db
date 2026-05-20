@@ -1,6 +1,6 @@
-# Lib.Db v2 Cookbook
+# Lib.Db Cookbook
 
-24개 실전 레시피 모음입니다. 각 레시피는 상황 설명, 완전한 코드 예시, 결과 타입, 주의사항을 포함합니다.
+24개 실전 레시피 모음입니다. 각 레시피는 상황 설명, 완전한 코드 예시, 결과 타입, Runtime TVP 주의사항을 포함합니다.
 
 ---
 
@@ -301,10 +301,11 @@ if (result.IsSuccess)
 
 ## 레시피 12: TVP (Table-Valued Parameter) 전송
 
-**상황**: Source Generator로 생성된 TVP 바인더를 사용하여 배열 데이터를 SP에 전달합니다.
+**상황**: Runtime TVP wrapper로 배열 데이터를 스칼라 파라미터와 함께 SP에 전달합니다.
 
 ```csharp
-[TvpRow(TypeName = "dbo.T_Product_V2", UseDatetime2 = true)]
+using Lib.Db;
+
 public record ProductRow
 {
     public int ProductId { get; init; }
@@ -321,12 +322,31 @@ List<ProductRow> products =
 
 DbResult<int> result = await session.Default
     .Procedure("dbo.usp_UpsertProducts")
-    .With(new { Products = products })
+    .With(new
+    {
+        RequestedBy = "system",
+        Products = LibDb.Tvp("dbo.T_Product_V2", products)
+    })
     .ExecuteAsync();
 ```
 
+반복 호출이 많은 서비스는 시작 시 static shape를 등록하고 같은 row type을 그대로 전달합니다.
+
+```csharp
+using System.Data;
+
+builder.Services.AddLibDb(options =>
+{
+    options.Tvp.Map<ProductRow>("dbo.T_Product_V2")
+        .Column("ProductId", SqlDbType.Int, static row => row.ProductId)
+        .Column("Name", SqlDbType.NVarChar, static row => row.Name, size: 100)
+        .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2)
+        .Column("CreatedAt", SqlDbType.DateTime2, static row => row.CreatedAt, scale: 7);
+});
+```
+
 **결과 타입**: `DbResult<int>`
-**주의사항**: TVP 타입 이름(`TypeName`)은 DB에 생성된 TVP 타입과 정확히 일치해야 합니다. `[TvpRow]` 어트리뷰트가 있어야 Source Generator가 바인딩 코드를 생성합니다.
+**주의사항**: TVP 타입 이름은 DB에 생성된 TVP type과 정확히 일치해야 합니다. New code does not require `[TvpRow]` or a separate generator package; Native AOT 또는 고빈도 경로는 `options.Tvp.Map<T>()`를 권장합니다.
 
 ---
 
@@ -356,7 +376,7 @@ if (result.IsSuccess)
 
 ## 레시피 14: WithTimeout (장시간 쿼리)
 
-**상황**: 무거운 리포트 SP에 대해 기본 타임아웃(30초)을 늘립니다.
+**상황**: 무거운 조회 SP에 대해 기본 타임아웃(30초)을 늘립니다.
 
 ```csharp
 DbResult<IAsyncEnumerable<ReportRow>> result = await session.Default
@@ -648,6 +668,8 @@ result.LogIfFailed(logger, "주문 처리");
 **상황**: 멀티 DB + 트랜잭션 + TVP + 캐시 무효화 + 에러 처리를 결합한 실전 시나리오입니다.
 
 ```csharp
+using Lib.Db;
+
 public sealed class OrderService(
     IDbSession session,
     IDistributedCache cache,
@@ -660,7 +682,7 @@ public sealed class OrderService(
         // 1. 재고 확인 (SalesDb)
         DbResult<IAsyncEnumerable<StockInfo>> stockResult = await session.Use("SalesDb")
             .Procedure("dbo.usp_CheckStock")
-            .With(new { Items = items })
+            .With(new { Items = LibDb.Tvp("dbo.T_OrderItem", items) })
             .QueryAsync<StockInfo>();
 
         if (!stockResult.IsSuccess)
@@ -674,7 +696,11 @@ public sealed class OrderService(
 
         DbResult<long?> orderIdResult = await tx
             .Procedure("dbo.usp_CreateOrder")
-            .With(new { CustomerId = customerId, Items = items })
+            .With(new
+            {
+                CustomerId = customerId,
+                Items = LibDb.Tvp("dbo.T_OrderItem", items)
+            })
             .ExecuteScalarAsync<long>();
 
         if (!orderIdResult.IsSuccess || orderIdResult.Value is not long orderId)
@@ -713,5 +739,5 @@ public sealed class OrderService(
 **결과 타입**: `DbResult<long>` (생성된 주문 ID)
 **주의사항**:
 - 트랜잭션은 `SalesDb`에만 적용됩니다. `LogDb` 기록은 트랜잭션 외부이므로, 주문 롤백 시에도 로그는 남을 수 있습니다.
-- `OrderItemRow`에는 `[TvpRow]` 어트리뷰트가 필요합니다.
+- `OrderItemRow`는 `LibDb.Tvp("dbo.T_OrderItem", items)`로 명시 wrapper를 만들거나, 시작 시 `options.Tvp.Map<OrderItemRow>("dbo.T_OrderItem")`로 등록합니다.
 - 캐시 무효화는 커밋 성공 후에 수행합니다.

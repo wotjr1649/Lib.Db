@@ -26,7 +26,7 @@ public sealed class MemoryOptimizedTvpOptInTests(MultiDbFixture fixture)
     [Fact]
     public void DefaultAllVerificationScript_ShouldNotRunMemoryOptimizedTvpSetup()
     {
-        string scriptPath = SqlScriptRunner.ResolveScriptPath("verify-libdb-all.sql");
+        string scriptPath = SqlScriptRunner.ResolveScriptPath("verify-libdb-all.migration-reference.sql");
         string script = File.ReadAllText(scriptPath);
 
         script.Contains("verify-libdb-bench-test.sql", StringComparison.OrdinalIgnoreCase).Should().BeTrue();

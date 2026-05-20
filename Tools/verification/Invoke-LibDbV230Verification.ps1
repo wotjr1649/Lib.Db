@@ -4,7 +4,7 @@ param(
     [switch] $SkipMatrixDbTests,
     [switch] $SkipAot,
     [ValidateSet('Dry', 'Short', 'Default')]
-    [string] $BenchmarkJob = 'Dry',
+    [string] $BenchmarkJob = 'Short',
     [switch] $AllowPartial
 )
 
@@ -12,143 +12,32 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$integrationProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj'
-$benchmarkProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.Benchmarks\Lib.Db.Benchmarks.csproj'
-$aotProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.AotVerification\Lib.Db.AotVerification.csproj'
-$coverageScript = Join-Path $repoRoot 'Tools\coverage\Invoke-LibDbCoverage.ps1'
-$benchmarkScript = Join-Path $repoRoot 'Tools\benchmark\Invoke-LibDbBenchmarks.ps1'
+$canonicalScript = Join-Path $repoRoot 'Verification\scripts\Invoke-Verification.ps1'
+$canonicalArguments = [System.Collections.Generic.List[string]]::new()
 
-$skippedGates = [System.Collections.Generic.List[string]]::new()
-
-function Invoke-Checked {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $FilePath,
-        [string[]] $Arguments = @()
-    )
-
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$FilePath failed with exit code $LASTEXITCODE."
-    }
+if ($SkipCoverage) {
+    $canonicalArguments.Add('-SkipCoverage')
 }
 
-function Write-SecretSafeEnvironmentSummary {
-    $names = @(
-        'LIBDB_TEST_CONNECTION_VERIFICATION',
-        'LIBDB_TEST_CONNECTION_SORTER',
-        'LIBDB_TEST_CONNECTION_STRESS',
-        'LIBDB_TEST_CONNECTION_CHAOS',
-        'LIBDB_TEST_CONNECTION_BENCHMARK',
-        'LIBDB_TEST_SQL_PASSWORD',
-        'LIBDB_BENCHMARK_CONNECTION'
-    )
-
-    foreach ($name in $names) {
-        $present = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))
-        Write-Host "$name present: $present"
-    }
+if ($SkipBenchmark) {
+    $canonicalArguments.Add('-SkipBenchmark')
 }
 
-function Get-AotRuntimeIdentifier {
-    if ($IsWindows) {
-        return 'win-x64'
-    }
-
-    if ($IsLinux) {
-        return 'linux-x64'
-    }
-
-    if ($IsMacOS) {
-        return 'osx-x64'
-    }
-
-    throw 'Unsupported operating system for AOT verification.'
+if ($SkipMatrixDbTests) {
+    $canonicalArguments.Add('-SkipMatrixDbTests')
 }
 
-function Get-AotExecutableName {
-    if ($IsWindows) {
-        return 'Lib.Db.AotVerification.exe'
-    }
-
-    return 'Lib.Db.AotVerification'
+if ($SkipAot) {
+    $canonicalArguments.Add('-SkipAot')
 }
 
-Write-Host 'Lib.Db v2.3.0 verification started.'
-Write-SecretSafeEnvironmentSummary
+$canonicalArguments.Add('-BenchmarkJob')
+$canonicalArguments.Add($BenchmarkJob)
 
-Invoke-Checked 'dotnet' @('build', $integrationProject, '--no-restore', '-v:minimal')
-Invoke-Checked 'dotnet' @('build', $benchmarkProject, '--no-restore', '-v:minimal')
-
-if (-not $SkipMatrixDbTests) {
-    Invoke-Checked 'dotnet' @(
-        'test',
-        $integrationProject,
-        '--no-build',
-        '--filter', 'FullyQualifiedName~Lib.Db.IntegrationTests.V230Matrix.V230TvpMatrixTests',
-        '-v:minimal'
-    )
-}
-else {
-    $skippedGates.Add('matrix-db-tests')
+if ($AllowPartial) {
+    $canonicalArguments.Add('-AllowPartial')
 }
 
-if (-not $SkipCoverage) {
-    & pwsh -NoProfile -File $coverageScript
-    if ($LASTEXITCODE -ne 0) {
-        throw "Coverage verification failed with exit code $LASTEXITCODE."
-    }
-}
-else {
-    $skippedGates.Add('coverage')
-}
-
-if (-not $SkipAot) {
-    if (-not (Test-Path -LiteralPath $aotProject)) {
-        throw "AOT verification project was not found: $aotProject"
-    }
-
-    $aotRid = Get-AotRuntimeIdentifier
-
-    Invoke-Checked 'dotnet' @(
-        'publish',
-        $aotProject,
-        '-c', 'Release',
-        '-r', $aotRid,
-        '--self-contained', 'true',
-        '-p:PublishAot=true',
-        '-p:TreatWarningsAsErrors=true',
-        '-v:minimal'
-    )
-
-    $aotPublishDirectory = Join-Path (Split-Path -Parent $aotProject) (Join-Path "bin\Release\net10.0" (Join-Path $aotRid 'publish'))
-    $aotExecutable = Join-Path $aotPublishDirectory (Get-AotExecutableName)
-    if (-not (Test-Path -LiteralPath $aotExecutable)) {
-        throw "AOT verification executable was not produced: $aotExecutable"
-    }
-
-    Invoke-Checked $aotExecutable @()
-}
-else {
-    $skippedGates.Add('aot')
-}
-
-if (-not $SkipBenchmark) {
-    & pwsh -NoProfile -File $benchmarkScript -Job $BenchmarkJob -Filter '*TvpBenchmarks*'
-    if ($LASTEXITCODE -ne 0) {
-        throw "Benchmark verification failed with exit code $LASTEXITCODE."
-    }
-}
-else {
-    $skippedGates.Add('benchmark')
-}
-
-if ($skippedGates.Count -gt 0) {
-    Write-Warning "Lib.Db v2.3.0 verification completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade evidence."
-    if (-not $AllowPartial) {
-        throw "Partial verification runs require -AllowPartial so CI cannot mistake them for release-grade evidence."
-    }
-}
-else {
-    Write-Host 'Lib.Db v2.3.0 release-grade verification completed.'
-}
+Write-Warning 'Tools\verification\Invoke-LibDbV230Verification.ps1 is a compatibility shim. Use Verification\scripts\Invoke-Verification.ps1.'
+& pwsh -NoProfile -File $canonicalScript @($canonicalArguments.ToArray())
+exit $LASTEXITCODE

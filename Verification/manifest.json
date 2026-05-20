@@ -56,6 +56,7 @@
     }
   },
   "scripts": {
+    "tests": "scripts/Invoke-Tests.ps1",
     "full": "scripts/Invoke-Verification.ps1",
     "db": "scripts/Invoke-VerificationDb.ps1",
     "coverage": "scripts/Invoke-Coverage.ps1",

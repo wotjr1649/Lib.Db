@@ -21,7 +21,7 @@ public static class LibDbTelemetry
     public const string SourceName = "Lib.Db";
 
     /// <summary>Lib.Db 라이브러리 버전입니다.</summary>
-    public const string Version = "2.2.1";
+    public const string Version = LibDbBuildInfo.Version;
 
     /// <summary>
     /// Lib.Db 전용 ActivitySource입니다. 추적(Tracing) 데이터 생성에 사용됩니다.

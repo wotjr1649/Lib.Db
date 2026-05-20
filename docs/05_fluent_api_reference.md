@@ -1,6 +1,6 @@
-# Lib.Db v2 Fluent API 레퍼런스
+# Lib.Db Fluent API Reference
 
-Fluent API 호출 체인, 단계별 메서드, 실행 메서드 매트릭스, 파라미터 바인딩, DbResult 패턴 매칭, DbErrorKind 매핑표, 확장 메서드를 한 곳에서 참조하는 완전한 레퍼런스입니다.
+Fluent API 호출 체인, 단계별 메서드, 실행 메서드 매트릭스, Runtime TVP 파라미터 바인딩, DbResult 패턴 매칭, DbErrorKind 매핑표, 확장 메서드를 한 곳에서 참조하는 완전한 레퍼런스입니다.
 
 ---
 
@@ -149,7 +149,7 @@ public interface IMultipleResultReader : IAsyncDisposable
 | `QueryMultipleAsync()` | (ReadAsync로 사용) | (ReadAsync로 사용) | (ReadSingleAsync로 사용) | X |
 | `ExecuteAsync()` | (반환: int) | (반환: int) | (반환: int) | X |
 
-**DataTable은 직접 지원하지 않습니다.** Source Generator 기반 매핑 파이프라인은 `DbDataReader` -> `IAsyncEnumerable<T>` 변환에 최적화되어 있으며, `DataTable.Load()` 패턴은 AOT 호환성과 Zero-Allocation 원칙에 맞지 않아 의도적으로 제외되었습니다.
+**DataTable은 결과 materialization 대상으로 직접 지원하지 않습니다.** 위 매트릭스는 `QueryAsync<TResult>()` 계열의 결과 타입 기준입니다. Lib.Db의 결과 매핑은 `DbDataReader` -> `IAsyncEnumerable<T>` 변환에 최적화되어 있으며, `DataTable.Load()` 패턴은 AOT 호환성과 streaming 원칙에 맞지 않아 의도적으로 제외되었습니다. TVP 입력은 별도 경로이며 `LibDb.Tvp(...)` 또는 등록형 static-shape fast-path를 사용합니다.
 
 ---
 
@@ -255,9 +255,11 @@ DbResult<User?> result = await session.Default
 
 ### 5-5. TVP (Table-Valued Parameter)
 
-Source Generator가 `[TvpRow]` 어트리뷰트를 통해 `SqlDataRecord` 바인딩 코드를 자동 생성합니다.
+TVP is included in the `Lib.Db` runtime. 기본 경로는 명시 wrapper이고, 반복 호출이나 Native AOT 경로는 등록형 static-shape fast-path를 사용합니다.
 
 ```csharp
+using Lib.Db;
+
 List<ProductRow> products =
 [
     new() { ProductId = 1, Name = "Laptop", Price = 1200m },
@@ -266,9 +268,34 @@ List<ProductRow> products =
 
 DbResult<int> result = await session.Default
     .Procedure("dbo.usp_InsertProducts")
-    .With(new { Products = products })
+    .With(new
+    {
+        RequestedBy = userId,
+        Products = LibDb.Tvp("dbo.T_Product", products)
+    })
     .ExecuteAsync();
 ```
+
+반복 호출 경로는 DI 등록 시 TVP shape를 고정합니다.
+
+```csharp
+using System.Data;
+
+builder.Services.AddLibDb(options =>
+{
+    options.Tvp.Map<ProductRow>("dbo.T_Product")
+        .Column("ProductId", SqlDbType.Int, static row => row.ProductId)
+        .Column("Name", SqlDbType.NVarChar, static row => row.Name, size: 100)
+        .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2);
+});
+
+DbResult<int> result = await session.Default
+    .Procedure("dbo.usp_InsertProducts")
+    .With(new { RequestedBy = userId, Products = products })
+    .ExecuteAsync();
+```
+
+`[TvpRow]` is a legacy compatibility fallback. New call sites do not require `[TvpRow]` or a separate generator package.
 
 ### 5-6. 파라미터 없이 실행
 

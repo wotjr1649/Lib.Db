@@ -9,6 +9,7 @@ $repoRoot = Split-Path $verificationRoot -Parent
 
 if (-not $PSBoundParameters.ContainsKey("Paths") -or $null -eq $Paths -or $Paths.Count -eq 0) {
     $Paths = @(
+        (Join-Path $verificationRoot "artifacts\benchmarks\BenchmarkDotNet.Artifacts"),
         (Join-Path $verificationRoot "artifacts\benchmarks"),
         (Join-Path $repoRoot "BenchmarkDotNet.Artifacts"),
         (Join-Path $PSScriptRoot "BenchmarkDotNet.Artifacts")

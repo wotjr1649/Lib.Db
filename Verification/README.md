@@ -9,10 +9,13 @@ This directory is the canonical root for Lib.Db v2.3.0 verification assets.
 - LIBDB_TEST_CONNECTION_STRESS
 - LIBDB_TEST_CONNECTION_CHAOS
 - LIBDB_TEST_CONNECTION_BENCHMARK
+- LIBDB_TEST_SQL_PASSWORD
 - LIBDB_BENCHMARK_CONNECTION
 - SQLCMDPASSWORD
 
-Scripts print only whether each key is present and do not print values.
+Scripts print only whether each key is present and do not print values. `Invoke-Tests.ps1`, `Invoke-Coverage.ps1`, `Invoke-Benchmarks.ps1`, and `Invoke-Verification.ps1` load `Verification/scripts/Set-LibDbVerificationEnvironment.local.ps1` automatically when it exists.
+
+Do not run database-backed tests through raw `dotnet test`. The integration-test project has an MSBuild guard that fails before VSTest when the verification environment is missing. Use `Invoke-Tests.ps1` for focused tests and `Invoke-Verification.ps1` for release gates.
 
 ## Database Allowlist
 
@@ -26,7 +29,9 @@ Direct SQL execution is restricted to allowlisted files under `Verification/data
 ## Commands
 
 ```powershell
-.\Verification\scripts\Invoke-Verification.ps1 -Mode Full
+.\Verification\scripts\Invoke-Tests.ps1 -NoRestore
+.\Verification\scripts\Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -Filter "FullyQualifiedName~Lib.Db.IntegrationTests.V230Matrix.V230TvpMatrixTests"
+.\Verification\scripts\Invoke-Verification.ps1
 .\Verification\scripts\Invoke-VerificationDb.ps1 -Db Verification -Setup -Verify
 .\Verification\scripts\Invoke-VerificationDb.ps1 -Db Stress -Setup -Verify -Matrix
 .\Verification\scripts\Invoke-VerificationDb.ps1 -Db Chaos -Setup -Verify
@@ -37,8 +42,9 @@ Direct SQL execution is restricted to allowlisted files under `Verification/data
 ## Artifacts
 
 - Verification/artifacts/test-results
-- Verification/artifacts/coverage
-- Verification/artifacts/benchmarks
+- Verification/artifacts/coverage/raw
+- Verification/artifacts/coverage/report
+- Verification/artifacts/benchmarks/BenchmarkDotNet.Artifacts
 - Verification/artifacts/aot
 
 Generated artifacts are not source and must not be committed.

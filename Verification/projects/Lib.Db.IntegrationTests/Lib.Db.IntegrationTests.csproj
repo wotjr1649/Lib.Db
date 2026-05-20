@@ -12,26 +12,50 @@
     <BuildInParallel>false</BuildInParallel>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="10.0.0">
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageReference Include="FluentAssertions" Version="8.9.0" />
+    <PackageReference Include="FluentAssertions" Version="8.10.0" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="NetArchTest.Rules" Version="1.3.2" />
-    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.6" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.8" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" PrivateAssets="all" />
     <PackageReference Include="xunit.v3" Version="3.2.2" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\Lib.Db\Lib.Db.csproj" />
   </ItemGroup>
+  <PropertyGroup>
+    <LibDbTestSqlPasswordConfigured Condition="'$(LIBDB_TEST_SQL_PASSWORD)' != ''">true</LibDbTestSqlPasswordConfigured>
+    <LibDbExplicitConnectionStringsConfigured Condition="
+      '$(ConnectionStrings__Verification)' != '' and
+      '$(ConnectionStrings__Sorter)' != '' and
+      '$(ConnectionStrings__Stress)' != '' and
+      '$(ConnectionStrings__Chaos)' != '' and
+      '$(ConnectionStrings__Benchmark)' != ''">true</LibDbExplicitConnectionStringsConfigured>
+    <LibDbAliasConnectionStringsConfigured Condition="
+      '$(LIBDB_TEST_CONNECTION_VERIFICATION)' != '' and
+      '$(LIBDB_TEST_CONNECTION_SORTER)' != '' and
+      '$(LIBDB_TEST_CONNECTION_STRESS)' != '' and
+      '$(LIBDB_TEST_CONNECTION_CHAOS)' != '' and
+      '$(LIBDB_TEST_CONNECTION_BENCHMARK)' != ''">true</LibDbAliasConnectionStringsConfigured>
+    <LibDbVerificationEnvironmentConfigured Condition="
+      '$(LibDbTestSqlPasswordConfigured)' == 'true' or
+      '$(LibDbExplicitConnectionStringsConfigured)' == 'true' or
+      '$(LibDbAliasConnectionStringsConfigured)' == 'true'">true</LibDbVerificationEnvironmentConfigured>
+  </PropertyGroup>
+  <Target Name="GuardLibDbVerificationTestEnvironment" BeforeTargets="VSTest">
+    <Error
+      Condition="'$(LIBDB_SKIP_TEST_ENV_GUARD)' != 'true' and '$(LibDbVerificationEnvironmentConfigured)' != 'true'"
+      Text="Lib.Db integration tests require the verification environment before dotnet test starts. Use pwsh -NoProfile -File .\Verification\scripts\Invoke-Tests.ps1 so Set-LibDbVerificationEnvironment.local.ps1 is loaded first, or set LIBDB_TEST_SQL_PASSWORD / all LIBDB_TEST_CONNECTION_* / all ConnectionStrings__* values in the current process. For non-database-only local runs, pass -p:LIBDB_SKIP_TEST_ENV_GUARD=true explicitly." />
+  </Target>
   <ItemGroup>
     <None Remove="TestResults/**" />
     <Content Remove="TestResults/**" />

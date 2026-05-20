@@ -1,6 +1,6 @@
-# Lib.Db v2 API 레퍼런스
+# Lib.Db API Reference
 
-v2 Public API 전체 목록입니다.
+현재 Public API 전체 목록입니다.
 
 ---
 
@@ -38,7 +38,7 @@ DB 작업의 유일한 진입점입니다. DI 컨테이너에서 `Scoped`로 등
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
 | `RawSqlPolicy` | `Allow` | `CommandType.Text` 실행 정책. `DenyAllText`는 모든 Raw SQL 텍스트를 차단하고, `DenyWriteText`는 주석/문자열/식별자를 건너뛰며 쓰기/DDL/권한/운영 계열 위험 토큰을 차단합니다. |
-| `ConnectionSecurityProfile` | `Development` | `Production` 설정 시 암호화 비활성, `TrustServerCertificate=True`, 고권한 기본 SQL 로그인 사용을 검증합니다. |
+| `ConnectionSecurityProfile` | `Development` | `Production` 설정 시 암호화 비활성 연결, `TrustServerCertificate=True`, 고권한 기본 SQL 로그인 사용을 기본 차단합니다. |
 
 `DenyWriteText`는 SQL 파서가 아니라 전환기 보조 guardrail입니다.
 복잡한 T-SQL 문법 전체를 증명하는 보안 경계로 간주하면 안 됩니다.
@@ -87,9 +87,9 @@ DbResult<int> count = await session.Default
     .ExecuteScalarAsync<int>();
 ```
 
-## 2-4. `[DbResult]` generated mapper reader 계약
+## 2-4. `[DbResult]` generated/static mapper reader 계약
 
-`[DbResult]` Source Generator는 v2.2.1부터 다음 두 진입점을 함께 생성합니다.
+`[DbResult]` 고성능 mapper 계약은 현재 다음 두 진입점을 함께 사용합니다.
 
 ```csharp
 public static T Map(DbDataReader reader);
@@ -100,8 +100,8 @@ public static T Map(SqlDataReader reader);
 따라서 Diagnostic monitor가 반환하는 `MonitoredSqlDataReader : DbDataReader` wrapper에서도 generated mapper가 동작합니다.
 `Map(SqlDataReader)`는 기존 generated contract 호환을 위한 overload입니다.
 
-이미 빌드되어 배포된 오래된 generator 산출물은 `Map(DbDataReader)`가 없을 수 있습니다.
-이 경우 새 `Lib.Db.TvpGen`으로 재빌드하여 generated source를 갱신하세요.
+이미 빌드되어 배포된 오래된 mapper 산출물은 `Map(DbDataReader)`가 없을 수 있습니다.
+이 경우 현재 generated mapper 계약에 맞게 mapper를 갱신하세요.
 
 ## 3. IParameterStage
 
@@ -218,18 +218,32 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `PrewarmExcludePatterns` | `List<string>` | `[]` | 워밍업 제외 패턴 |
 | `DefaultCommandTimeoutSeconds` | `int` | `30` | 기본 타임아웃 (1~600초) |
 | `StrictRequiredParameterCheck` | `bool` | `true` | 필수 파라미터 검사 |
-| `EnableGeneratedTvpBinder` | `bool` | `true` | SG 기반 TVP 바인더 |
+| `Tvp` | `TvpOptions` | `new()` | Runtime TVP 바인딩 옵션과 row type registry |
 | `EnableResilience` | `bool` | `false` | Polly 회복 탄력성 |
 | `Resilience` | `ResilienceOptions` | (내부 기본값) | 재시도/Circuit Breaker 설정 |
 | `EnableSharedMemoryCache` | `bool?` | `null` (자동) | L2 공유 메모리 캐시 |
 | `EnableEpochCoordination` | `bool?` | `null` | 프로세스 간 Epoch 동기화 |
 | `EnableDryRun` | `bool` | `false` | 모의 실행 모드 |
 | `EnableObservability` | `bool` | `false` | 관측 가능성(Logging, Metrics, Tracing) 마스터 스위치 |
-| `EnableOpenTelemetry` | `bool` | `false` | ⚠️ **Deprecated** — `EnableObservability`를 사용하세요 (v3.0 제거 예정) |
+| `EnableOpenTelemetry` | `bool` | `false` | ⚠️ **Deprecated** — `EnableObservability`를 사용하세요. 향후 breaking release에서 제거 예정입니다. |
 | `Mars` | `MarsPolicy` | `Auto` | MARS 정책 (`Disabled`/`Auto`/`ForceEnable`) |
 | `HealthCheckThrottleSeconds` | `int` | `1` | HealthCheck 최소 실행 간격 (초) |
 
-### 9-1. MarsPolicy 열거형
+### 9-1. Runtime TVP API
+
+`Lib.Db` 런타임은 별도 생성기 패키지 없이 TVP wrapper와 static-shape registry를 제공합니다.
+
+| API | 설명 |
+|---|---|
+| `LibDb.Tvp<T>(string typeName, IEnumerable<T> rows, TvpBindingPolicy policy = Strict)` | 명시 TVP wrapper. 전환 초기와 저빈도 호출에 적합 |
+| `LibDb.Tvp<T>(string typeName, IEnumerable<T> rows, TvpShape<T> shape, TvpBindingPolicy policy = Strict)` | AOT 친화 static shape를 명시적으로 사용하는 wrapper |
+| `LibDb.Tvp<T>(TvpSchemaDescriptor descriptor, IEnumerable<T> rows, TvpBindingPolicy policy = Adaptive)` | DB에서 조회한 descriptor 기반 adaptive wrapper |
+| `options.Tvp.Map<T>(string typeName).Column(...)` | 등록형 fast-path. `EnableAutoTvpBinding = true`이면 같은 row type의 `IEnumerable<T>`를 자동 TVP로 바인딩 |
+| `TvpShape.For<T>().Column(...).Build()` | 호출부에서 재사용할 static shape 생성 |
+
+`TvpOptions.EnableAutoTvpBinding`의 기본값은 `true`입니다. 운영/AOT 경로는 static lambda accessor를 사용해 row shape를 고정하는 것을 권장합니다.
+
+### 9-2. MarsPolicy 열거형
 
 | 값 | 설명 |
 |---|---|
@@ -342,7 +356,7 @@ OpenTelemetry 기반 관측 가능성을 위한 정적 클래스입니다.
 | 상수/필드/메서드 | 타입 | 설명 |
 |---|---|---|
 | `SourceName` | `const string` | `"Lib.Db"` — ActivitySource/Meter 공통 이름 |
-| `Version` | `const string` | `"2.2.1"` — ActivitySource/Meter 버전 |
+| `Version` | `const string` | `Lib.Db.csproj`의 `Version`에서 빌드 시점에 생성되는 ActivitySource/Meter 버전 |
 | `ActivitySource` | `ActivitySource` | 트레이스 데이터 생성 |
 | `Meter` | `Meter` | 메트릭 데이터 생성 |
 | `RecordBytesFreed(long)` | `static void` | 캐시 정리 시 해제된 바이트 누적 기록 |

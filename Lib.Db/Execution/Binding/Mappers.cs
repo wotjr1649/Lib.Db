@@ -1564,7 +1564,7 @@ internal sealed class GeneratedResultMapper<
                 ? sqlMapFunc(sqlReader)
                 : throw new InvalidOperationException(
                     $"'{typeof(T).Name}' generated mapper only exposes Map(SqlDataReader). " +
-                    "Regenerate the [DbResult] mapper so MonitoredSqlDataReader/DbDataReader wrappers can be used.");
+                    "Update the [DbResult] mapper so MonitoredSqlDataReader/DbDataReader wrappers can be used.");
         }
 
         if (RuntimeFeatureSwitch.IsDynamicCodeSupported)

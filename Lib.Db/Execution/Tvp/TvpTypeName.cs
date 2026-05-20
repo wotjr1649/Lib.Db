@@ -49,16 +49,7 @@ public readonly record struct TvpTypeName
         if (string.IsNullOrWhiteSpace(value))
             throw new ArgumentException("Invalid TVP type name.", nameof(value));
 
-        string normalized = value.Trim()
-            .Replace("[", string.Empty, StringComparison.Ordinal)
-            .Replace("]", string.Empty, StringComparison.Ordinal);
-
-        string[] parts = normalized.Split(
-            '.',
-            StringSplitOptions.TrimEntries);
-
-        if (parts.Any(static part => part.Length == 0))
-            throw new ArgumentException("Invalid TVP type name.", nameof(value));
+        string[] parts = SplitNameParts(value.Trim(), nameof(value));
 
         string schema;
         string name;
@@ -68,20 +59,80 @@ public readonly record struct TvpTypeName
             schema = "dbo";
             name = parts[0];
         }
-        else if (parts.Length == 2)
+        else
         {
             schema = parts[0];
             name = parts[1];
-        }
-        else
-        {
-            throw new ArgumentException("Invalid TVP type name.", nameof(value));
         }
 
         if (!IsSafeIdentifier(schema) || !IsSafeIdentifier(name))
             throw new ArgumentException("Invalid TVP type name.", nameof(value));
 
         return new TvpTypeName(schema, name);
+    }
+
+    private static string[] SplitNameParts(string value, string paramName)
+    {
+        List<string> parts = new(2);
+        int index = 0;
+
+        while (index < value.Length)
+        {
+            SkipWhitespace(value, ref index);
+            if (parts.Count == 2)
+                throw new ArgumentException("Invalid TVP type name.", paramName);
+
+            parts.Add(ReadNamePart(value, ref index, paramName));
+            SkipWhitespace(value, ref index);
+
+            if (index >= value.Length)
+                break;
+
+            index++;
+            if (index >= value.Length)
+                throw new ArgumentException("Invalid TVP type name.", paramName);
+        }
+
+        return parts.ToArray();
+    }
+
+    private static string ReadNamePart(string value, ref int index, string paramName)
+    {
+        if (value[index] == '[')
+            return ReadBracketedNamePart(value, ref index, paramName);
+
+        int start = index;
+        while (index < value.Length && value[index] != '.')
+            index++;
+
+        string part = value[start..index].Trim();
+        if (part.Length == 0)
+            throw new ArgumentException("Invalid TVP type name.", paramName);
+
+        return part;
+    }
+
+    private static string ReadBracketedNamePart(string value, ref int index, string paramName)
+    {
+        int start = ++index;
+        int end = value.IndexOf(']', start);
+        if (end < 0 || end == start)
+            throw new ArgumentException("Invalid TVP type name.", paramName);
+
+        string part = value[start..end];
+        index = end + 1;
+        SkipWhitespace(value, ref index);
+
+        if (index < value.Length && value[index] != '.')
+            throw new ArgumentException("Invalid TVP type name.", paramName);
+
+        return part;
+    }
+
+    private static void SkipWhitespace(string value, ref int index)
+    {
+        while (index < value.Length && char.IsWhiteSpace(value[index]))
+            index++;
     }
 
     internal static bool IsSafeIdentifier(string? value)

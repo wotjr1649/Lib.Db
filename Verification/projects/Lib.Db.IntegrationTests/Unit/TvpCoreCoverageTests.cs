@@ -173,6 +173,28 @@ public sealed class TvpCoreCoverageTests
     }
 
     [Fact]
+    public void ColumnarTvpReader_DisposeFalse_ShouldCloseReaderWithoutDisposingColumnBuffers()
+    {
+        TvpColumnShape[] shapes = [TvpColumnShape.Required("Id", typeof(int))];
+        TypedColumnBuffer<int> buffer = Buffer(1);
+        var reader = new ColumnarTvpReader([buffer], rowCount: 1, Ordinals(shapes));
+
+        MethodInfo dispose = typeof(ColumnarTvpReader).GetMethod(
+            "Dispose",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        dispose.Invoke(reader, [false]);
+
+        reader.IsClosed.Should().BeTrue();
+        buffer.Invoking(static column => column.Add(2))
+            .Should()
+            .NotThrow();
+
+        buffer.Dispose();
+        reader.Dispose();
+    }
+
+    [Fact]
     public void ColumnarTvpReader_ShouldRejectMetadataAccessWhenSchemaIsMissing()
     {
         ColumnBuffer[] buffers = [Buffer(1)];
@@ -360,6 +382,43 @@ public sealed class TvpCoreCoverageTests
         reader.Invoking(static r => r.Close())
             .Should()
             .NotThrow();
+    }
+
+    [Fact]
+    public void RuntimeTvpDataReader_DisposeFalse_ShouldNotCloseOrDisposeEnumerator()
+    {
+        var rows = new DisposableEnumerable<RuntimeRow>(
+        [
+            new RuntimeRow(
+                Id: 7,
+                Name: "runtime",
+                ShipDate: new DateOnly(2026, 5, 18),
+                StartsAt: new TimeOnly(10, 11, 12),
+                HalfValue: (Half)3.5f,
+                TraceId: Guid.Parse("7c7ec7cb-574b-4b2f-b73c-8bc2ef0102ff"),
+                Small: 4,
+                Big: 9876543210L,
+                Flag: true,
+                Amount: 42.42m,
+                Ratio: 1.25d,
+                Real: 2.25f,
+                Tiny: 9,
+                Letter: 'Q')
+        ]);
+        TvpColumnShape[] columns = [TvpColumnShape.Required("Id", typeof(int))];
+        using RuntimeTvpDataReader reader = RuntimeTvpDataReader.Create(
+            rows,
+            columns,
+            TvpBindingPolicy.Strict);
+        MethodInfo dispose = typeof(RuntimeTvpDataReader).GetMethod(
+            "Dispose",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        dispose.Invoke(reader, [false]);
+
+        reader.IsClosed.Should().BeFalse();
+        rows.Disposed.Should().BeFalse();
+        reader.Read().Should().BeTrue();
     }
 
     [Fact]
@@ -582,7 +641,7 @@ public sealed class TvpCoreCoverageTests
 
 #if DEBUG
         registerBad.Should().Throw<InvalidOperationException>()
-            .WithMessage("*SG*");
+            .WithMessage("*등록 접근자*");
 #else
         registerBad.Should().NotThrow();
 #endif
@@ -791,6 +850,17 @@ public sealed class TvpCoreCoverageTests
         inferred.GetValue(2).Should().Be(1.25f);
         inferred.GetValue(3).Should().Be(new TimeSpan(6, 7, 8));
 
+        using DbDataReader nullableInferred = TvpRowBinding.CreateReader(
+            LibDb.Tvp<NullableInferredShapeRow>("dbo.T_NullableInferred", new[]
+            {
+                new NullableInferredShapeRow(7, new DateOnly(2026, 5, 19), (Half)2.5f, new TimeOnly(7, 8, 9))
+            }));
+        nullableInferred.Read().Should().BeTrue();
+        nullableInferred.GetInt32(0).Should().Be(7);
+        nullableInferred.GetValue(1).Should().Be(new DateTime(2026, 5, 19));
+        nullableInferred.GetValue(2).Should().Be(2.5f);
+        nullableInferred.GetValue(3).Should().Be(new TimeSpan(7, 8, 9));
+
         using DbDataReader attributed = TvpRowBinding.CreateReader(
             LibDb.Tvp<AttributedInferenceRow>("dbo.T_Attributed", new[]
             {
@@ -913,6 +983,24 @@ public sealed class TvpCoreCoverageTests
     }
 
     [Fact]
+    public void SqlDataRecordTvpEnumerable_ShouldInferNullableColumnDbType()
+    {
+        TvpColumnShape[] columns = [TvpColumnShape.Optional("MaybeId", typeof(int?))];
+        RuntimeTvpRowShape shape = new(
+            typeof(NullableFastPathRow),
+            columns,
+            [row => ((NullableFastPathRow)row).MaybeId],
+            Ordinals(columns),
+            RuntimeTvpDataReader.BuildSchemaTable(columns));
+
+        SqlDataRecord record = new SqlDataRecordTvpEnumerable(
+            new[] { new NullableFastPathRow(7) },
+            shape).Single();
+
+        record.GetInt32(0).Should().Be(7);
+    }
+
+    [Fact]
     public void RuntimeTvpDataReader_ShouldCoverEnumeratorDisposalAdaptivePocoAndShapeProperties()
     {
         var rows = new DisposableEnumerable<AccessorEdgeRow>(
@@ -973,6 +1061,17 @@ public sealed class TvpCoreCoverageTests
         TvpAccessorCache.Clear();
         TvpAccessorCache.Configure(new LibDbOptions { MaxCacheSize = 1000 });
         TvpAccessorCache.Configure((LibDbOptions)FormatterServices.GetUninitializedObject(typeof(LibDbOptions)));
+
+        TvpAccessorCache.Clear();
+        TvpAccessorCache.GetTypedAccessors<DelegateCacheCoverageRow>()
+            .Properties
+            .Should()
+            .ContainSingle(static property => property.Name == nameof(DelegateCacheCoverageRow.Id));
+        TvpAccessorCache.Clear();
+        TvpAccessorCache.GetTypedAccessors<DelegateCacheCoverageRow>()
+            .Properties
+            .Should()
+            .ContainSingle(static property => property.Name == nameof(DelegateCacheCoverageRow.Id));
 
         TvpAccessors<RegistryCoverageRow> classAccessors = TvpAccessorCache.GetTypedAccessors<RegistryCoverageRow>();
         classAccessors.TypedAccessors[0](null!).Should().BeNull();
@@ -1438,13 +1537,19 @@ public sealed class TvpCoreCoverageTests
 
     private sealed record RegistryCoverageRow(int Id, string Name);
 
+    private sealed record DelegateCacheCoverageRow(int Id);
+
     private sealed record RegistryOrderRow(int Id, string Name);
 
     private sealed record RegistryMismatchRow(int Id);
 
     private sealed record StaticShapeRow(int Id);
 
+    private sealed record NullableFastPathRow(int? MaybeId);
+
     private sealed record InferredShapeRow(int Id, DateOnly ShipDate, Half HalfValue, TimeOnly StartsAt);
+
+    private sealed record NullableInferredShapeRow(int? Id, DateOnly? ShipDate, Half? HalfValue, TimeOnly? StartsAt);
 
     private sealed record AttributedInferenceRow(
         [property: DbParameter(Size = 24)] string Name,

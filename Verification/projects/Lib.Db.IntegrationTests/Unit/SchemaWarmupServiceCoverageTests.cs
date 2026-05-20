@@ -33,6 +33,24 @@ public sealed class SchemaWarmupServiceCoverageTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldSkipWhenSchemaCachingIsDisabled()
+    {
+        Mock<ISchemaService> schema = new();
+        SchemaWarmupService service = CreateService(schema.Object, new LibDbOptions
+        {
+            EnableSchemaCaching = false,
+            ConnectionStringNames = ["Primary"],
+            PrewarmSchemas = ["dbo"]
+        });
+
+        await ExecuteAsync(service, TestContext.Current.CancellationToken);
+
+        schema.Verify(
+            x => x.PreloadSchemaAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldSkipWhenPrewarmSchemasAreEmpty()
     {
         Mock<ISchemaService> schema = new();
@@ -121,6 +139,18 @@ public sealed class SchemaWarmupServiceCoverageTests
     {
         var logger = new EnabledLogger<SchemaWarmupService>();
 
+        await ExecuteAsync(
+            CreateService(
+                new Mock<ISchemaService>().Object,
+                new LibDbOptions
+                {
+                    EnableSchemaCaching = false,
+                    ConnectionStringNames = ["Primary"],
+                    PrewarmSchemas = ["dbo"]
+                },
+                logger),
+            TestContext.Current.CancellationToken);
+
         LibDbOptions noConnectionNames = new()
         {
             PrewarmSchemas = ["dbo"]
@@ -153,7 +183,7 @@ public sealed class SchemaWarmupServiceCoverageTests
                 logger),
             TestContext.Current.CancellationToken);
 
-        logger.InformationCount.Should().Be(3);
+        logger.InformationCount.Should().Be(4);
     }
 
     [Fact]

@@ -277,10 +277,10 @@ public sealed class LibDbOptions
     public TvpValidationMode TvpValidationMode { get; set; } = TvpValidationMode.Strict;
 
     /// <summary>
-    /// Source Generator 기반의 Fast TVP Binder 사용 여부 (기본값: true)
+    /// 등록된 Fast TVP Binder 사용 여부 (기본값: true)
     /// <para>
-    /// <c>true</c>: SG가 등록한 <c>TvpFactoryRegistry</c>를 통해 Reflection 없이 TVP를 바인딩합니다.<br/>
-    /// <c>false</c>: 기존 Reflection 기반 바인딩을 강제합니다. (SG 문제 발생 시 폴백용)
+    /// <c>true</c>: <c>TvpFactoryRegistry</c>에 명시 등록된 팩토리를 통해 Reflection 없이 TVP를 바인딩합니다.<br/>
+    /// <c>false</c>: 런타임 Reflection 기반 바인딩을 강제합니다. 등록 팩토리 호환성 문제가 있을 때만 사용하세요.
     /// </para>
     /// </summary>
     public bool EnableGeneratedTvpBinder { get; set; } = true;
@@ -416,8 +416,8 @@ public sealed class LibDbOptions
     /// <b>[중요]</b> EnableResilience가 true일 때만 사용됩니다.
     /// </para>
     /// <para>
-    /// <b>[v2.0 Breaking Change]</b><br/>
-    /// 기존 루트 레벨 속성이 제거되었습니다. 아래 경로로 변경하세요:<br/>
+    /// <b>[마이그레이션]</b><br/>
+    /// 기존 루트 레벨 회복 탄력성 속성은 아래 경로로 이동되었습니다:<br/>
     /// - CircuitBreakerFailureRatio → Resilience.CircuitBreakerFailureRatio<br/>
     /// - CircuitBreakerDurationSeconds → Resilience.CircuitBreakerBreakDurationMs (단위 변경: 초 → ms)<br/>
     /// - RetryMaxAttempts → Resilience.MaxRetryCount
@@ -696,7 +696,7 @@ public sealed class LibDbOptions
     /// <summary>
     /// 관측 가능성(Logging, Metrics, Tracing) 기능 활성화 여부 (기본값: false)
     /// <para>
-    /// <b>[설계 의도]</b> v2.2에서 <c>EnableOpenTelemetry</c>와 통합된 단일 마스터 스위치입니다.
+    /// <b>[설계 의도]</b> <c>EnableOpenTelemetry</c>를 대체하는 단일 마스터 스위치입니다.
     /// <c>true</c> 설정 시 ActivitySource("Lib.Db")와 Meter("Lib.Db")를 통해 텔레메트리 데이터를 생성합니다.
     /// 비활성 시 오버헤드는 0에 가깝습니다 (분기 1회).
     /// </para>

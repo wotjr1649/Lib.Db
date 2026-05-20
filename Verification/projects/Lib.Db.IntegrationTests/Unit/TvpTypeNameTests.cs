@@ -14,6 +14,8 @@ public sealed class TvpTypeNameTests
     [InlineData("dbo.T_OrderItem", "dbo", "T_OrderItem")]
     [InlineData("[dbo].[T_OrderItem]", "dbo", "T_OrderItem")]
     [InlineData("T_OrderItem", "dbo", "T_OrderItem")]
+    [InlineData("[T_OrderItem]", "dbo", "T_OrderItem")]
+    [InlineData(" [dbo] . [T_OrderItem] ", "dbo", "T_OrderItem")]
     public void Parse_ShouldAcceptSafeTypeNames(string input, string expectedSchema, string expectedName)
     {
         TvpTypeName parsed = TvpTypeName.Parse(input);
@@ -26,12 +28,19 @@ public sealed class TvpTypeNameTests
     [Theory]
     [InlineData("")]
     [InlineData("dbo.")]
+    [InlineData("dbo.   ")]
     [InlineData("dbo.T;DROP TABLE X")]
     [InlineData("dbo.T_OrderItem --")]
     [InlineData("db.other.dbo.T")]
     [InlineData("dbo.T Order")]
     [InlineData("dbo.#TempLikeType")]
     [InlineData("dbo.@VariableLikeType")]
+    [InlineData("d[bo].T_OrderItem")]
+    [InlineData("[dbo.T_OrderItem")]
+    [InlineData("dbo].[T_OrderItem")]
+    [InlineData("[dbo]..[T_OrderItem]")]
+    [InlineData("dbo [T_OrderItem]")]
+    [InlineData("[dbo]x.[T_OrderItem]")]
     public void Parse_ShouldRejectUnsafeTypeNames(string input)
     {
         Action act = () => TvpTypeName.Parse(input);

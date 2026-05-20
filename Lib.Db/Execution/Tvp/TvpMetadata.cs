@@ -3,7 +3,7 @@
 // Role: TVP 접근자(Accessor)의 런타임 관리, 캐싱, 레지스트리
 // Env : .NET 10 / C# 14
 // Notes:
-//   - TvpAccessorRegistry: Source Generator 접근자 등록소
+//   - TvpAccessorRegistry: 등록된 fast-path 접근자 저장소
 //   - TvpAccessorCache: 런타임 리플렉션(Fallback) 및 캐시 관리
 // ============================================================================
 
@@ -22,10 +22,10 @@ namespace Lib.Db.Execution.Tvp;
 #region TVP 접근자 레지스트리
 
 /// <summary>
-/// Source Generator가 생성한 TVP 접근자를 등록하고 조회하는 중앙 레지스트리입니다.
+/// 등록된 TVP fast-path 접근자를 저장하고 조회하는 중앙 레지스트리입니다.
 /// <para>
 /// <b>[설계의도 (Design Rationale)]</b><br/>
-/// - 컴파일 타임에 생성된 고성능 접근자(Zero-Reflection)를 런타임에 주입받아 사용합니다.<br/>
+/// - 애플리케이션이 등록한 고성능 접근자(Zero-Reflection)를 런타임에 주입받아 사용합니다.<br/>
 /// - DEBUG 모드에서는 런타임 생성 결과(Fallback)와 비교하여 정합성을 검증합니다.
 /// </para>
 /// </summary>
@@ -35,14 +35,14 @@ public static class TvpAccessorRegistry
     private static readonly ConcurrentDictionary<Type, object> s_registry = new();
 
     /// <summary>
-    /// 생성된 TVP 접근자를 레지스트리에 등록합니다. (ModuleInitializer 등에서 호출)
+    /// TVP fast-path 접근자를 레지스트리에 등록합니다. (명시 등록 또는 호환 경로에서 호출)
     /// </summary>
     public static void Register<T>(TvpAccessors<T> accessors)
     {
         s_registry[typeof(T)] = accessors;
 
 #if DEBUG
-        // [개발 전용] Source Generator와 Fallback(Reflection) 간의 정렬/구성 일치성 검증
+        // [개발 전용] 등록 접근자와 Fallback(Reflection) 간의 정렬/구성 일치성 검증
         ValidateAgainstFallback(accessors);
 #endif
     }
@@ -64,39 +64,39 @@ public static class TvpAccessorRegistry
 
 #if DEBUG
     /// <summary>
-    /// [개발 전용] Source Generator 결과물과 런타임 리플렉션 결과물의 프로퍼티 순서/구성이 일치하는지 검증합니다.
+    /// [개발 전용] 등록 접근자와 런타임 리플렉션 결과물의 프로퍼티 순서/구성이 일치하는지 검증합니다.
     /// </summary>
-    private static void ValidateAgainstFallback<T>(TvpAccessors<T> sgAccessors)
+    private static void ValidateAgainstFallback<T>(TvpAccessors<T> registeredAccessors)
     {
         TvpAccessors<T> fallbackAccessors = TvpAccessorCache.CompileAccessors<T>();
 
         // 1. 프로퍼티 개수 검증
-        if (sgAccessors.Properties.Length != fallbackAccessors.Properties.Length)
+        if (registeredAccessors.Properties.Length != fallbackAccessors.Properties.Length)
         {
             throw new InvalidOperationException(
                 $"[TVP 무결성 실패] {typeof(T).Name}: " +
-                $"SG 프로퍼티 수({sgAccessors.Properties.Length}) != " +
+                $"등록 접근자 프로퍼티 수({registeredAccessors.Properties.Length}) != " +
                 $"Fallback 프로퍼티 수({fallbackAccessors.Properties.Length})");
         }
 
         // 2. 프로퍼티 이름 및 순서 검증
-        for (int i = 0; i < sgAccessors.Properties.Length; i++)
+        for (int i = 0; i < registeredAccessors.Properties.Length; i++)
         {
-            PropertyInfo sgProp = sgAccessors.Properties[i];
+            PropertyInfo registeredProp = registeredAccessors.Properties[i];
             PropertyInfo fbProp = fallbackAccessors.Properties[i];
 
-            if (sgProp.Name != fbProp.Name)
+            if (registeredProp.Name != fbProp.Name)
             {
                 System.Text.StringBuilder sb = new System.Text.StringBuilder();
                 sb.AppendLine($"[TVP 무결성 실패] {typeof(T).Name}");
                 sb.AppendLine($"인덱스 [{i}]에서 프로퍼티 불일치 발생");
-                sb.AppendLine($" - SG (SourceGen) : {sgProp.Name}");
+                sb.AppendLine($" - Registered : {registeredProp.Name}");
                 sb.AppendLine($" - FB (Reflection): {fbProp.Name}");
                 sb.AppendLine();
                 sb.AppendLine("== 전체 정렬 비교 ==");
-                for (int j = 0; j < sgAccessors.Properties.Length; j++)
+                for (int j = 0; j < registeredAccessors.Properties.Length; j++)
                 {
-                    sb.AppendLine($"[{j}] SG: {sgAccessors.Properties[j].Name.PadRight(20)} | FB: {fallbackAccessors.Properties[j].Name}");
+                    sb.AppendLine($"[{j}] Registered: {registeredAccessors.Properties[j].Name.PadRight(20)} | FB: {fallbackAccessors.Properties[j].Name}");
                 }
 
                 throw new InvalidOperationException(sb.ToString());
@@ -114,7 +114,7 @@ public static class TvpAccessorRegistry
 /// 런타임 리플렉션을 사용하여 TVP 접근자를 생성하고 캐싱하는 관리자입니다.
 /// <para>
 /// <b>[설계의도 (Design Rationale)]</b><br/>
-/// 1. Source Generator가 없는 환경(JIT)에서의 Fallback 처리<br/>
+/// 1. 등록 fast-path가 없는 환경에서의 런타임 Fallback 처리<br/>
 /// 2. Bounded Cache(제한된 크기)를 통한 메모리 관리<br/>
 /// 3. PropertyInfo 정렬 규칙(MetadataToken 기반)의 기준점 제공
 /// </para>
@@ -141,7 +141,7 @@ public static class TvpAccessorCache
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static TvpAccessors<T> GetTypedAccessors<T>()
     {
-        // 1. Registry 확인 (Source Generator로 등록된 것이 있으면 최우선 사용)
+        // 1. Registry 확인 (등록 fast-path가 있으면 최우선 사용)
         if (TvpAccessorRegistry.TryGet<T>(out TvpAccessors<T>? gen))
             return gen!;
 
@@ -282,7 +282,7 @@ public static class TvpAccessorCache
     /// <summary>
     /// PropertyInfo 목록을 안정적으로 정렬하기 위한 Comparer입니다.
     /// <para>
-    /// ✅ Source Generator (StableSymbolPropertyComparer)와 동일한 알파벳 순서 정렬을 사용합니다.
+    /// ✅ 등록 fast-path 접근자와 동일한 알파벳 순서 정렬을 사용합니다.
     /// ✅ 이를 통해 DEBUG 모드의 ValidateAgainstFallback 검증을 통과합니다.
     /// </para>
     /// </summary>
@@ -290,7 +290,7 @@ public static class TvpAccessorCache
     /// [Change Log 2025-12-19]
     /// - Before: MetadataToken-based complex sort (Inheritance depth → Type Token → Property Token → Name)
     /// - After: StringComparer.Ordinal simple alphabetical sort
-    /// - Reason: Must match Source Generator (TvpAccessorGenerator.StableSymbolPropertyComparer)
+    /// - Reason: Must match registered fast-path accessor ordering
     /// </remarks>
     private sealed class StableRuntimePropertyComparer : IComparer<PropertyInfo>
     {
@@ -298,7 +298,7 @@ public static class TvpAccessorCache
 
         public int Compare(PropertyInfo? a, PropertyInfo? b)
         {
-            // Source Generator와 동일한 알파벳 순서 정렬
+            // 등록 fast-path와 동일한 알파벳 순서 정렬
             return StringComparer.Ordinal.Compare(a?.Name, b?.Name);
         }
     }

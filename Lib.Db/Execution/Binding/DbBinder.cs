@@ -34,7 +34,7 @@ namespace Lib.Db.Execution.Binding;
 /// <para><strong>📊 설계 의도 (Intent)</strong></para>
 /// <list type="bullet">
 /// <item><strong>단일 진입점 패턴</strong>: SP/Raw SQL/TVP/BulkCopy 모든 파라미터 바인딩 로직을 DbBinder로 통합</item>
-/// <item><strong>AOT 호환성</strong>: Source Generator 기반 TvpAccessor로 Reflection 제거</item>
+/// <item><strong>AOT 호환성</strong>: 등록된 static shape/fast-path 접근자로 Reflection 제거</item>
 /// <item><strong>사전 검증</strong>: Decimal/정수/DateTime 범위를 DB 전송 전에 검증하여 런타임 오류 방지</item>
 /// <item><strong>스마트 TVP 감지</strong>: IEnumerable&lt;T&gt;를 자동 인식하여 JSON 직렬화 오류 방지</item>
 /// </list>
@@ -92,7 +92,7 @@ namespace Lib.Db.Execution.Binding;
 /// 
 /// <para><strong>📈 TVP(Table-Valued Parameter) 처리</strong></para>
 /// <list type="number">
-/// <item><strong>TvpAccessorCache</strong>: Source Generator가 생성한 Accessor 캐싱 (Reflection 제거)</item>
+/// <item><strong>TvpAccessorCache</strong>: 등록된 fast-path 접근자와 런타임 fallback 접근자 캐싱</item>
 /// <item><strong>Columnar Buffer</strong>: 각 프로퍼티별로 값을 별도 배열에 저장</item>
 /// <item><strong>JSON 자동 직렬화</strong>: 복합 객체 감지 시 NVarChar로 변환</item>
 /// <item><strong>스키마 검증</strong>: ValidatorCallback으로 DTO 타입과 TVP 타입명 일치 확인</item>
@@ -805,8 +805,8 @@ public static partial class DbBinder
         Justification = "The annotated branch is reached only after explicit and registered static-shape TVP fast paths have failed.")]
     private static bool IsTvpCollection(object value, [NotNullWhen(true)] out object? parameterValue, out string? sqlTypeName)
     {
-        // 0. [AOT/Fast Path] Check Source Generator Registry
-        //    SG가 생성한 ModuleInitializer에 의해 등록된 Factory가 있다면 Reflection 없이 즉시 변환
+        // 0. [AOT/Fast Path] Check registered runtime TVP factory.
+        //    A statically registered factory can convert the collection without reflection.
         if (Tvp.s_enableGeneratedBinder)
         {
             try
@@ -819,7 +819,7 @@ public static partial class DbBinder
             }
             catch
             {
-                // SG 경로 실패 시 Reflection Fallback으로 조용히 전환
+                // 등록 fast-path 실패 시 Reflection fallback으로 조용히 전환
                 // (일시적 오류나 타입 불일치 등)
             }
         }
@@ -920,7 +920,7 @@ public static partial class DbBinder
         /// <summary>외부에서 주입되는 TVP 스키마 검증 콜백입니다.</summary>
         internal static Func<Type, string, bool>? ValidatorCallback { get; set; }
 
-        /// <summary>Source Generator 기반 TVP 바인딩 사용 여부입니다.</summary>
+        /// <summary>등록된 TVP fast-path 바인딩 사용 여부입니다.</summary>
         internal static bool s_enableGeneratedBinder = true;
 
         /// <summary>런타임 TVP fast-path 옵션입니다.</summary>
@@ -1144,11 +1144,11 @@ public static partial class DbBinder
                 long totalBytesSampled = 0;
                 int rowCount = 0;
 
-                // [최적화] Source Generator가 생성한 고속 Adder가 있으면 사용 (Zero-Boxing)
+                // [최적화] 등록된 고속 Adder가 있으면 사용 (Zero-Boxing)
                 if (bufferAdder != null)
                 {
                     // object[]로 캐스팅하여 전달 (인터페이스 변환 비용 최소화)
-                    // SG 내부에서 ((ITvpColumn<T>)columns[i]).Add() 호출
+                    // fast-path 내부에서 ((ITvpColumn<T>)columns[i]).Add() 호출
                     object[] colRefs = columns;
 
                     foreach (T? item in items)
@@ -1157,7 +1157,7 @@ public static partial class DbBinder
                         bufferAdder(item, colRefs);
 
                         // [메트릭] 고속 경로에서도 샘플링은 필요하지만,
-                        // SG 최적화 모드에서는 편의상 첫 번째 컬럼(보통 PK)이나 단순 카운트 기반으로 추정 가능.
+                        // fast-path 최적화 모드에서는 편의상 첫 번째 컬럼(보통 PK)이나 단순 카운트 기반으로 추정 가능.
                         // 여기서는 정확한 바이트 계산이 어려우므로(Getter를 안 부르니까), 
                         // 평균적인 Row 크기(예: 64바이트)로 간단히 추산하거나, 
                         // 정확도를 위해 별도 로직을 탈 수 있음. 
@@ -1256,8 +1256,8 @@ public static partial class DbBinder
             if (value is string)
                 return value;
 
-            // [AOT Safe] Source Generator 기반 직렬화 권장 (여기서는 동적 Reflection 사용 - 개선 필요)
-            // v2.0: AotHybridCacheSerializer 사용 고려
+            // [AOT Safe] System.Text.Json source-generation 기반 직렬화 권장
+            // 런타임 fallback에서는 공용 JsonSerializerOptions를 사용합니다.
             return JsonSerializer.Serialize(value, S_JsonOptions);
         }
 

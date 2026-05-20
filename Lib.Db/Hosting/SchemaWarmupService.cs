@@ -47,6 +47,12 @@ public sealed class SchemaWarmupService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // 1. 워밍업 대상이 없으면 바로 Skip
+        if (!_options.EnableSchemaCaching)
+        {
+            _logger.LogFastInfo($"[SchemaWarmup] EnableSchemaCaching 이 false 이므로 워밍업을 건너뜁니다.");
+            return;
+        }
+
         if (_options.ConnectionStringNames is not { Count: > 0 })
         {
             _logger.LogFastInfo($"[SchemaWarmup] ConnectionStringNames 가 비어 있어 워밍업을 건너뜁니다.");

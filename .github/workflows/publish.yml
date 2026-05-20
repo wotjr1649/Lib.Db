@@ -100,7 +100,7 @@ jobs:
 
     - name: Run v2.3.0 release gate
       shell: pwsh
-      run: pwsh -NoProfile -File ./Tools/verification/Invoke-LibDbV230Verification.ps1 -BenchmarkJob Dry
+      run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
 
     # 2) Pack 시 태그 버전을 강제 주입
     - name: Pack (tag version)

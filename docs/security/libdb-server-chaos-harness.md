@@ -7,10 +7,10 @@ The default verification path must stay database-scoped. Server-level chaos is o
 - Target database: `LIBDB_CHAOS_TEST`
 - Server observer: Extended Events session `libdb_chaos_observer`
 - SQL files:
-  - `Tests/Lib.Db.IntegrationTests/sql/setup-libdb-chaos-server-optin.sql`
-  - `Tests/Lib.Db.IntegrationTests/sql/verify-libdb-chaos-server-optin.sql`
-  - `Tests/Lib.Db.IntegrationTests/sql/teardown-libdb-chaos-server-optin.sql`
-- Harness project: `Tools/Lib.Db.ChaosHarness`
+  - `Verification/databases/LIBDB_CHAOS_TEST/server-optin/setup-libdb-chaos-server-optin.sql`
+  - `Verification/databases/LIBDB_CHAOS_TEST/server-optin/verify-libdb-chaos-server-optin.sql`
+  - `Verification/databases/LIBDB_CHAOS_TEST/server-optin/teardown-libdb-chaos-server-optin.sql`
+- Harness project: `Verification/projects/Lib.Db.ChaosHarness`
 
 ## Safety Gates
 
@@ -30,19 +30,19 @@ The default verification path must stay database-scoped. Server-level chaos is o
 
 ## Harness Flow
 
-Set either `LIBDB_CHAOS_CONNECTION`, or set `LIBDB_CHAOS_PASSWORD` and pass optional `--server` and `--user`.
+Set either `LIBDB_CHAOS_CONNECTION`, or set `LIBDB_CHAOS_PASSWORD` and pass optional `--server` and `--user`. Direct Harness commands accept explicit connection input, so keep the target to a local disposable SQL Server instance only; do not point the Harness at shared, staging, production, or customer servers.
 
 ```powershell
-dotnet run --project Tools/Lib.Db.ChaosHarness -- setup --enable-server-chaos
-dotnet run --project Tools/Lib.Db.ChaosHarness -- run --enable-server-chaos
-dotnet run --project Tools/Lib.Db.ChaosHarness -- verify --enable-server-chaos
-dotnet run --project Tools/Lib.Db.ChaosHarness -- teardown --enable-server-chaos
+dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- setup --enable-server-chaos
+dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- run --enable-server-chaos
+dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- verify --enable-server-chaos
+dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- teardown --enable-server-chaos
 ```
 
 To include the destructive session termination probe:
 
 ```powershell
-dotnet run --project Tools/Lib.Db.ChaosHarness -- run --enable-server-chaos --allow-kill
+dotnet run --project Verification/projects/Lib.Db.ChaosHarness -- run --enable-server-chaos --allow-kill
 ```
 
 The Harness does not print connection strings or passwords.

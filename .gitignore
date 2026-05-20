@@ -31,3 +31,11 @@ Thumbs.db
 *.mmf
 # 임시 파일
 .gemini/
+
+# Legacy roots superseded by Verification/ and runtime TVP
+/Lib.Db.TvpGen/
+/Benchmarks/
+/Tests/
+
+# Local verification secrets
+Verification/scripts/Set-LibDbVerificationEnvironment.local.ps1

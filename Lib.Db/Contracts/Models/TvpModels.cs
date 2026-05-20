@@ -144,7 +144,7 @@ public record TvpAccessors
     /// <summary>
     /// [AOT 지원] 프로퍼티 정보를 기반으로 TVP용 스키마 테이블(DataTable)을 생성합니다.
     /// <para>
-    /// Source Generator가 생성한 코드나 내부 캐시가 공통으로 사용할 수 있는 표준 빌더입니다.
+    /// Runtime TVP reflection fallback과 legacy generated 코드가 공통으로 사용할 수 있는 표준 빌더입니다.
     /// </para>
     /// <para>
     /// 생성되는 DataTable은 <c>SchemaTableColumn</c> 규격 컬럼을 포함하며,
@@ -296,13 +296,13 @@ public record TvpAccessors
 }
 
 
-#region 버퍼 주입 (AOT/SG 최적화)
+#region 버퍼 주입 (legacy AOT/SG 확장 슬롯)
 
 /// <summary>
-/// [AOT/SG 성능 최적화] TVP 컬럼 버퍼에 데이터를 Boxing 없이 직접 주입하기 위한 인터페이스입니다.
+/// legacy generated TVP 컬럼 버퍼에 데이터를 Boxing 없이 직접 주입하기 위한 인터페이스입니다.
 /// <para>
-/// Source Generator가 컬럼별 버퍼(예: <see cref="ITvpColumn{TValue}"/>)를 생성하고,
-/// 런타임에서는 이를 통해 고속으로 값을 누적(Add)할 수 있습니다.
+/// v2.3 신규 Runtime TVP 경로는 <c>LibDb.Tvp(...)</c>, <c>options.Tvp.Map&lt;T&gt;()</c>,
+/// <c>TvpShape.For&lt;T&gt;()</c>를 사용합니다. 이 인터페이스는 과거 generated accessor 호환 슬롯입니다.
 /// </para>
 /// </summary>
 /// <typeparam name="TValue">컬럼 값 타입</typeparam>
@@ -324,11 +324,11 @@ public interface ITvpColumn<in TValue>
 /// <para>
 /// <b>[설계 의도]</b><br/>
 /// - <b>Type Safety</b>: 제네릭 T를 인지하여 Boxing/Unboxing 없는 최적화된 접근 경로를 제공합니다.<br/>
-/// - <b>AOT 확장</b>: Source Generator가 생성하는 정적 검증기(<c>StaticValidator</c>)와 고속 버퍼 주입기(<c>BufferAdder</c>)를 담을 수 있는 슬롯을 제공합니다.
+/// - <b>AOT 확장</b>: Runtime TVP static shape와 legacy generated 검증기(<c>StaticValidator</c>), 고속 버퍼 주입기(<c>BufferAdder</c>)를 담을 수 있는 슬롯을 제공합니다.
 /// </para>
 /// <para>
 /// <see cref="TvpAccessors"/>의 비제네릭 메타데이터를 그대로 상속하면서,
-/// 제네릭 T 기반의 TypedAccessors 및 AOT/Source Generator 최적화 요소를 추가 제공합니다.
+/// 제네릭 T 기반의 TypedAccessors 및 Runtime TVP/legacy generated 최적화 요소를 추가 제공합니다.
 /// </para>
 /// </summary>
 /// <typeparam name="T">TVP 행(DTO) 타입</typeparam>
@@ -345,7 +345,7 @@ public sealed record TvpAccessors<T> : TvpAccessors
     public required Func<T, object?>[] TypedAccessors { get; init; }
 
     /// <summary>
-    /// [AOT 지원] Source Generator가 생성한 정적 검증기입니다. (선택)
+    /// [AOT 지원] legacy generated 정적 검증기입니다. (선택)
     /// <para>
     /// 런타임 리플렉션 검증 대신, 컴파일 타임에 생성된 검증 로직을 사용할 수 있습니다.
     /// </para>
@@ -353,7 +353,7 @@ public sealed record TvpAccessors<T> : TvpAccessors
     public ITvpStaticValidator<T>? StaticValidator { get; init; }
 
     /// <summary>
-    /// [AOT/SG 성능 최적화] 컬럼 버퍼에 값을 직접 주입하는 고속 델리게이트입니다. (선택)
+    /// legacy generated 컬럼 버퍼에 값을 직접 주입하는 고속 델리게이트입니다. (선택)
     /// <para>
     /// 시그니처: <c>(T item, object[] buffers)</c><br/>
     /// 내부적으로 <c>buffers</c> 배열의 각 원소를 <see cref="ITvpColumn{TValue}"/>로 캐스팅하여
@@ -385,9 +385,10 @@ public sealed class TvpLengthAttribute(int length) : Attribute
 }
 
 /// <summary>
-/// Source Generator가 TVP 접근자 코드를 생성할 대상 DTO에 부여하는 마커 특성입니다.
+/// v2.2 TVP generated accessor 호환을 위해 남아 있는 row 마커 특성입니다.
 /// <para>
-/// 이 특성이 붙은 타입을 기준으로 TVP 접근자/검증기/버퍼 주입기 등의 코드를 생성할 수 있습니다.
+/// v2.3 신규 코드는 이 특성을 요구하지 않습니다. TVP 입력은 <c>LibDb.Tvp(...)</c>,
+/// <c>options.Tvp.Map&lt;T&gt;()</c>, <c>TvpShape.For&lt;T&gt;()</c>를 우선 사용하세요.
 /// </para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = false, AllowMultiple = false)]

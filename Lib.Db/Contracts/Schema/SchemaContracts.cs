@@ -233,7 +233,7 @@ public interface ITvpSchemaValidator
     /// </summary>
     /// <typeparam name="T">TVP 행(Row) 모델 타입</typeparam>
     /// <param name="tvpTypeName">DB에 정의된 TVP 타입 이름</param>
-    /// <param name="accessors">소스 제너레이터 또는 캐시에서 제공되는 고속 접근자</param>
+    /// <param name="accessors">등록 fast-path 또는 캐시에서 제공되는 고속 접근자</param>
     /// <param name="instanceHash">DB 인스턴스 해시</param>
     /// <param name="ct">취소 토큰</param>
     Task ValidateAsync<T>(
@@ -244,10 +244,10 @@ public interface ITvpSchemaValidator
 }
 
 /// <summary>
-/// Source Generator가 생성하는 정적 TVP 검증기 계약입니다.
+/// 등록된 static-shape TVP 검증기 계약입니다.
 /// <para>
 /// <b>[설계 의도]</b><br/>
-/// - <b>AOT 최적화</b>: 런타임 리플렉션 없이 컴파일 타임에 생성된 검증 로직을 사용하여 속도와 안전성을 모두 확보합니다.
+/// - <b>AOT 최적화</b>: 런타임 리플렉션 없이 명시적으로 등록된 검증 로직을 사용하여 속도와 안전성을 모두 확보합니다.
 /// </para>
 /// <para>
 /// 런타임 리플렉션 없이, 컴파일 타임에 확정된 규칙으로 구조를 검증합니다.
