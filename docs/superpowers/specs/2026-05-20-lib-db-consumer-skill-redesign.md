@@ -13,6 +13,7 @@ The skill must not behave like an internal repository development, release, veri
 - Do not keep a `tests/` folder inside the skill package.
 - Do not keep `references/verification.md`.
 - Do not pin the skill to any release version or mention release-version strings inside the skill package.
+- Do not use broad path-scoped skill frontmatter such as `**/*.cs`, `**/*.json`, or `**/*.md`; discovery should rely on the Lib.Db-specific description.
 
 ## Target Skill Identity
 
@@ -60,6 +61,7 @@ Required content:
 
 - frontmatter with `name: lib-db`
 - a version-neutral `description`
+- no broad `paths` frontmatter
 - a purpose section explaining that this is a consumer-facing skill for using the Lib.Db NuGet package
 - a reference map to the five retained reference files
 - non-negotiable safety rules
@@ -187,6 +189,7 @@ The skill package must not contain:
 - `.claude/skills/lib-db/references/verification.md` is deleted.
 - `.claude/skills/lib-db/tests/` is deleted.
 - The skill package contains no release-version strings.
+- The skill frontmatter does not broadly match unrelated C#, JSON, Markdown, or project files.
 - The remaining reference files explain public package usage without requiring repository internals.
 - Security guidance is preserved or strengthened.
 - Examples are production-safe by default.

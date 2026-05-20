@@ -28,6 +28,7 @@ The final skill package must not contain:
 - release version strings matching `v?\d+\.\d+\.\d+`
 - repository-internal verification, release, benchmark, coverage, chaos, or AOT workflow guidance
 - repository project files, manifests, test projects, or README files as required sources of truth
+- broad path-scoped skill frontmatter such as `**/*.cs`, `**/*.json`, or `**/*.md`
 
 ## File Responsibilities
 
@@ -89,7 +90,7 @@ False
 
 Use this content:
 
-```markdown
+````markdown
 ---
 name: lib-db
 description: Use when using the Lib.Db NuGet package in application code, especially for dependency injection, SQL Server connection security, stored procedure execution, raw SQL policy, result mapping, DbResult handling, TVP rows, source-generated mappers, or production-safe examples.
@@ -97,12 +98,6 @@ allowed-tools:
   - Read
   - Grep
   - Glob
-paths:
-  - "**/*.cs"
-  - "**/*.csproj"
-  - "**/*.md"
-  - "**/*.json"
-  - "**/*.config"
 ---
 
 # Lib.Db Skill
@@ -113,7 +108,7 @@ Use this skill for application code that consumes the Lib.Db NuGet package.
 
 Lib.Db is a SQL Server focused data access library with fluent execution APIs, `DbResult<T>`, TVP/source generation, result mapping, diagnostics, and security-oriented execution guardrails.
 
-This skill is not a Lib.Db repository development, release, verification, or test workflow. Assume the user has the Lib.Db package, application code, and this skill package. Do not require access to Lib.Db source repository internals.
+This skill is for Lib.Db package consumption, not package-source maintenance. Assume the user has the Lib.Db package, application code, and this skill package. Do not require access to Lib.Db source repository internals.
 
 Keep this file as the entry point. Load only the reference file needed for the current task.
 
@@ -121,7 +116,7 @@ Keep this file as the entry point. Load only the reference file needed for the c
 
 1. Identify the application task: dependency injection, connection security, stored procedures, raw SQL policy, result mapping, TVP/source generation, examples, or documentation.
 2. Read the relevant reference file from this skill before proposing or editing code.
-3. Follow user and repository instructions for secrets, SQL execution, encoding, and verification.
+3. Follow user and repository instructions for secrets, SQL execution, encoding, and local checks.
 4. Keep changes scoped to application usage of Lib.Db public APIs.
 
 ## Reference Map
@@ -179,7 +174,7 @@ Keep this file as the entry point. Load only the reference file needed for the c
 
 1. Keep examples production-safe by default.
 2. Avoid full connection string values.
-3. Avoid repository-internal paths, verification commands, release gates, or test project commands.
+3. Avoid repository-internal paths, package-source maintenance commands, release checks, or package-source project commands.
 4. Cross-link to the relevant reference file instead of duplicating long guidance.
 
 ## Completion Criteria
@@ -190,14 +185,14 @@ Keep this file as the entry point. Load only the reference file needed for the c
 - Raw SQL is either avoided or explicitly intentional and covered by policy guidance.
 - Result mapping and TVP usage preserve the public contracts described above.
 - Any proof gap is stated plainly without inventing repository-internal verification steps.
-```
+````
 
 - [ ] **Step 2: Check that `SKILL.md` no longer references deleted files**
 
 Run:
 
 ```powershell
-Select-String -Path .claude/skills/lib-db/SKILL.md -Pattern 'verification|tests/'
+Select-String -Path .claude/skills/lib-db/SKILL.md -Pattern 'references/verification.md|tests/'
 ```
 
 Expected: no matches.
@@ -212,7 +207,7 @@ Expected: no matches.
 
 Use this content:
 
-```markdown
+````markdown
 # Security Guardrails
 
 Use this file when Lib.Db application code touches SQL Server connection security, raw SQL policy, credentials, logging, or production examples.
@@ -299,7 +294,7 @@ Application code may call stored procedures or execute configured Lib.Db command
 - Are writes and permission-boundary operations routed through stored procedures where practical?
 - Is raw SQL intentional and covered by an explicit raw SQL policy?
 - Does the text avoid claiming that application policy alone is a complete security boundary?
-```
+````
 
 ## Task 4: Rewrite Runtime API Reference For Public Package Usage
 
@@ -311,14 +306,14 @@ Application code may call stored procedures or execute configured Lib.Db command
 
 Use this content:
 
-```markdown
+````markdown
 # Runtime API Reference
 
 Use this file when application code consumes Lib.Db runtime APIs: dependency injection, fluent execution, options, transactions, resilience, observability, or caching.
 
 ## Package Boundary
 
-Treat Lib.Db as a NuGet dependency. Use public APIs from application code and avoid relying on internal repository structure, internal test projects, or release tooling.
+Treat Lib.Db as a NuGet dependency. Use public APIs from application code and avoid relying on package-source-only structure or maintenance tooling.
 
 ## Dependency Injection
 
@@ -333,8 +328,12 @@ builder.Services.AddLibDb(builder.Configuration);
 When custom options are needed, keep them explicit and production-safe:
 
 ```csharp
-builder.Services.AddLibDb(builder.Configuration, options =>
+builder.Services.AddLibDb(options =>
 {
+    options.ConnectionStringNames = new[] { "Default" };
+    options.ConnectionStrings["Default"] =
+        builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string key 'Default' is missing.");
     options.UseProductionSecurityDefaults();
     options.RawSqlPolicy = RawSqlPolicy.DenyWriteText;
     options.EnableObservability = true;
@@ -383,9 +382,9 @@ DbResult<UserDto?> result = await db.Default
     .With(new { UserId = userId })
     .QuerySingleAsync<UserDto>(ct);
 
-if (!result.Success)
+if (!result.IsSuccess)
 {
-    logger.LogWarning("User lookup failed: {ErrorCode}", result.ErrorCode);
+    logger.LogWarning("User lookup failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
     return null;
 }
 
@@ -399,18 +398,20 @@ Do not assume every command returns a non-null value. Distinguish missing rows, 
 Use streaming APIs when result sets can be large and the consuming code can process rows incrementally:
 
 ```csharp
-await foreach (DbResult<OrderDto> row in db.Default
+DbResult<IAsyncEnumerable<OrderDto>> result = await db.Default
     .Procedure("dbo.usp_StreamOrders")
     .With(new { Status = status })
-    .QueryStreamAsync<OrderDto>(ct))
-{
-    if (!row.Success)
-    {
-        logger.LogWarning("Order stream row failed: {ErrorCode}", row.ErrorCode);
-        continue;
-    }
+    .QueryAsync<OrderDto>(ct);
 
-    await processor.HandleAsync(row.Value, ct);
+if (!result.IsSuccess || result.Value is null)
+{
+    logger.LogWarning("Order stream failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
+    return;
+}
+
+await foreach (OrderDto order in result.Value.WithCancellation(ct))
+{
+    await processor.HandleAsync(order, ct);
 }
 ```
 
@@ -423,16 +424,27 @@ Use Lib.Db transaction APIs when multiple commands must share one SQL transactio
 Example shape:
 
 ```csharp
-await db.Default.InTransactionAsync(async tx =>
-{
-    await tx.Procedure("dbo.usp_InsertOrder")
-        .With(new { request.OrderNo, request.CustomerCd })
-        .ExecuteAsync(ct);
+await using IDbTransactionScope tx = await db.BeginTransactionAsync("Default", ct);
 
-    await tx.Procedure("dbo.usp_InsertOrderAudit")
-        .With(new { request.OrderNo, Action = "Created" })
-        .ExecuteAsync(ct);
-}, ct);
+DbResult<int> orderResult = await tx.Procedure("dbo.usp_InsertOrder")
+    .With(new { request.OrderNo, request.CustomerCd })
+    .ExecuteAsync(ct);
+
+if (!orderResult.IsSuccess)
+{
+    return;
+}
+
+DbResult<int> auditResult = await tx.Procedure("dbo.usp_InsertOrderAudit")
+    .With(new { request.OrderNo, Action = "Created" })
+    .ExecuteAsync(ct);
+
+if (!auditResult.IsSuccess)
+{
+    return;
+}
+
+DbResult<bool> commitResult = await tx.CommitAsync(ct);
 ```
 
 ## Observability
@@ -460,7 +472,7 @@ Use caching only for reads where staleness is acceptable. Do not cache tenant-se
 - Are `DbResult<T>` failures handled?
 - Are cancellation tokens passed through?
 - Are logs structured and redacted?
-```
+````
 
 ## Task 5: Rewrite Mapping And TVP References For Consumer Contracts
 
@@ -473,7 +485,7 @@ Use caching only for reads where staleness is acceptable. Do not cache tenant-se
 
 Use this content:
 
-```markdown
+````markdown
 # Mapping and Binding Contracts
 
 Use this file when application code maps SQL Server result sets to DTOs, binds parameters, or uses generated result mappers.
@@ -524,7 +536,7 @@ Raw `TimeOnly` values bind as SQL `time`.
 Example:
 
 ```csharp
-await db.Default
+DbResult<IAsyncEnumerable<ScheduleDto>> result = await db.Default
     .Procedure("dbo.usp_SearchSchedule")
     .With(new
     {
@@ -551,13 +563,13 @@ Use explicit SQL aliases and matching DTO property types when provider behavior 
 - Are nullability expectations explicit?
 - Are `DateOnly` and `TimeOnly` parameters intentional?
 - Do generated mappers use `DbDataReader` as the compatibility boundary?
-```
+````
 
 - [ ] **Step 2: Replace `tvpgen-guide.md` with consumer source-generator guidance**
 
 Use this content:
 
-```markdown
+````markdown
 # Lib.Db.TvpGen Guide
 
 Use this file when application code uses Lib.Db source generation for TVP rows or generated result mappers.
@@ -651,7 +663,7 @@ If generated code fails or mapping is unexpected:
 - Are unsupported types avoided?
 - Are nullable values intentional?
 - Are generated mapper diagnostics visible in the consuming application build?
-```
+````
 
 ## Task 6: Rewrite Consumer Examples
 
@@ -663,16 +675,20 @@ If generated code fails or mapping is unexpected:
 
 Use this content:
 
-```markdown
+````markdown
 # Examples
 
-Use these examples as small consumer-facing templates. Keep secrets, full connection strings, high-privilege logins, certificate bypass defaults, repository paths, and verification commands out of examples.
+Use these examples as small consumer-facing templates. Keep secrets, full connection strings, high-privilege logins, certificate bypass defaults, repository paths, and package-source commands out of examples.
 
 ## Dependency Injection
 
 ```csharp
-builder.Services.AddLibDb(builder.Configuration, options =>
+builder.Services.AddLibDb(options =>
 {
+    options.ConnectionStringNames = new[] { "Default" };
+    options.ConnectionStrings["Default"] =
+        builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string key 'Default' is missing.");
     options.UseProductionSecurityDefaults();
     options.RawSqlPolicy = RawSqlPolicy.DenyWriteText;
     options.EnableObservability = true;
@@ -702,9 +718,9 @@ DbResult<UserDto?> result = await db.Default
     .With(new { UserId = userId })
     .QuerySingleAsync<UserDto>(ct);
 
-if (!result.Success)
+if (!result.IsSuccess)
 {
-    logger.LogWarning("User lookup failed: {ErrorCode}", result.ErrorCode);
+    logger.LogWarning("User lookup failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
     return null;
 }
 
@@ -719,9 +735,9 @@ DbResult<int> result = await db.Default
     .With(new { request.OrderNo, request.CustomerCd })
     .ExecuteAsync(ct);
 
-if (!result.Success)
+if (!result.IsSuccess)
 {
-    logger.LogWarning("Order insert failed: {ErrorCode}", result.ErrorCode);
+    logger.LogWarning("Order insert failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
 }
 ```
 
@@ -738,25 +754,27 @@ Use text SQL only when intentional and allowed by application raw SQL policy.
 ## Stream Rows
 
 ```csharp
-await foreach (DbResult<OrderDto> row in db.Default
+DbResult<IAsyncEnumerable<OrderDto>> result = await db.Default
     .Procedure("dbo.usp_StreamOrders")
     .With(new { Status = status })
-    .QueryStreamAsync<OrderDto>(ct))
-{
-    if (!row.Success)
-    {
-        logger.LogWarning("Order stream row failed: {ErrorCode}", row.ErrorCode);
-        continue;
-    }
+    .QueryAsync<OrderDto>(ct);
 
-    await processor.HandleAsync(row.Value, ct);
+if (!result.IsSuccess || result.Value is null)
+{
+    logger.LogWarning("Order stream failed: {SqlErrorCode}", result.Error?.SqlErrorCode);
+    return;
+}
+
+await foreach (OrderDto order in result.Value.WithCancellation(ct))
+{
+    await processor.HandleAsync(order, ct);
 }
 ```
 
 ## DateOnly And TimeOnly Parameters
 
 ```csharp
-DbResult<IReadOnlyList<ScheduleDto>> result = await db.Default
+DbResult<IAsyncEnumerable<ScheduleDto>> result = await db.Default
     .Procedure("dbo.usp_SearchSchedule")
     .With(new
     {
@@ -823,7 +841,7 @@ DbResult<int> result = await db.Default
     })
     .ExecuteAsync(ct);
 ```
-```
+````
 
 ## Task 7: Final Consumer-Skill Verification
 
@@ -863,7 +881,17 @@ Select-String -Path .claude/skills/lib-db/**/*.md,.claude/skills/lib-db/SKILL.md
 
 Expected: no matches.
 
-- [ ] **Step 3: Confirm no repository-internal workflow guidance remains**
+- [ ] **Step 3: Confirm no broad path-scoped frontmatter remains**
+
+Run:
+
+```powershell
+Select-String -Path .claude/skills/lib-db/SKILL.md -Pattern '^paths:|\*\*/\*\.(cs|csproj|json|md|config)'
+```
+
+Expected: no matches.
+
+- [ ] **Step 4: Confirm no repository-internal workflow guidance remains**
 
 Run:
 
@@ -873,7 +901,7 @@ Select-String -Path .claude/skills/lib-db/**/*.md,.claude/skills/lib-db/SKILL.md
 
 Expected: no matches.
 
-- [ ] **Step 4: Confirm security guardrails remain**
+- [ ] **Step 5: Confirm security guardrails remain**
 
 Run:
 
@@ -883,7 +911,7 @@ Select-String -Path .claude/skills/lib-db/**/*.md,.claude/skills/lib-db/SKILL.md
 
 Expected: matches in the retained skill files.
 
-- [ ] **Step 5: Review git diff for unrelated changes**
+- [ ] **Step 6: Review git diff for unrelated changes**
 
 Run:
 
@@ -898,7 +926,7 @@ Expected:
 - `tests/` files deleted
 - no unrelated repository files included
 
-- [ ] **Step 6: Commit only the skill package changes**
+- [ ] **Step 7: Commit only the skill package changes**
 
 Run:
 
@@ -917,6 +945,7 @@ Expected:
 - The plan covers every approved spec requirement.
 - The plan intentionally deletes `references/verification.md` and `tests/`.
 - The plan removes version-pinned skill identity.
+- The plan removes broad path-scoped frontmatter.
 - The plan does not require source repository internals for future consumers.
 - The plan preserves and strengthens security guardrails.
 - The plan leaves implementation scope limited to `.claude/skills/lib-db`.
