@@ -195,6 +195,42 @@ public sealed class VerificationEntryPointTests
     }
 
     [Fact]
+    public void ArchivedReviewDocs_ShouldBeMarkedAsHistoricalAndExcludedFromConsumerGuidance()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string archiveRoot = Path.Combine(repoRoot.FullName, "docs", "reviews", "archive");
+
+        Directory.Exists(archiveRoot).Should().BeTrue();
+
+        string[] archiveFiles = Directory.GetFiles(archiveRoot, "*.md", SearchOption.TopDirectoryOnly);
+        archiveFiles.Should().NotBeEmpty();
+
+        foreach (string file in archiveFiles)
+        {
+            string content = File.ReadAllText(file);
+            content.Should().Contain("Historical internal review");
+            content.Should().Contain("Not consumer documentation");
+            content.Should().Contain("Not current skill guidance");
+        }
+
+        string publicDocs = string.Join(
+            Environment.NewLine,
+            EnumeratePublicDocumentationFiles(repoRoot).Select(File.ReadAllText));
+        publicDocs.Should().NotContain("tvpgen-guide.md");
+        publicDocs.Should().NotContain("runtime-api.md");
+        publicDocs.Should().NotContain("security-guardrails.md");
+
+        string activeSkillGuidance = string.Join(
+            Environment.NewLine,
+            EnumerateActiveSkillFiles(repoRoot).Select(File.ReadAllText));
+        activeSkillGuidance.Should().NotContain("tvpgen-guide.md");
+        activeSkillGuidance.Should().NotContain("runtime-api.md");
+        activeSkillGuidance.Should().NotContain("security-guardrails.md");
+        activeSkillGuidance.Should().NotContain("BenchmarkDotNet");
+        activeSkillGuidance.Should().NotContain("Invoke-Verification.ps1");
+    }
+
+    [Fact]
     public void TestProject_ShouldFailFastWhenVerificationEnvironmentIsMissing()
     {
         DirectoryInfo repoRoot = FindRepoRoot();
@@ -250,6 +286,20 @@ public sealed class VerificationEntryPointTests
         }
 
         throw new DirectoryNotFoundException("Lib.Db repository root could not be found.");
+    }
+
+    private static IEnumerable<string> EnumerateActiveSkillFiles(DirectoryInfo repoRoot)
+    {
+        foreach (string skillRootName in new[] { ".agent", ".claude" })
+        {
+            string skillRoot = Path.Combine(repoRoot.FullName, skillRootName, "skills", "lib-db");
+            Directory.Exists(skillRoot).Should().BeTrue($"active Lib.Db skill guidance must exist under {skillRootName}");
+
+            foreach (string file in Directory.EnumerateFiles(skillRoot, "*.md", SearchOption.AllDirectories))
+            {
+                yield return file;
+            }
+        }
     }
 
     private static IEnumerable<string> EnumeratePublicDocumentationFiles(DirectoryInfo repoRoot)

@@ -1,3 +1,6 @@
+> Historical internal review. Not consumer documentation. Not current skill guidance.
+> Do not use this file as v2.3.0 API or skill instruction source.
+
 # Lib.Db Skill API Coverage Validation
 
 Date: 2026-05-20
