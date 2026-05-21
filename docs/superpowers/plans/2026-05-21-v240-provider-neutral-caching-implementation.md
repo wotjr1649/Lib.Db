@@ -4,7 +4,7 @@
 
 **Goal:** Make Lib.Db caching provider-neutral by default: no implicit distributed cache provider, no default shared-memory cache, and L1-only behavior when the host application has not registered a real L2 provider.
 
-**Architecture:** Keep the existing in-process schema snapshot and HybridCache registration, but split provider detection, default registration, shared-memory opt-in, epoch coordination, and documentation into focused changes. Lib.Db core never registers `MemoryDistributedCache` as an L2 substitute; provider-backed L2 exists only when the host registers `IDistributedCache` or explicitly opts into Lib.Db shared memory.
+**Architecture:** Keep the existing in-process schema snapshot and HybridCache registration, but split provider detection, default registration, shared-memory opt-in, epoch coordination, diagnostics, and documentation into focused changes. Lib.Db core never registers `MemoryDistributedCache` as an L2 substitute; verified provider-backed L2 exists only when the host registers a recognized/trusted `IDistributedCache`. Lib.Db shared memory is a separate explicit opt-in path, not a fallback.
 
 **Tech Stack:** .NET 10, C# 14 preview syntax already used by the repo, Microsoft.Extensions.Caching.Hybrid, Microsoft.Extensions.Caching.Distributed, xUnit v3, FluentAssertions, Microsoft.Extensions.DependencyInjection.
 
@@ -21,6 +21,9 @@ The implementation must satisfy these decisions:
 - `MemoryDistributedCache` is local memory and must not be reported as production L2.
 - Existing provider registrations must be preserved.
 - `SharedMemoryCache` must move behind an explicit opt-in registration.
+- `EnableSharedMemoryCache = true` without `AddLibDbSharedMemoryCache()` must fail fast instead of enabling partial shared-memory behavior.
+- `AddLibDbSharedMemoryCache()` must reject any other `IDistributedCache` registration by default, regardless of registration order.
+- Unknown `IDistributedCache` implementations must be reported as unverified, not as verified provider-backed L2.
 - Epoch coordination defaults to disabled unless shared memory or epoch coordination is explicitly enabled.
 - Diagnostics and docs must describe topology without printing connection strings, provider credentials, or raw cache keys.
 
@@ -32,24 +35,40 @@ Official references were checked in the spec on 2026-05-21:
 - <https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.caching.distributed.memorydistributedcache>
 - <https://learn.microsoft.com/en-us/dotnet/api/system.io.memorymappedfiles.memorymappedfile>
 - <https://learn.microsoft.com/en-us/dotnet/standard/io/memory-mapped-files>
+- <https://learn.microsoft.com/en-us/dotnet/api/system.threading.mutex>
 
 ## File Structure
 
 Create:
 
 - `Lib.Db/Caching/LibDbCacheTopology.cs`
-  Internal cache topology model and detector. This file owns the vocabulary for `LocalOnly`, `LocalMemoryDistributedCache`, `ProviderBackedL2`, and `SharedMemoryOptIn`.
+  Internal cache topology model and detector. This file owns the vocabulary for `LocalOnly`, `LocalMemoryDistributedCache`, `VerifiedProviderBackedL2`, `UnverifiedDistributedCache`, and `SharedMemoryOptIn`.
+
+- `Lib.Db/Caching/LibDbCacheTopologyOptions.cs`
+  Internal options for known/trusted provider type names. This lets tests and advanced hosts explicitly mark a custom provider as verified without hard-coding every third-party package into Lib.Db.
+
+- `Lib.Db/Caching/LibDbSharedMemoryOptInMarker.cs`
+  Internal marker registered only by `AddLibDbSharedMemoryCache()` so diagnostics and guards can tell explicit opt-in from a lone configuration flag.
+
+- `Lib.Db/Caching/LibDbSharedMemoryCacheStartupValidator.cs`
+  Internal hosted validator that detects providers added after `AddLibDbSharedMemoryCache()` and fails host startup before mixed topology can run.
+
+- `Lib.Db/Diagnostics/LibDbCacheTopologyDiagnostics.cs`
+  Redacted topology snapshot used by startup logs, health check data, or diagnostic endpoints.
 
 Modify:
 
 - `Lib.Db/Extensions/ServiceRegistrationHelpers.cs`
-  Stop implicit `MemoryDistributedCache` registration. Keep core cache coordination provider-neutral. Add a separate shared-memory opt-in helper.
+  Stop implicit `MemoryDistributedCache` registration. Keep core cache coordination provider-neutral. Add a separate shared-memory opt-in helper with conflict detection and fail-fast guards.
 
 - `Lib.Db/Extensions/LibDbServiceCollectionExtensions.cs`
-  Keep `RegisterLibDbCoreServices` provider-neutral. Add public `AddLibDbSharedMemoryCache()` opt-in registration.
+  Keep `RegisterLibDbCoreServices` provider-neutral. Add public `AddLibDbSharedMemoryCache()` opt-in registration and a marker that proves the explicit opt-in path was used.
 
 - `Lib.Db/Extensions/HybridCacheExtensions.cs`
-  Update comments so `HybridCache` is described as L1-only unless a real `IDistributedCache` provider is registered by the host.
+  Update comments so `HybridCache` is described as L1-only unless a verified/trusted `IDistributedCache` provider is registered by the host. Make the Lib.Db HybridCache configuration path idempotent so `AddLibDb()` baseline serializers and `AddLibDbHybridCache()` caller options do not conflict.
+
+- `Lib.Db/Extensions/LibDbHealthCheckExtensions.cs`
+  Add topology data to existing health-check diagnostic output through the current `GetCacheDiagnosticData()` path.
 
 - `Lib.Db/Schema/SchemaFlushService.cs`
   Align epoch default behavior with provider-neutral caching and avoid implying cross-process L2 when shared memory is not active.
@@ -90,7 +109,9 @@ Modify:
 
 **Files:**
 - Modify: `Verification/projects/Lib.Db.IntegrationTests/Unit/CacheHostingCoverageTests.cs`
-- Later implementation file: `Lib.Db/Caching/LibDbCacheTopology.cs`
+- Later implementation files:
+  - `Lib.Db/Caching/LibDbCacheTopology.cs`
+  - `Lib.Db/Caching/LibDbCacheTopologyOptions.cs`
 
 - [ ] **Step 1: Add topology detector tests**
 
@@ -103,7 +124,7 @@ public void CacheTopologyDetector_ShouldReportMissingDistributedCacheAsLocalOnly
     LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache: null);
 
     state.Kind.Should().Be(LibDbCacheTopologyKind.LocalOnly);
-    state.HasProviderBackedL2.Should().BeFalse();
+    state.HasVerifiedProviderBackedL2.Should().BeFalse();
     state.ProviderTypeName.Should().BeNull();
 }
 
@@ -115,7 +136,7 @@ public void CacheTopologyDetector_ShouldReportMemoryDistributedCacheAsLocalMemor
     LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
 
     state.Kind.Should().Be(LibDbCacheTopologyKind.LocalMemoryDistributedCache);
-    state.HasProviderBackedL2.Should().BeFalse();
+    state.HasVerifiedProviderBackedL2.Should().BeFalse();
     state.ProviderTypeName.Should().Contain(nameof(MemoryDistributedCache));
 }
 
@@ -131,21 +152,42 @@ public void CacheTopologyDetector_ShouldReportSharedMemoryCacheAsSharedMemoryOpt
     LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
 
     state.Kind.Should().Be(LibDbCacheTopologyKind.SharedMemoryOptIn);
-    state.HasProviderBackedL2.Should().BeFalse();
+    state.HasVerifiedProviderBackedL2.Should().BeFalse();
     state.ProviderTypeName.Should().Contain(nameof(SharedMemoryCache));
 }
 
 [Fact]
-public void CacheTopologyDetector_ShouldReportUnknownDistributedCacheAsProviderBackedL2()
+public void CacheTopologyDetector_ShouldReportUnknownDistributedCacheAsUnverified()
 {
     var cache = new RecordingDistributedCache();
 
     LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
 
-    state.Kind.Should().Be(LibDbCacheTopologyKind.ProviderBackedL2);
-    state.HasProviderBackedL2.Should().BeTrue();
+    state.Kind.Should().Be(LibDbCacheTopologyKind.UnverifiedDistributedCache);
+    state.HasVerifiedProviderBackedL2.Should().BeFalse();
     state.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
 }
+
+[Fact]
+public void CacheTopologyDetector_ShouldReportTrustedCustomProviderAsVerifiedL2()
+{
+    var cache = new RecordingDistributedCache();
+    LibDbCacheTopologyOptions options = new();
+    options.TrustedProviderTypeNames.Add(cache.GetType().FullName!);
+
+    LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache, options);
+
+    state.Kind.Should().Be(LibDbCacheTopologyKind.VerifiedProviderBackedL2);
+    state.HasVerifiedProviderBackedL2.Should().BeTrue();
+    state.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
+}
+```
+
+Add these usings if they are missing:
+
+```csharp
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 ```
 
 Add this helper at the end of `CacheHostingCoverageTests`:
@@ -223,11 +265,12 @@ git commit -m "test: cover cache topology detection"
 
 **Files:**
 - Create: `Lib.Db/Caching/LibDbCacheTopology.cs`
+- Create: `Lib.Db/Caching/LibDbCacheTopologyOptions.cs`
 - Test: `Verification/projects/Lib.Db.IntegrationTests/Unit/CacheHostingCoverageTests.cs`
 
 - [ ] **Step 1: Create the topology detector**
 
-Create `Lib.Db/Caching/LibDbCacheTopology.cs`:
+Create `Lib.Db/Caching/LibDbCacheTopology.cs` and `Lib.Db/Caching/LibDbCacheTopologyOptions.cs`. The snippet is shown together for readability; split `LibDbCacheTopologyOptions` into its own file.
 
 ```csharp
 // ============================================================================
@@ -246,17 +289,24 @@ internal enum LibDbCacheTopologyKind
 {
     LocalOnly,
     LocalMemoryDistributedCache,
-    ProviderBackedL2,
+    VerifiedProviderBackedL2,
+    UnverifiedDistributedCache,
     SharedMemoryOptIn
 }
 
 internal sealed record LibDbCacheTopologyState(
     LibDbCacheTopologyKind Kind,
     string? ProviderTypeName,
-    bool HasProviderBackedL2)
+    bool HasVerifiedProviderBackedL2)
 {
     public static LibDbCacheTopologyState LocalOnly { get; } =
-        new(LibDbCacheTopologyKind.LocalOnly, null, HasProviderBackedL2: false);
+        new(LibDbCacheTopologyKind.LocalOnly, null, HasVerifiedProviderBackedL2: false);
+}
+
+internal sealed class LibDbCacheTopologyOptions
+{
+    public ISet<string> TrustedProviderTypeNames { get; } =
+        new HashSet<string>(StringComparer.Ordinal);
 }
 
 internal static class LibDbCacheTopologyDetector
@@ -264,14 +314,19 @@ internal static class LibDbCacheTopologyDetector
     public static LibDbCacheTopologyState Detect(IServiceProvider serviceProvider)
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
-        return Detect(serviceProvider.GetService<IDistributedCache>());
+        LibDbCacheTopologyOptions options =
+            serviceProvider.GetService<LibDbCacheTopologyOptions>() ?? new LibDbCacheTopologyOptions();
+        return Detect(serviceProvider.GetService<IDistributedCache>(), options);
     }
 
-    public static LibDbCacheTopologyState Detect(IDistributedCache? cache)
+    public static LibDbCacheTopologyState Detect(
+        IDistributedCache? cache,
+        LibDbCacheTopologyOptions? options = null)
     {
         if (cache is null)
             return LibDbCacheTopologyState.LocalOnly;
 
+        options ??= new LibDbCacheTopologyOptions();
         Type cacheType = cache.GetType();
         string? fullName = cacheType.FullName;
         string providerTypeName = string.IsNullOrWhiteSpace(fullName)
@@ -283,18 +338,38 @@ internal static class LibDbCacheTopologyDetector
             SharedMemoryCache => new(
                 LibDbCacheTopologyKind.SharedMemoryOptIn,
                 providerTypeName,
-                HasProviderBackedL2: false),
+                HasVerifiedProviderBackedL2: false),
 
             MemoryDistributedCache => new(
                 LibDbCacheTopologyKind.LocalMemoryDistributedCache,
                 providerTypeName,
-                HasProviderBackedL2: false),
+                HasVerifiedProviderBackedL2: false),
+
+            _ when IsKnownProvider(providerTypeName) ||
+                options.TrustedProviderTypeNames.Contains(providerTypeName) => new(
+                LibDbCacheTopologyKind.VerifiedProviderBackedL2,
+                providerTypeName,
+                HasVerifiedProviderBackedL2: true),
 
             _ => new(
-                LibDbCacheTopologyKind.ProviderBackedL2,
+                LibDbCacheTopologyKind.UnverifiedDistributedCache,
                 providerTypeName,
-                HasProviderBackedL2: true)
+                HasVerifiedProviderBackedL2: false)
         };
+    }
+
+    private static bool IsKnownProvider(string providerTypeName)
+    {
+        return providerTypeName.StartsWith(
+                "Microsoft.Extensions.Caching.StackExchangeRedis.",
+                StringComparison.Ordinal) ||
+            providerTypeName.StartsWith(
+                "Microsoft.Extensions.Caching.SqlServer.",
+                StringComparison.Ordinal) ||
+            providerTypeName.StartsWith(
+                "Microsoft.Extensions.Caching.Postgres.",
+                StringComparison.Ordinal) ||
+            providerTypeName.Contains(".NCache.", StringComparison.OrdinalIgnoreCase);
     }
 }
 ```
@@ -312,8 +387,93 @@ Expected: PASS for the new topology detector tests.
 - [ ] **Step 3: Commit topology detection**
 
 ```powershell
-git add .\Lib.Db\Caching\LibDbCacheTopology.cs .\Verification\projects\Lib.Db.IntegrationTests\Unit\CacheHostingCoverageTests.cs
+git add .\Lib.Db\Caching\LibDbCacheTopology.cs .\Lib.Db\Caching\LibDbCacheTopologyOptions.cs .\Verification\projects\Lib.Db.IntegrationTests\Unit\CacheHostingCoverageTests.cs
 git commit -m "feat: add provider-neutral cache topology detection"
+```
+
+### Task 2A: Expose Redacted Topology Diagnostics
+
+**Files:**
+- Create: `Lib.Db/Diagnostics/LibDbCacheTopologyDiagnostics.cs`
+- Modify: `Verification/projects/Lib.Db.IntegrationTests/Diagnostics/DbDiagnosticsTests.cs`
+- Modify: `Lib.Db/Extensions/LibDbHealthCheckExtensions.cs`
+
+- [ ] **Step 1: Add diagnostics tests**
+
+Add tests that prove topology is observable and redacted. Use a local `RecordingDistributedCache` helper in this diagnostics test file if the helper is not shared:
+
+```csharp
+[Fact]
+public void CacheTopologyDiagnostics_ShouldReportTopologyWithoutSecrets()
+{
+    var cache = new RecordingDistributedCache();
+    LibDbCacheTopologyState topology = LibDbCacheTopologyDetector.Detect(cache);
+
+    LibDbCacheTopologySnapshot snapshot = LibDbCacheTopologyDiagnostics.CreateSnapshot(
+        topology,
+        sharedMemoryEnabled: false,
+        epochCoordinationEnabled: false);
+
+    snapshot.Kind.Should().Be("UnverifiedDistributedCache");
+    snapshot.HasVerifiedProviderBackedL2.Should().BeFalse();
+    snapshot.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
+    snapshot.ProviderTypeName.Should().NotContain("Password", StringComparison.OrdinalIgnoreCase);
+    snapshot.Warnings.Should().Contain(warning => warning.Contains("unverified", StringComparison.OrdinalIgnoreCase));
+}
+
+[Fact]
+public void CacheTopologyDiagnostics_ShouldNotEmitRawCacheKeysOrConnectionStrings()
+{
+    LibDbCacheTopologyState topology = new(
+        LibDbCacheTopologyKind.VerifiedProviderBackedL2,
+        "Microsoft.Extensions.Caching.StackExchangeRedis.RedisCache",
+        HasVerifiedProviderBackedL2: true);
+
+    LibDbCacheTopologySnapshot snapshot = LibDbCacheTopologyDiagnostics.CreateSnapshot(
+        topology,
+        sharedMemoryEnabled: false,
+        epochCoordinationEnabled: false);
+
+    string rendered = JsonSerializer.Serialize(snapshot);
+
+    rendered.Should().NotContain("Server=");
+    rendered.Should().NotContain("Password=");
+    rendered.Should().NotContain("libdb:schema:");
+}
+```
+
+- [ ] **Step 2: Implement the snapshot**
+
+Create a small immutable snapshot. It should contain only:
+
+- `Kind`
+- `HasVerifiedProviderBackedL2`
+- `ProviderTypeName`
+- `SharedMemoryEnabled`
+- `EpochCoordinationEnabled`
+- `Warnings`
+
+It must not accept or store provider options, connection strings, raw cache keys, or serialized values.
+
+- [ ] **Step 3: Wire diagnostics into the existing surface**
+
+Add the snapshot to `LibDbHealthCheckExtensions.GetCacheDiagnosticData()` so health checks include cache topology fields. Also register `LibDbCacheTopologyDiagnostics` as an internal service and log one startup event from the registration path. The log must use structured fields for topology kind and provider type only.
+
+- [ ] **Step 4: Run diagnostics tests**
+
+Run:
+
+```powershell
+dotnet test .\Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~DbDiagnosticsTests|FullyQualifiedName~CacheHostingCoverageTests" -p:LIBDB_SKIP_TEST_ENV_GUARD=true
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit diagnostics**
+
+```powershell
+git add .\Lib.Db\Diagnostics\LibDbCacheTopologyDiagnostics.cs .\Lib.Db\Extensions\LibDbHealthCheckExtensions.cs .\Verification\projects\Lib.Db.IntegrationTests\Diagnostics\DbDiagnosticsTests.cs
+git commit -m "feat: expose redacted cache topology diagnostics"
 ```
 
 ### Task 3: Add Default Registration Regression Tests
@@ -348,7 +508,7 @@ public void RegisterLibDbCoreServices_ShouldNotRegisterDistributedCache_WhenProv
 }
 
 [Fact]
-public void RegisterLibDbCoreServices_ShouldPreserveCallerDistributedCacheProvider()
+public void RegisterLibDbCoreServices_ShouldPreserveCallerDistributedCacheProviderAsUnverifiedByDefault()
 {
     ServiceCollection services = CreateConfiguredServices(options =>
     {
@@ -363,8 +523,31 @@ public void RegisterLibDbCoreServices_ShouldPreserveCallerDistributedCacheProvid
 
     provider.GetRequiredService<IDistributedCache>().Should().BeOfType<TestDistributedCache>();
     LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(provider);
-    state.Kind.Should().Be(LibDbCacheTopologyKind.ProviderBackedL2);
-    state.HasProviderBackedL2.Should().BeTrue();
+    state.Kind.Should().Be(LibDbCacheTopologyKind.UnverifiedDistributedCache);
+    state.HasVerifiedProviderBackedL2.Should().BeFalse();
+}
+
+[Fact]
+public void RegisterLibDbCoreServices_ShouldReportCallerProviderAsVerified_WhenProviderIsTrusted()
+{
+    ServiceCollection services = CreateConfiguredServices(options =>
+    {
+        options.EnableSharedMemoryCache = null;
+        options.EnableEpochCoordination = null;
+    });
+    services.AddSingleton<IDistributedCache, TestDistributedCache>();
+    services.AddSingleton(new LibDbCacheTopologyOptions
+    {
+        TrustedProviderTypeNames = { typeof(TestDistributedCache).FullName! }
+    });
+
+    services.RegisterLibDbCoreServices();
+
+    using ServiceProvider provider = services.BuildServiceProvider();
+
+    LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(provider);
+    state.Kind.Should().Be(LibDbCacheTopologyKind.VerifiedProviderBackedL2);
+    state.HasVerifiedProviderBackedL2.Should().BeTrue();
 }
 
 [Fact]
@@ -386,6 +569,98 @@ public void AddLibDbSharedMemoryCache_ShouldRegisterSharedMemoryCacheOnlyWhenExp
     provider.GetRequiredService<IProcessSlotAllocator>().Should().BeOfType<ProcessSlotAllocator>();
     LibDbCacheTopologyDetector.Detect(provider).Kind.Should().Be(LibDbCacheTopologyKind.SharedMemoryOptIn);
 }
+
+[Fact]
+public void RegisterLibDbCoreServices_ShouldFailFast_WhenSharedMemoryOptionTrueButOptInApiMissing()
+{
+    ServiceCollection services = CreateConfiguredServices(options =>
+    {
+        options.EnableSharedMemoryCache = true;
+        options.EnableEpochCoordination = null;
+    });
+
+    services.RegisterLibDbCoreServices();
+
+    using ServiceProvider provider = services.BuildServiceProvider();
+
+    Action act = () => provider.GetRequiredService<IProcessSlotAllocator>();
+
+    act.Should()
+        .Throw<InvalidOperationException>()
+        .WithMessage("*AddLibDbSharedMemoryCache*");
+    provider.GetService<IDistributedCache>().Should().BeNull();
+}
+
+[Fact]
+public void AddLibDbSharedMemoryCache_ShouldFailFast_WhenDistributedCacheProviderAlreadyExists()
+{
+    ServiceCollection services = CreateConfiguredServices(options =>
+    {
+        options.EnableSharedMemoryCache = null;
+        options.EnableEpochCoordination = null;
+    });
+    services.AddSingleton<IDistributedCache, TestDistributedCache>();
+
+    Action act = () => services.AddLibDbSharedMemoryCache();
+
+    act.Should()
+        .Throw<InvalidOperationException>()
+        .WithMessage("*IDistributedCache*");
+}
+
+[Fact]
+public async Task AddLibDbSharedMemoryCache_ShouldFailFast_WhenDistributedCacheProviderIsAddedAfterOptIn()
+{
+    ServiceCollection services = CreateConfiguredServices(options =>
+    {
+        options.EnableSharedMemoryCache = null;
+        options.EnableEpochCoordination = null;
+    });
+
+    services.AddLibDbSharedMemoryCache();
+    services.AddSingleton<IDistributedCache, TestDistributedCache>();
+
+    await using ServiceProvider provider = services.BuildServiceProvider();
+    IHostedService validator = provider
+        .GetServices<IHostedService>()
+        .Should()
+        .ContainSingle(service => service.GetType().Name.Contains("SharedMemoryCacheStartupValidator", StringComparison.Ordinal))
+        .Which;
+
+    Func<Task> act = () => validator.StartAsync(CancellationToken.None);
+
+    await act.Should()
+        .ThrowAsync<InvalidOperationException>()
+        .WithMessage("*IDistributedCache*");
+}
+
+[Fact]
+public void AddLibDbSharedMemoryCache_ShouldUseRealOptionsPipeline()
+{
+    var services = new ServiceCollection();
+    services.AddLogging();
+    services.AddLibDbOptions(options =>
+    {
+        options.ConnectionStrings["Default"] =
+            "Server=(localdb)\\MSSQLLocalDB;Database=LibDbPlan;Integrated Security=True;TrustServerCertificate=True;Encrypt=False";
+        options.ConnectionStringNames = ["Default"];
+        options.SharedMemoryCache.BasePath = Path.Combine(
+            Path.GetTempPath(),
+            "LibDbPlanTest_" + Guid.NewGuid().ToString("N"));
+    });
+
+    services.RegisterLibDbCoreServices();
+    services.AddLibDbSharedMemoryCache();
+
+    using ServiceProvider provider = services.BuildServiceProvider();
+
+    provider.GetRequiredService<IOptions<LibDbOptions>>()
+        .Value
+        .EnableSharedMemoryCache
+        .Should()
+        .BeTrue();
+    provider.GetRequiredService<IDistributedCache>().Should().BeOfType<SharedMemoryCache>();
+}
 ```
 
 Add these helpers to `ServiceRegistrationHelpersTests`:
@@ -393,16 +668,15 @@ Add these helpers to `ServiceRegistrationHelpersTests`:
 ```csharp
 private static ServiceCollection CreateConfiguredServices(Action<LibDbOptions> configure)
 {
-    LibDbOptions options = new();
-    options.ConnectionStrings["Default"] =
-        "Server=(localdb)\\MSSQLLocalDB;Database=LibDbPlan;Integrated Security=True;TrustServerCertificate=True;Encrypt=False";
-    configure(options);
-
     var services = new ServiceCollection();
     services.AddLogging();
-    services.AddLibDbOptions(_ => { });
-    services.AddSingleton<IOptions<LibDbOptions>>(Options.Create(options));
-    services.AddSingleton(options);
+    services.AddLibDbOptions(options =>
+    {
+        options.ConnectionStrings["Default"] =
+            "Server=(localdb)\\MSSQLLocalDB;Database=LibDbPlan;Integrated Security=True;TrustServerCertificate=True;Encrypt=False";
+        options.ConnectionStringNames = ["Default"];
+        configure(options);
+    });
     return services;
 }
 
@@ -446,8 +720,12 @@ Add these usings at the top of `ServiceRegistrationHelpersTests.cs`:
 
 ```csharp
 using Lib.Db.Caching;
+using Lib.Db.Configuration;
 using Lib.Db.Hosting;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Hybrid;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 ```
 
 - [ ] **Step 3: Run tests to verify they fail**
@@ -488,20 +766,16 @@ internal static void RegisterConditionalSharedMemoryCache(IServiceCollection ser
     {
         LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
         ILogger<ProcessSlotAllocator> logger = sp.GetRequiredService<ILogger<Lib.Db.Hosting.ProcessSlotAllocator>>();
-        IIsolationKeyGenerator keyGenerator = sp.GetRequiredService<IIsolationKeyGenerator>();
 
-        if (options.EnableSharedMemoryCache is not true)
+        if (options.EnableSharedMemoryCache is true)
         {
-            logger.LogInformation("[ProcessSlot] provider-neutral local-only mode - passive allocator");
-            return new Lib.Db.Hosting.PassiveProcessSlotAllocator();
+            throw new InvalidOperationException(
+                "EnableSharedMemoryCache=true requires services.AddLibDbSharedMemoryCache(). " +
+                "Lib.Db core does not enable partial shared-memory coordination.");
         }
 
-        string connectionString = GetPrimaryConnectionStringOrThrow(options, "ProcessSlotAllocator");
-        string? generatedKey = keyGenerator.Generate(connectionString);
-        string isolationKey = string.IsNullOrWhiteSpace(generatedKey)
-            ? "Shared"
-            : generatedKey;
-        return new Lib.Db.Hosting.ProcessSlotAllocator(isolationKey, logger);
+        logger.LogInformation("[ProcessSlot] provider-neutral local-only mode - passive allocator");
+        return new Lib.Db.Hosting.PassiveProcessSlotAllocator();
     });
 }
 ```
@@ -515,10 +789,17 @@ Add this method below `RegisterConditionalSharedMemoryCache`:
 ```csharp
 internal static void RegisterSharedMemoryCacheOptIn(IServiceCollection services)
 {
+    if (services.Any(descriptor => descriptor.ServiceType == typeof(IDistributedCache)))
+    {
+        throw new InvalidOperationException(
+            "AddLibDbSharedMemoryCache cannot be combined with another IDistributedCache registration. " +
+            "Choose either a host-provided provider-backed L2 or Lib.Db shared memory.");
+    }
+
     services.TryAddSingleton<Lib.Db.Contracts.Cache.IIsolationKeyGenerator, Lib.Db.Caching.IsolationKeyGenerator>();
 
     services.RemoveAll<IProcessSlotAllocator>();
-    services.TryAddSingleton<IProcessSlotAllocator>(sp =>
+    services.AddSingleton<IProcessSlotAllocator>(sp =>
     {
         LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
         ILogger<ProcessSlotAllocator> logger = sp.GetRequiredService<ILogger<Lib.Db.Hosting.ProcessSlotAllocator>>();
@@ -532,7 +813,7 @@ internal static void RegisterSharedMemoryCacheOptIn(IServiceCollection services)
         return new Lib.Db.Hosting.ProcessSlotAllocator(isolationKey, logger);
     });
 
-    services.TryAddSingleton<IDistributedCache>(sp =>
+    services.AddSingleton<IDistributedCache>(sp =>
     {
         LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
         ILogger<SharedMemoryCache> logger = sp.GetRequiredService<ILogger<SharedMemoryCache>>();
@@ -569,6 +850,7 @@ internal static void RegisterSharedMemoryCacheOptIn(IServiceCollection services)
     });
 
     services.AddHostedService<CacheMaintenanceService>();
+    services.AddHostedService<LibDbSharedMemoryCacheStartupValidator>();
 }
 ```
 
@@ -597,6 +879,42 @@ git commit -m "feat: stop implicit distributed cache registration"
 
 - [ ] **Step 1: Add public opt-in extension**
 
+Add this internal marker in `Lib.Db/Caching/LibDbSharedMemoryOptInMarker.cs` or near the topology types:
+
+```csharp
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Hosting;
+
+namespace Lib.Db.Caching;
+
+internal sealed class LibDbSharedMemoryOptInMarker;
+```
+
+Add this startup validator in `Lib.Db/Caching/LibDbSharedMemoryCacheStartupValidator.cs`:
+
+```csharp
+namespace Lib.Db.Caching;
+
+internal sealed class LibDbSharedMemoryCacheStartupValidator(
+    IEnumerable<IDistributedCache> caches)
+    : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        IDistributedCache[] registeredCaches = caches.ToArray();
+        if (registeredCaches.Length != 1 || registeredCaches[0] is not SharedMemoryCache)
+        {
+            throw new InvalidOperationException(
+                "AddLibDbSharedMemoryCache cannot be combined with another IDistributedCache registration.");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+```
+
 Add this method near the other service registration extensions in `LibDbServiceCollectionExtensions.cs`:
 
 ```csharp
@@ -610,6 +928,8 @@ Add this method near the other service registration extensions in `LibDbServiceC
 public static IServiceCollection AddLibDbSharedMemoryCache(
     this IServiceCollection services)
 {
+    services.TryAddSingleton<LibDbSharedMemoryOptInMarker>();
+
     services.PostConfigure<LibDbOptions>(static options =>
     {
         options.EnableSharedMemoryCache = true;
@@ -643,7 +963,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit explicit shared-memory API**
 
 ```powershell
-git add .\Lib.Db\Extensions\LibDbServiceCollectionExtensions.cs .\Verification\projects\Lib.Db.IntegrationTests\Unit\ServiceRegistrationHelpersTests.cs
+git add .\Lib.Db\Caching\LibDbSharedMemoryOptInMarker.cs .\Lib.Db\Caching\LibDbSharedMemoryCacheStartupValidator.cs .\Lib.Db\Extensions\LibDbServiceCollectionExtensions.cs .\Verification\projects\Lib.Db.IntegrationTests\Unit\ServiceRegistrationHelpersTests.cs
 git commit -m "feat: add explicit shared-memory cache opt-in"
 ```
 
@@ -684,6 +1004,31 @@ public async Task AddSchemaFlushCoordination_ShouldDisableEpochByDefault_WhenSha
 
     await provider.DisposeAsync();
 }
+
+[Fact]
+public void AddSchemaFlushCoordination_ShouldFailFast_WhenEpochExplicitButSharedMemoryMissing()
+{
+    string basePath = Path.Combine(Path.GetTempPath(), "LibDbEpochPlan_" + Guid.NewGuid().ToString("N"));
+    LibDbOptions options = new()
+    {
+        EnableSharedMemoryCache = null,
+        EnableEpochCoordination = true
+    };
+
+    var services = new ServiceCollection();
+    services.AddLogging();
+    services.AddSingleton(options);
+    services.AddSingleton<IOptions<LibDbOptions>>(Options.Create(options));
+    services.AddSchemaFlushCoordination(basePath);
+
+    using ServiceProvider provider = services.BuildServiceProvider();
+
+    Action act = () => provider.GetRequiredService<EpochStore>();
+
+    act.Should()
+        .Throw<InvalidOperationException>()
+        .WithMessage("*shared-memory*");
+}
 ```
 
 - [ ] **Step 2: Run test to verify current behavior**
@@ -702,6 +1047,12 @@ In `AddSchemaFlushCoordination`, replace the current OS auto-detection block wit
 
 ```csharp
 bool enableSharedMemory = options.EnableSharedMemoryCache is true;
+if (options.EnableEpochCoordination is true && !enableSharedMemory)
+{
+    throw new InvalidOperationException(
+        "EnableEpochCoordination=true requires explicit shared-memory cache opt-in.");
+}
+
 bool enableEpoch = options.EnableEpochCoordination.GetValueOrDefault(enableSharedMemory);
 ```
 
@@ -711,9 +1062,14 @@ In `SchemaFlushService.cs`, replace the local shared-memory default calculation 
 
 ```csharp
 bool enableSharedMemory = options.EnableSharedMemoryCache is true;
+if (options.EnableEpochCoordination is true && !enableSharedMemory)
+{
+    throw new InvalidOperationException(
+        "EnableEpochCoordination=true requires explicit shared-memory cache opt-in.");
+}
 ```
 
-Keep existing explicit `EnableEpochCoordination = true` behavior intact.
+Do not keep the old implicit Windows behavior. Explicit `EnableEpochCoordination = true` without shared-memory opt-in is a configuration error, because there is no shared cache adapter for the epoch to coordinate.
 
 - [ ] **Step 5: Run schema flush tests**
 
@@ -737,6 +1093,7 @@ git commit -m "feat: default epoch coordination to local-only mode"
 **Files:**
 - Modify: `Lib.Db/Configuration/LibDbOptions.cs`
 - Modify: `Lib.Db/Extensions/HybridCacheExtensions.cs`
+- Modify: `Lib.Db/Extensions/ServiceRegistrationHelpers.cs`
 - Modify: `Lib.Db/Contracts/Schema/SchemaContracts.cs`
 - Modify: `Lib.Db/Schema/SchemaService.cs`
 
@@ -789,7 +1146,52 @@ Replace the inline comments before `services.AddHybridCache` with:
 // With a host-registered IDistributedCache provider, HybridCache can use provider-backed L2.
 ```
 
-- [ ] **Step 4: Update schema comments that imply unconditional L2**
+- [ ] **Step 4: Guard against duplicate HybridCache configuration paths**
+
+Review `RegisterAotSerializers` and `AddLibDbHybridCache`. If `AddLibDb()` calls baseline `services.AddHybridCache()` and the application also calls `AddLibDbHybridCache(options => ...)`, keep both paths idempotent:
+
+- baseline serializer registration must not erase caller-provided `HybridCacheOptions`
+- `AddLibDbHybridCache()` must be the documented place for caller TTL/size configuration
+- examples must not imply that calling both methods creates two separate cache instances
+- tests must prove caller `HybridCacheEntryOptions` survive when `AddLibDb()` and `AddLibDbHybridCache()` are both used
+
+Add a regression test in `CacheHostingCoverageTests`:
+
+```csharp
+[Fact]
+public void AddLibDbHybridCache_ShouldPreserveCallerOptions_WhenLibDbAlsoRegistersBaselineHybridCache()
+{
+    var services = new ServiceCollection();
+    services.AddLogging();
+    services.AddLibDbOptions(options =>
+    {
+        options.ConnectionStrings["Default"] =
+            "Server=(localdb)\\MSSQLLocalDB;Database=LibDbPlan;Integrated Security=True;TrustServerCertificate=True;Encrypt=False";
+        options.ConnectionStringNames = ["Default"];
+    });
+
+    services.RegisterLibDbCoreServices();
+    services.AddLibDbHybridCache(options =>
+    {
+        options.DefaultEntryOptions = new HybridCacheEntryOptions
+        {
+            Expiration = TimeSpan.FromMinutes(9),
+            LocalCacheExpiration = TimeSpan.FromMinutes(2)
+        };
+    });
+
+    using ServiceProvider provider = services.BuildServiceProvider();
+
+    provider.GetRequiredService<HybridCache>().Should().NotBeNull();
+    HybridCacheOptions effective = provider
+        .GetRequiredService<IOptions<HybridCacheOptions>>()
+        .Value;
+    effective.DefaultEntryOptions.Expiration.Should().Be(TimeSpan.FromMinutes(9));
+    effective.DefaultEntryOptions.LocalCacheExpiration.Should().Be(TimeSpan.FromMinutes(2));
+}
+```
+
+- [ ] **Step 5: Update schema comments that imply unconditional L2**
 
 In `SchemaContracts.cs` and `SchemaService.cs`, replace wording that says `L2(Redis 등 분산)` or `HybridCache L2 (Distributed)` with wording that says:
 
@@ -799,7 +1201,7 @@ Provider-backed L2 is optional and exists only when the host registers IDistribu
 
 Use Korean for adjacent Korean XML comments and English for adjacent English comments.
 
-- [ ] **Step 5: Run build**
+- [ ] **Step 6: Run build**
 
 Run:
 
@@ -809,10 +1211,10 @@ dotnet test .\Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTe
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit comment updates**
+- [ ] **Step 7: Commit comment updates**
 
 ```powershell
-git add .\Lib.Db\Configuration\LibDbOptions.cs .\Lib.Db\Extensions\HybridCacheExtensions.cs .\Lib.Db\Contracts\Schema\SchemaContracts.cs .\Lib.Db\Schema\SchemaService.cs
+git add .\Lib.Db\Configuration\LibDbOptions.cs .\Lib.Db\Extensions\HybridCacheExtensions.cs .\Lib.Db\Extensions\ServiceRegistrationHelpers.cs .\Lib.Db\Contracts\Schema\SchemaContracts.cs .\Lib.Db\Schema\SchemaService.cs .\Verification\projects\Lib.Db.IntegrationTests\Unit\CacheHostingCoverageTests.cs
 git commit -m "docs: clarify provider-neutral cache semantics in code"
 ```
 
@@ -871,6 +1273,8 @@ builder.Services.AddLibDbHybridCache(options =>
 ```
 
 Lib.Db never logs provider connection strings. Logs and diagnostics may report provider type presence only.
+
+Unknown custom providers are reported as `UnverifiedDistributedCache` unless the application explicitly marks the provider type as trusted through Lib.Db topology options.
 ````
 
 Add this shared-memory opt-in section:
@@ -891,6 +1295,8 @@ builder.Services.AddLibDbSharedMemoryCache();
 ```
 
 Use this only when file permissions, local process trust boundaries, cleanup behavior, and OS-specific mutex behavior are acceptable for the deployment.
+
+Do not combine `AddLibDbSharedMemoryCache()` with Redis, SQL Server, Postgres, NCache, or another `IDistributedCache` registration. Lib.Db rejects that mixed topology by default.
 ````
 
 - [ ] **Step 3: Update API reference**
@@ -965,6 +1371,12 @@ builder.Services.AddLibDbHybridCache(options =>
 Redis credentials belong to the host application configuration. Lib.Db must not print them.
 ````
 
+Add this query-cache keying note near the query cache examples:
+
+```markdown
+When caching query results, include every result-affecting dimension in the application-owned cache key: tenant, user or authorization scope, culture, feature flags, parameter shape, freshness window, and schema/data version. Lib.Db does not infer those dimensions from SQL text.
+```
+
 - [ ] **Step 6: Update history**
 
 Add this entry to `docs/history.md`:
@@ -985,17 +1397,17 @@ git commit -m "docs: document provider-neutral cache configuration"
 **Files:**
 - Verify all changed files
 
-- [ ] **Step 1: Run focused unit tests**
+- [ ] **Step 1: Run focused non-DB tests**
 
 Run:
 
 ```powershell
-dotnet test .\Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~CacheHostingCoverageTests|FullyQualifiedName~ServiceRegistrationHelpersTests|FullyQualifiedName~SchemaFlushServiceTests|FullyQualifiedName~RuntimeUtilityCoverageTests" -p:LIBDB_SKIP_TEST_ENV_GUARD=true
+dotnet test .\Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~CacheHostingCoverageTests|FullyQualifiedName~ServiceRegistrationHelpersTests|FullyQualifiedName~SchemaFlushServiceTests|FullyQualifiedName~DbDiagnosticsTests|FullyQualifiedName~RuntimeUtilityCoverageTests" -p:LIBDB_SKIP_TEST_ENV_GUARD=true
 ```
 
 Expected: PASS.
 
-- [ ] **Step 2: Run full non-database guard-safe test pass**
+- [ ] **Step 2: Run full guard-safe project test pass**
 
 Run:
 
@@ -1003,9 +1415,19 @@ Run:
 dotnet test .\Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj -p:LIBDB_SKIP_TEST_ENV_GUARD=true
 ```
 
-Expected: PASS, except tests that intentionally require DB fixtures may skip or fail based on local fixture policy. If DB-backed tests fail because the verification database is not configured, run the focused tests from Step 1 and record the environment limitation in the final handoff.
+Expected: PASS. Do not mark this step complete with broad "DB tests may fail" wording. If the local verification database is unavailable, stop and record the exact failing test names and environment guard message, then run Step 3 as the DB-required pass when the fixture is available.
 
-- [ ] **Step 3: Run diff whitespace check**
+- [ ] **Step 3: Run DB-required verification separately**
+
+Run the repository's verification script for integration tests:
+
+```powershell
+pwsh -NoProfile -File .\Verification\scripts\Invoke-Tests.ps1 -Target IntegrationTests
+```
+
+This script prints only environment variable presence for known verification connection variables. Record whether tests passed, skipped by explicit fixture policy, or failed because the verification database was unavailable.
+
+- [ ] **Step 4: Run diff whitespace check**
 
 Run:
 
@@ -1015,19 +1437,29 @@ git diff --check
 
 Expected: no output.
 
-- [ ] **Step 4: Scan for obsolete cache claims**
+- [ ] **Step 5: Scan for obsolete cache claims**
 
 Run:
 
 ```powershell
-rg -n "MemoryDistributedCache 사용|Windows에서는 true|기본값.*Windows|SharedMemoryCache.*default|implicit MemoryDistributedCache|자동 활성화" Lib.Db docs Verification
+rg -n "MemoryDistributedCache 사용|Windows에서는 true|기본값.*Windows|SharedMemoryCache.*default|implicit MemoryDistributedCache|자동 활성화|ProviderBackedL[2].*unknown|unknown.*ProviderBackedL[2]|HasProviderBackedL[2]" Lib.Db Verification docs -g "!docs/superpowers/**"
 ```
 
 Expected: no remaining claim that Lib.Db defaults to shared memory or implicit `MemoryDistributedCache`.
 
-- [ ] **Step 5: Commit final cleanup if needed**
+- [ ] **Step 6: Scan diagnostics for secret-bearing fields**
 
-If Step 4 finds stale wording and the wording is corrected:
+Run:
+
+```powershell
+rg -n "ConnectionString|Password|Pwd|User Id|UID|cache key|CacheKey|payload" Lib.Db\Diagnostics Lib.Db\Extensions Verification\projects\Lib.Db.IntegrationTests\Diagnostics
+```
+
+Expected: matches are either tests asserting redaction or code that references key names without logging values. No diagnostics path may serialize raw provider options, raw cache keys, or cache payloads.
+
+- [ ] **Step 7: Commit final cleanup if needed**
+
+If Step 5 or Step 6 finds stale wording or unsafe diagnostics and the issue is corrected:
 
 ```powershell
 git add .\Lib.Db .\Verification .\docs
@@ -1040,7 +1472,10 @@ git commit -m "chore: remove stale cache topology wording"
 - Do not add Redis, SQL Server distributed cache, Postgres, or NCache package references to `Lib.Db`. Those providers belong to the host application.
 - Do not log provider connection strings or raw cache keys.
 - Do not treat `MemoryDistributedCache` as production L2. It is local memory behind the `IDistributedCache` interface.
-- Preserve caller-owned `IDistributedCache` registrations with `TryAdd` behavior.
+- Preserve caller-owned `IDistributedCache` registrations in provider-neutral core registration.
+- Reject `AddLibDbSharedMemoryCache()` when a caller-owned `IDistributedCache` exists before or after opt-in; do not silently fall through with `TryAdd`.
+- Treat unknown `IDistributedCache` implementations as unverified unless the host explicitly trusts the provider type.
+- Fail fast when `EnableSharedMemoryCache = true` or `EnableEpochCoordination = true` would create partial shared-memory behavior without explicit shared-memory registration.
 - Keep `WithCacheAsync` and `WithCacheListAsync` as opt-in caller-owned query result cache helpers.
 
 ## Handoff

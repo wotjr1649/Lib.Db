@@ -20,8 +20,9 @@ The current design is high-performance on Windows-local multi-process deployment
 Official platform notes checked on 2026-05-21:
 
 - Microsoft `HybridCache` uses a configured `IDistributedCache` as secondary L2 storage. Without an `IDistributedCache`, it still provides in-process caching and stampede protection.
-- Microsoft distributed cache guidance treats Redis, SQL Server, Postgres, NCache, and distributed memory cache as provider choices behind `IDistributedCache`.
-- Named `MemoryMappedFile.CreateOrOpen` APIs carry Windows platform support annotations.
+- Microsoft `HybridCache` key/tag invalidation affects the current server and secondary out-of-process storage. Other servers' in-memory L1 entries are not affected by that invalidation alone.
+- Microsoft distributed cache guidance treats Redis, SQL Server, Postgres, NCache, and distributed memory cache as provider choices behind `IDistributedCache`, but explicitly says `Distributed Memory Cache` is not an actual distributed cache.
+- The current Lib.Db shared-memory implementation uses file-backed `MemoryMappedFile.CreateFromFile` and cache files. Microsoft memory-mapped file docs distinguish persisted file-backed maps from non-persisted named maps; named `MemoryMappedFile.CreateOrOpen` overloads carry Windows platform support annotations and should not be used as the basis for a universal cross-platform design.
 - Microsoft `Mutex` docs warn that named mutexes are filesystem-backed on Unix-like systems, can be interfered with by other users, and currently cannot be access-restricted there in the same way as Windows.
 
 Reference links:
@@ -32,10 +33,11 @@ Reference links:
 - `MemoryDistributedCache` API: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.caching.distributed.memorydistributedcache
 - `MemoryMappedFile` API: https://learn.microsoft.com/en-us/dotnet/api/system.io.memorymappedfiles.memorymappedfile
 - Memory-mapped files overview: https://learn.microsoft.com/en-us/dotnet/standard/io/memory-mapped-files
+- `Mutex` API: https://learn.microsoft.com/en-us/dotnet/api/system.threading.mutex
 
 ## Problem
 
-Lib.Db wants to be a general-purpose library that offers the same API and semantics on Windows, Linux, and macOS. The current shared-memory cache conflicts with that goal in four ways.
+Lib.Db wants to be a general-purpose library that offers the same API and semantics on Windows, Linux, and macOS. The current shared-memory cache conflicts with that goal in six ways.
 
 First, OS behavior differs. `EnableSharedMemoryCache = null` enables shared memory on Windows but disables it on Linux/macOS. This is operationally honest, but it means a default Lib.Db install does not have the same cache topology on every OS.
 
@@ -45,6 +47,10 @@ Third, failure modes are subtle. If named mutex creation fails and the implement
 
 Fourth, implicit fallback can misrepresent topology. Registering `MemoryDistributedCache` as the default `IDistributedCache` makes APIs see an L2-like service, but it is only in-process memory. That can create duplicate local caching and can mislead users into believing they have cross-process or cross-host L2.
 
+Fifth, a partial shared-memory mode is possible if configuration sets `EnableSharedMemoryCache = true` but the application does not call an explicit shared-memory registration method. The library can then enable slot allocation or epoch coordination without a matching `IDistributedCache` adapter. That mixed state is harder to diagnose than a startup failure.
+
+Sixth, treating every unknown `IDistributedCache` implementation as production L2 is too optimistic. A test double, local wrapper, or in-memory adapter can implement the interface without providing cross-process or cross-host semantics. Provider detection must distinguish verified provider-backed L2 from unverified distributed-cache-shaped services.
+
 ## Goals
 
 - Make Lib.Db core OS-neutral by default.
@@ -52,9 +58,11 @@ Fourth, implicit fallback can misrepresent topology. Registering `MemoryDistribu
 - Use `HybridCache` as the primary cache API.
 - Use provider-backed `IDistributedCache` only when the application explicitly registers a real provider.
 - Avoid registering `MemoryDistributedCache` as an implicit L2 for production-style defaults.
+- Do not report unknown `IDistributedCache` implementations as verified production L2 unless the application explicitly marks them trusted or they match a known provider family.
 - Keep query result caching opt-in and caller-owned.
 - Preserve a migration path for Windows users who benefit from local shared-memory cache.
 - Make cache topology observable without printing secrets or connection strings.
+- Fail fast on contradictory cache configuration instead of silently composing partial topology.
 
 ## Non-Goals
 
@@ -70,9 +78,9 @@ Lib.Db v2.4.0 should move to a provider-neutral cache model:
 
 1. Core schema caching is always local and OS-neutral.
 2. `HybridCache` is always available for schema cache and user-facing helpers.
-3. Provider-backed L2 is available only when a real `IDistributedCache` provider is registered by the host application.
+3. Provider-backed L2 is available only when a verified or explicitly trusted `IDistributedCache` provider is registered by the host application.
 4. If no provider exists, Lib.Db uses L1-only `HybridCache` behavior and reports topology as `LocalOnly`.
-5. `SharedMemoryCache` is removed from the default core registration path and moved behind explicit opt-in.
+5. `SharedMemoryCache` is removed from the default core registration path and moved behind explicit API opt-in.
 6. Shared-memory support is documented as Windows-local optimization or experimental cross-platform adapter, not as default general-purpose L2.
 
 ## Proposed Cache Topologies
@@ -91,16 +99,16 @@ Behavior:
 
 This is the safest default.
 
-### ProviderBackedL2
+### VerifiedProviderBackedL2
 
-Used when the application explicitly registers a supported `IDistributedCache` provider before Lib.Db cache registration.
+Used when the application explicitly registers a supported or explicitly trusted `IDistributedCache` provider before Lib.Db cache registration.
 
 Examples:
 
 - Redis via `Microsoft.Extensions.Caching.StackExchangeRedis`
 - SQL Server via `Microsoft.Extensions.Caching.SqlServer`
 - Postgres via `Microsoft.Extensions.Caching.Postgres`
-- NCache or another provider implementing `IDistributedCache`
+- NCache or another provider that the host explicitly marks as trusted
 
 Behavior:
 
@@ -108,16 +116,37 @@ Behavior:
 - Schema cache payloads can use L2 when serialization is configured safely.
 - Query result caching remains opt-in.
 - Provider configuration, network security, credentials, eviction, persistence, and monitoring are application/operator responsibilities.
+- Diagnostics expose `LibDbCacheTopology.VerifiedProviderBackedL2`.
+
+### UnverifiedDistributedCache
+
+Used when an `IDistributedCache` service is present but Lib.Db cannot prove it is a real shared L2 provider.
+
+Examples:
+
+- test doubles
+- local wrappers over `MemoryDistributedCache`
+- custom implementations with unknown deployment semantics
+
+Behavior:
+
+- `HybridCache` may still use the registered `IDistributedCache` because this is how Microsoft `HybridCache` composes with DI.
+- Lib.Db diagnostics must not claim production L2 or cross-host coherence.
+- Schema cache code must treat corrupt or version-incompatible provider payloads as misses.
+- The application can opt into trusted-provider classification through an explicit Lib.Db API or option if the custom provider is known to be shared and secure in that deployment.
+- Diagnostics expose `LibDbCacheTopology.UnverifiedDistributedCache`.
 
 ### SharedMemoryOptIn
 
-Used only when the application explicitly opts into Lib.Db's shared-memory adapter.
+Used only when the application explicitly opts into Lib.Db's shared-memory adapter by calling `AddLibDbSharedMemoryCache()`.
 
 Behavior:
 
 - Not registered by default.
 - Must not be advertised as universal L2.
-- Should be packaged separately or guarded by an explicit option such as `EnableSharedMemoryCache = true`.
+- `EnableSharedMemoryCache = true` is not sufficient by itself. If the option is set without the explicit registration marker, startup must fail with a non-secret diagnostic that names `AddLibDbSharedMemoryCache()`.
+- `AddLibDbSharedMemoryCache()` must reject any other `IDistributedCache` registration by default, including providers registered before or after the opt-in call. Silent `TryAddSingleton<IDistributedCache>` would create a mixed state where the provider stays active while shared-memory slot allocation replaces core coordination.
+- Should be packaged separately or guarded by an explicit option and explicit API.
 - Should surface a startup warning on non-Windows until Linux/macOS file locking and permissions are verified in CI.
 
 ## Provider Detection and Defensive L2 Behavior
@@ -128,18 +157,47 @@ Recommended behavior:
 
 - Do not auto-register `MemoryDistributedCache` as Lib.Db's default `IDistributedCache`.
 - Do not treat `MemoryDistributedCache` as provider-backed L2 unless the user explicitly asks for development/test memory L2.
+- Do not treat unknown `IDistributedCache` implementations as verified provider L2 by default.
 - Add an internal cache topology detector:
   - `NoDistributedCache`: no `IDistributedCache` registered
   - `LocalMemoryDistributedCache`: `MemoryDistributedCache` registered
-  - `ProviderBackedDistributedCache`: Redis, SQL Server, Postgres, NCache, or unknown external implementation
+  - `VerifiedProviderBackedDistributedCache`: Redis, SQL Server, Postgres, NCache, or an explicitly trusted custom provider
+  - `UnverifiedDistributedCache`: an `IDistributedCache` exists, but Lib.Db cannot prove production L2 semantics
   - `SharedMemoryDistributedCache`: explicit Lib.Db adapter
 - Make topology observable through diagnostics without exposing provider connection strings.
 
-The defensive rule:
+Defensive rules:
 
-If there is no provider-backed `IDistributedCache`, Lib.Db must run as L1-only and must not claim distributed or L2 semantics.
+- If there is no provider-backed `IDistributedCache`, Lib.Db must run as L1-only and must not claim distributed or L2 semantics.
+- If a provider is present but unverified, Lib.Db may interoperate with it through `HybridCache`, but diagnostics must report `UnverifiedDistributedCache` and `HasVerifiedProviderBackedL2 = false`.
+- If `EnableSharedMemoryCache = true` is set without `AddLibDbSharedMemoryCache()`, Lib.Db must fail fast. This prevents slot allocation, epoch coordination, or cleanup services from running without the cache adapter they coordinate.
+- If `AddLibDbSharedMemoryCache()` is combined with another `IDistributedCache` registration in either order, Lib.Db must fail fast by default. The caller must choose either host-provided L2 or Lib.Db shared memory.
+- If `EnableEpochCoordination = true` is set without shared-memory opt-in, Lib.Db must fail fast. It must not auto-enable file epoch coordination merely because the OS is Windows.
 
 This avoids a common false confidence failure: local testing appears to have L2, but production scale-out lacks coherent shared cache behavior.
+
+## Diagnostics Contract
+
+Cache topology must be visible because provider-neutral behavior is otherwise easy to misread.
+
+Lib.Db should expose a small topology snapshot through diagnostics, health checks, or startup logging:
+
+- topology kind
+- whether verified provider-backed L2 is active
+- provider type name only, never provider options or connection strings
+- shared-memory opt-in state
+- epoch coordination state
+- warnings for unverified providers, local memory providers, or disabled L2
+
+Diagnostics must not include:
+
+- raw connection strings
+- provider credentials
+- raw cache keys
+- tenant/user identifiers unless already redacted or hashed
+- serialized cache payloads
+
+This snapshot is for operational clarity, not authorization. It must not be documented as a security boundary.
 
 ## Provider Responsibilities
 
@@ -147,7 +205,7 @@ Provider-backed caching should follow these rules.
 
 ### Registration
 
-The host application registers the provider before Lib.Db cache registration:
+The host application registers the provider before Lib.Db cache registration and before Lib.Db cache helpers are used:
 
 ```csharp
 builder.Services.AddStackExchangeRedisCache(options =>
@@ -166,6 +224,13 @@ builder.Services.AddLibDbHybridCache(options =>
 ```
 
 Lib.Db must not read or print the provider connection string. Diagnostics should report only provider type and presence.
+
+Lib.Db should also avoid multiple competing `HybridCache` configuration paths. If `AddLibDb()` internally registers baseline `HybridCache` serializers and the application later calls `AddLibDbHybridCache()`, the implementation must compose options predictably and must not erase caller settings. The public guidance should show one clear order:
+
+1. register the host `IDistributedCache` provider, if any
+2. register Lib.Db
+3. configure Lib.Db `HybridCache` options once
+4. optionally call `AddLibDbSharedMemoryCache()` instead of a host provider, not in addition to one
 
 ### Keying
 
@@ -225,7 +290,7 @@ The current shared-memory design increases local attack surface:
 
 These risks are not acceptable as default behavior for a provider-neutral library.
 
-### ProviderBackedL2 Risks
+### VerifiedProviderBackedL2 Risks
 
 Moving L2 to providers does not remove all risk. It moves risk to a clearer operational boundary:
 
@@ -236,6 +301,17 @@ Moving L2 to providers does not remove all risk. It moves risk to a clearer oper
 - provider outages must degrade to DB reads or local cache misses without corrupting results
 
 Lib.Db should provide safe defaults, clear diagnostics, and opt-in APIs rather than trying to own every provider's security model.
+
+### Unverified Provider Risks
+
+An `IDistributedCache` interface alone does not prove distributed behavior. From a security and correctness perspective, an unknown implementation can be:
+
+- a test double with no persistence
+- an in-process memory cache wrapped behind the interface
+- a provider with weak transport security or broad tenant visibility
+- a provider that serializes values differently from Lib.Db expectations
+
+Lib.Db should therefore classify unknown providers as unverified until the host explicitly trusts them. This avoids overstating guarantees in diagnostics and reduces the chance that operators rely on a cache topology that the library did not actually validate.
 
 ## Code Review Assessment
 
@@ -273,6 +349,7 @@ Core should keep:
 - query cache helper methods
 - cache key and payload version helpers
 - provider/topology diagnostics
+- cache topology health/diagnostics snapshot
 
 Core should remove or stop default-registering:
 
@@ -349,12 +426,15 @@ Native AOT behavior should become clearer:
 
 1. Add topology diagnostics and tests.
 2. Stop implicit `MemoryDistributedCache` registration in the provider-neutral path.
-3. Add docs that no provider means local-only L1.
-4. Mark `SharedMemoryCache` as advanced opt-in.
-5. Move shared-memory implementation to optional package or isolate it behind a compatibility registration method.
-6. Update examples to show Redis/SQL/Postgres provider registration.
-7. Add Linux CI verification that core works without shared memory.
-8. Add provider-backed integration tests using one portable provider where feasible.
+3. Add fail-fast guards for `EnableSharedMemoryCache = true` without explicit opt-in.
+4. Add fail-fast guards for `AddLibDbSharedMemoryCache()` plus an existing `IDistributedCache` provider.
+5. Classify unknown `IDistributedCache` implementations as unverified unless explicitly trusted.
+6. Add docs that no provider means local-only L1.
+7. Mark `SharedMemoryCache` as advanced opt-in.
+8. Move shared-memory implementation to optional package or isolate it behind a compatibility registration method.
+9. Update examples to show Redis/SQL/Postgres provider registration and tenant/auth-aware query cache keys.
+10. Add Linux CI verification that core works without shared memory.
+11. Add provider-backed integration tests using one portable provider where feasible.
 
 ## Testing Strategy
 
@@ -363,10 +443,17 @@ Required tests:
 - no provider registers local-only topology
 - no provider does not register implicit `MemoryDistributedCache`
 - explicit `MemoryDistributedCache` is reported as local-memory development provider, not production L2
-- Redis/SQL/Postgres provider registration is detected as provider-backed L2
+- Redis/SQL/Postgres provider registration is detected as verified provider-backed L2
+- unknown `IDistributedCache` is reported as unverified and `HasVerifiedProviderBackedL2 = false`
+- explicit trusted provider override changes an unknown provider to verified provider-backed L2
 - HybridCache works without `IDistributedCache`
+- `EnableSharedMemoryCache = true` without `AddLibDbSharedMemoryCache()` fails fast with a non-secret error
+- `AddLibDbSharedMemoryCache()` fails fast when another `IDistributedCache` provider is registered before or after shared-memory opt-in
+- `AddLibDbSharedMemoryCache()` exercises the real options pipeline and `PostConfigure` path, not only manually injected `IOptions<LibDbOptions>`
 - invalid provider payload is treated as miss
+- provider outage is treated as miss or fallback to DB/local cache, not as corrupted result
 - schema flush invalidates local snapshot and provider entry
+- topology diagnostics/health output is redacted and contains no provider secrets or raw cache keys
 - shared-memory package is not registered by default
 - shared-memory opt-in on non-Windows either fails clearly or reports experimental status
 
@@ -400,7 +487,8 @@ Default behavior:
 
 Opt-in behavior:
 
-- provider-backed L2 through registered `IDistributedCache`
+- verified provider-backed L2 through registered and recognized/trusted `IDistributedCache`
 - shared-memory adapter only as advanced/optional compatibility feature
+- unverified `IDistributedCache` interop is allowed, but diagnostics must not claim production L2
 
 This design reduces OS-specific code in the core package, lowers local security risk, makes cache topology honest, and keeps the important performance wins where they matter most: in-process schema lookup and HybridCache read-through behavior.
