@@ -13,6 +13,7 @@ using Lib.Db.Hosting;
 using Lib.Db.Infrastructure;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Hybrid;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using System.Reflection;
 
@@ -194,6 +195,70 @@ public sealed class CacheHostingCoverageTests
         allocator.SlotId.Should().Be(-1);
         allocator.IsLeader.Should().BeFalse();
         allocator.HasSlot.Should().BeFalse();
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportMissingDistributedCacheAsLocalOnly()
+    {
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache: null);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.LocalOnly);
+        state.HasVerifiedProviderBackedL2.Should().BeFalse();
+        state.ProviderTypeName.Should().BeNull();
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportMemoryDistributedCacheAsLocalMemory()
+    {
+        var cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.LocalMemoryDistributedCache);
+        state.HasVerifiedProviderBackedL2.Should().BeFalse();
+        state.ProviderTypeName.Should().Contain(nameof(MemoryDistributedCache));
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportSharedMemoryCacheAsSharedMemoryOptIn()
+    {
+        string basePath = CreateTempDirectory();
+        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));
+        using var cache = new SharedMemoryCache(
+            Options.Create(new SharedMemoryCacheOptions { BasePath = basePath }),
+            loggerFactory.CreateLogger<SharedMemoryCache>());
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.SharedMemoryOptIn);
+        state.HasVerifiedProviderBackedL2.Should().BeFalse();
+        state.ProviderTypeName.Should().Contain(nameof(SharedMemoryCache));
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportUnknownDistributedCacheAsUnverified()
+    {
+        var cache = new RecordingDistributedCache();
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.UnverifiedDistributedCache);
+        state.HasVerifiedProviderBackedL2.Should().BeFalse();
+        state.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportTrustedCustomProviderAsVerifiedL2()
+    {
+        var cache = new RecordingDistributedCache();
+        LibDbCacheTopologyOptions options = new();
+        options.TrustedProviderTypeNames.Add(cache.GetType().FullName!);
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache, options);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.VerifiedProviderBackedL2);
+        state.HasVerifiedProviderBackedL2.Should().BeTrue();
+        state.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
     }
 
     [Fact]
@@ -692,5 +757,55 @@ public sealed class CacheHostingCoverageTests
     {
         public IServiceScope CreateScope()
             => throw new InvalidOperationException("scope failure");
+    }
+
+    private sealed class RecordingDistributedCache : IDistributedCache
+    {
+        private readonly Dictionary<string, byte[]> _values = new(StringComparer.Ordinal);
+
+        public byte[]? Get(string key)
+        {
+            return _values.TryGetValue(key, out byte[]? value) ? value : null;
+        }
+
+        public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
+        {
+            return Task.FromResult(Get(key));
+        }
+
+        public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
+        {
+            _values[key] = value;
+        }
+
+        public Task SetAsync(
+            string key,
+            byte[] value,
+            DistributedCacheEntryOptions options,
+            CancellationToken token = default)
+        {
+            Set(key, value, options);
+            return Task.CompletedTask;
+        }
+
+        public void Refresh(string key)
+        {
+        }
+
+        public Task RefreshAsync(string key, CancellationToken token = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Remove(string key)
+        {
+            _values.Remove(key);
+        }
+
+        public Task RemoveAsync(string key, CancellationToken token = default)
+        {
+            Remove(key);
+            return Task.CompletedTask;
+        }
     }
 }
