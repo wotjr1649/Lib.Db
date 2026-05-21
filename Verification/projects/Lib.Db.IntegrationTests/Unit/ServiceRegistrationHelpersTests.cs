@@ -135,6 +135,23 @@ public sealed class ServiceRegistrationHelpersTests
     }
 
     [Fact]
+    public async Task AddLibDbSharedMemoryCache_ShouldRejectProviderAddedAfterOptIn_WhenHostStarts()
+    {
+        HostApplicationBuilder builder = Host.CreateApplicationBuilder();
+        AddOptions(builder.Services, CreateOptions(enableSharedMemoryCache: true));
+        builder.Services.AddLibDbSharedMemoryCache();
+        builder.Services.AddSingleton<IDistributedCache>(new RecordingDistributedCache());
+
+        using IHost host = builder.Build();
+
+        Func<Task> act = () => host.StartAsync();
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*IDistributedCache*after AddLibDbSharedMemoryCache*");
+    }
+
+    [Fact]
     public void AddLibDb_ShouldNotRegisterDistributedCache_WhenProviderIsNotConfigured()
     {
         ServiceCollection services = new();
@@ -149,6 +166,30 @@ public sealed class ServiceRegistrationHelpersTests
         using ServiceProvider provider = services.BuildServiceProvider();
 
         provider.GetService<IDistributedCache>().Should().BeNull();
+    }
+
+    [Fact]
+    public void AddLibDb_ShouldPreserveExistingDistributedCacheProvider()
+    {
+        ServiceCollection services = new();
+        RecordingDistributedCache externalProvider = new();
+
+        services.AddSingleton<IDistributedCache>(externalProvider);
+        services.AddLibDb(options =>
+        {
+            LibDbOptions configured = CreateOptions(enableSharedMemoryCache: null);
+            options.ConnectionStringNames = configured.ConnectionStringNames;
+            options.ConnectionStrings = configured.ConnectionStrings;
+        });
+
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IDistributedCache>().Should().BeSameAs(externalProvider);
+        provider.GetServices<IDistributedCache>().Should().ContainSingle();
+
+        LibDbCacheTopologyState topology = LibDbCacheTopologyDetector.Detect(provider);
+        topology.Kind.Should().Be(LibDbCacheTopologyKind.UnverifiedDistributedCache);
+        topology.HasVerifiedProviderBackedL2.Should().BeFalse();
     }
 
     [Fact]
@@ -198,10 +239,15 @@ public sealed class ServiceRegistrationHelpersTests
     {
         ServiceCollection services = new();
         services.AddLogging();
-        services.AddSingleton<IOptions<LibDbOptions>>(Options.Create(options));
-        services.AddSingleton(options);
+        AddOptions(services, options);
 
         return services;
+    }
+
+    private static void AddOptions(IServiceCollection services, LibDbOptions options)
+    {
+        services.AddSingleton<IOptions<LibDbOptions>>(Options.Create(options));
+        services.AddSingleton(options);
     }
 
     private static LibDbOptions CreateOptions(bool? enableSharedMemoryCache)
@@ -230,5 +276,38 @@ public sealed class ServiceRegistrationHelpersTests
             "Server=(localdb)\\MSSQLLocalDB;Database=SecondaryDb;Integrated Security=True;TrustServerCertificate=True;Encrypt=False";
 
         return options;
+    }
+
+    private sealed class RecordingDistributedCache : IDistributedCache
+    {
+        public byte[]? Get(string key) => null;
+
+        public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
+            => Task.FromResult<byte[]?>(null);
+
+        public void Refresh(string key)
+        {
+        }
+
+        public Task RefreshAsync(string key, CancellationToken token = default)
+            => Task.CompletedTask;
+
+        public void Remove(string key)
+        {
+        }
+
+        public Task RemoveAsync(string key, CancellationToken token = default)
+            => Task.CompletedTask;
+
+        public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
+        {
+        }
+
+        public Task SetAsync(
+            string key,
+            byte[] value,
+            DistributedCacheEntryOptions options,
+            CancellationToken token = default)
+            => Task.CompletedTask;
     }
 }

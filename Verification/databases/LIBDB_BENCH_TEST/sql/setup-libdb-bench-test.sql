@@ -1,6 +1,6 @@
 -- ============================================================================
 -- File: setup-libdb-bench-test.sql
--- Purpose: Dedicated BenchmarkDotNet SQL Server database for Lib.Db v2.3.0.
+-- Purpose: Dedicated BenchmarkDotNet SQL Server database for Lib.Db verification.
 -- Target DB: LIBDB_BENCH_TEST
 -- Secret: set SQLCMDPASSWORD in the environment before running sqlcmd.
 -- Run: sqlcmd -S localhost -U SA -N o -i setup-libdb-bench-test.sql -f 65001

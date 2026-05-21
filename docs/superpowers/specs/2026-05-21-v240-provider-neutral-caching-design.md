@@ -448,7 +448,7 @@ Required tests:
 - explicit trusted provider override changes an unknown provider to verified provider-backed L2
 - HybridCache works without `IDistributedCache`
 - `EnableSharedMemoryCache = true` without `AddLibDbSharedMemoryCache()` fails fast with a non-secret error
-- `AddLibDbSharedMemoryCache()` fails fast when another `IDistributedCache` provider is registered before or after shared-memory opt-in
+- `AddLibDbSharedMemoryCache()` fails fast when another `IDistributedCache` provider is registered before shared-memory opt-in, and fails Generic Host startup when another provider is added after opt-in. This is the strongest enforceable guarantee with Microsoft DI because later registrations of the same service type can override single-service resolution.
 - `AddLibDbSharedMemoryCache()` exercises the real options pipeline and `PostConfigure` path, not only manually injected `IOptions<LibDbOptions>`
 - invalid provider payload is treated as miss
 - provider outage is treated as miss or fallback to DB/local cache, not as corrupted result

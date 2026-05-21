@@ -162,4 +162,4 @@ foreach ($target in $targets) {
     Assert-TargetCoverage -Classes $classes -DisplayName $target.DisplayName -Prefix $target.Prefix
 }
 
-Write-Host 'All Lib.Db v2.3.0 coverage gates passed.'
+Write-Host 'All Lib.Db v2.4.0 coverage gates passed.'

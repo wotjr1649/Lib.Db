@@ -24,6 +24,16 @@ Release-grade maintainer validation covers:
 6. BenchmarkDotNet comparison between the generated-accessor baseline, runtime object streaming, and registered runtime fast-path.
 7. Secret-pattern scanning of generated verification artifacts before preserving or sharing reports.
 8. Generated artifact tracking gates so benchmark, test, coverage, and AOT outputs are not committed as source.
+9. Provider-neutral caching gates for v2.4.0: `AddLibDb()` preserves an existing host-owned `IDistributedCache`, `AddLibDbSharedMemoryCache()` rejects an existing provider at registration time, and providers added after shared-memory opt-in fail Generic Host startup through the hosted validator.
+
+## Provider-Neutral Caching Release Gate
+
+For the v2.4.0 provider-neutral caching change, release approval requires a clean verification environment before the full suite is treated as authoritative:
+
+- The working tree must not contain unrelated tracked deletions or generated skill/artifact churn that can break repository-level tests.
+- Required local verification connection variables must be configured, but logs may print only key names and presence, never connection string values.
+- Focused cache registration tests must pass, including external `IDistributedCache` preservation and post-opt-in conflict rejection at Host start.
+- The full integration test suite must be rerun after the environment is clean. A run blocked by missing local DB configuration or unrelated repository state is evidence of a blocked gate, not a passed release.
 
 ## Local Bootstrap
 

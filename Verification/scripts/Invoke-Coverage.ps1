@@ -77,7 +77,7 @@ function Get-LatestCoverageFile {
 $resultsPath = Resolve-RepoChildPath -PathValue $ResultsDirectory -Name 'ResultsDirectory'
 $reportPath = Resolve-RepoChildPath -PathValue $ReportDirectory -Name 'ReportDirectory'
 
-Write-Host 'Lib.Db v2.3.0 coverage run started.'
+Write-Host 'Lib.Db v2.4.0 coverage run started.'
 Write-Host "ResultsDirectory=$ResultsDirectory"
 Write-Host "ReportDirectory=$ReportDirectory"
 
@@ -126,4 +126,4 @@ if (-not $SkipGate) {
     }
 }
 
-Write-Host 'Lib.Db v2.3.0 coverage run completed.'
+Write-Host 'Lib.Db v2.4.0 coverage run completed.'

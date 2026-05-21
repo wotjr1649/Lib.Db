@@ -22,7 +22,7 @@ The implementation must satisfy these decisions:
 - Existing provider registrations must be preserved.
 - `SharedMemoryCache` must move behind an explicit opt-in registration.
 - `EnableSharedMemoryCache = true` without `AddLibDbSharedMemoryCache()` must fail fast instead of enabling partial shared-memory behavior.
-- `AddLibDbSharedMemoryCache()` must reject any other `IDistributedCache` registration by default, regardless of registration order.
+- `AddLibDbSharedMemoryCache()` must reject an existing `IDistributedCache` provider at registration time and must reject a provider added after opt-in at Generic Host startup. Microsoft DI resolves the last single-service registration, so later registrations cannot be intercepted at the original opt-in call site.
 - Unknown `IDistributedCache` implementations must be reported as unverified, not as verified provider-backed L2.
 - Epoch coordination defaults to disabled unless shared memory or epoch coordination is explicitly enabled.
 - Diagnostics and docs must describe topology without printing connection strings, provider credentials, or raw cache keys.
@@ -51,7 +51,7 @@ Create:
   Internal marker registered only by `AddLibDbSharedMemoryCache()` so diagnostics and guards can tell explicit opt-in from a lone configuration flag.
 
 - `Lib.Db/Caching/LibDbSharedMemoryCacheStartupValidator.cs`
-  Internal hosted validator that detects providers added after `AddLibDbSharedMemoryCache()` and fails host startup before mixed topology can run.
+  Internal hosted validator that detects providers added after `AddLibDbSharedMemoryCache()` and fails Generic Host startup before mixed topology can run. Non-hosted DI users must either avoid the mixed registration or explicitly execute the registered validator in their test/tool harness.
 
 - `Lib.Db/Diagnostics/LibDbCacheTopologyDiagnostics.cs`
   Redacted topology snapshot used by startup logs, health check data, or diagnostic endpoints.
@@ -1416,6 +1416,8 @@ dotnet test .\Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTe
 ```
 
 Expected: PASS. Do not mark this step complete with broad "DB tests may fail" wording. If the local verification database is unavailable, stop and record the exact failing test names and environment guard message, then run Step 3 as the DB-required pass when the fixture is available.
+
+This step is a release gate only when the repository state is clean enough for repository-level tests. Unrelated tracked deletions, missing consumer skill files, or generated artifact churn must be restored or intentionally excluded before the result can approve v2.4.0.
 
 - [ ] **Step 3: Run DB-required verification separately**
 

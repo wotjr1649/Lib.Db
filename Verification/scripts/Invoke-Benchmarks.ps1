@@ -194,7 +194,7 @@ function Assert-BenchmarkReportHasMeasurements {
     }
 }
 
-Write-Host 'Lib.Db v2.3.0 benchmark run started.'
+Write-Host 'Lib.Db v2.4.0 benchmark run started.'
 Assert-BenchmarkConnectionConfigured
 Write-Host "SetupMode=$SetupMode"
 Write-Host "BenchmarkJob=$Job"
@@ -272,11 +272,11 @@ if (Test-Path -LiteralPath $artifactRoot) {
 }
 
 if ($skippedGates.Count -gt 0) {
-    Write-Warning "Lib.Db v2.3.0 benchmark completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade benchmark evidence."
+    Write-Warning "Lib.Db v2.4.0 benchmark completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade benchmark evidence."
     if (-not $AllowPartial) {
         throw "Partial benchmark runs require -AllowPartial so CI cannot mistake them for release-grade evidence."
     }
 }
 else {
-    Write-Host 'Lib.Db v2.3.0 benchmark run completed.'
+    Write-Host 'Lib.Db v2.4.0 benchmark run completed.'
 }

@@ -1,6 +1,6 @@
 -- ============================================================================
 -- File: setup-libdb-stress-test.sql
--- Purpose: Isolated stress/load database for Lib.Db v2.3.0.
+-- Purpose: Isolated stress/load database for Lib.Db verification.
 -- Target DB: LIBDB_STRESS_TEST
 -- Secret: set SQLCMDPASSWORD in the environment before running sqlcmd.
 -- Run: sqlcmd -S localhost -U SA -N o -i setup-libdb-stress-test.sql -f 65001

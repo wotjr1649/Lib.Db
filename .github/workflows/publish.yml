@@ -98,7 +98,7 @@ jobs:
     - name: Restore local tools
       run: dotnet tool restore
 
-    - name: Run v2.3.0 release gate
+    - name: Run v2.4.0 release gate
       shell: pwsh
       run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
 

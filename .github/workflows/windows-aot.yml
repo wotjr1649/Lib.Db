@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      - v2.3.0
+      - v2.4.0-provider-neutral-caching
     paths:
       - '.github/workflows/windows-aot.yml'
       - 'Lib.Db/**'

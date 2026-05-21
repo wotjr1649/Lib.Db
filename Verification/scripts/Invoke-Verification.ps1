@@ -61,7 +61,7 @@ function Write-SecretSafeEnvironmentSummary {
     }
 }
 
-Write-Host 'Lib.Db v2.3.0 verification started.'
+Write-Host 'Lib.Db v2.4.0 verification started.'
 Write-SecretSafeEnvironmentSummary
 
 Invoke-Checked 'dotnet' @('build', $integrationProject, '--no-restore', '-v:minimal')
@@ -137,11 +137,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($skippedGates.Count -gt 0) {
-    Write-Warning "Lib.Db v2.3.0 verification completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade evidence."
+    Write-Warning "Lib.Db v2.4.0 verification completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade evidence."
     if (-not $AllowPartial) {
         throw "Partial verification runs require -AllowPartial so CI cannot mistake them for release-grade evidence."
     }
 }
 else {
-    Write-Host 'Lib.Db v2.3.0 release-grade verification completed.'
+    Write-Host 'Lib.Db v2.4.0 release-grade verification completed.'
 }
