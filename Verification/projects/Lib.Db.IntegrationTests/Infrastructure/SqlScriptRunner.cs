@@ -38,10 +38,6 @@ public static partial class SqlScriptRunner
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scriptFileName);
 
-        string direct = Path.Combine(AppContext.BaseDirectory, "sql", scriptFileName);
-        if (File.Exists(direct))
-            return direct;
-
         DirectoryInfo? current = new(AppContext.BaseDirectory);
         while (current is not null)
         {
@@ -58,6 +54,10 @@ public static partial class SqlScriptRunner
 
             current = current.Parent;
         }
+
+        string direct = Path.Combine(AppContext.BaseDirectory, "sql", scriptFileName);
+        if (File.Exists(direct))
+            return direct;
 
         throw new FileNotFoundException($"SQL script '{scriptFileName}' was not found.", scriptFileName);
     }
