@@ -262,6 +262,23 @@ public sealed class CacheHostingCoverageTests
     }
 
     [Fact]
+    public void CacheTopologyDetector_ShouldUseTrustedProviderOptionsFromServiceProvider()
+    {
+        var cache = new RecordingDistributedCache();
+        LibDbCacheTopologyOptions options = new();
+        options.TrustedProviderTypeNames.Add(cache.GetType().FullName!);
+        using ServiceProvider provider = new ServiceCollection()
+            .AddSingleton<IDistributedCache>(cache)
+            .AddSingleton(options)
+            .BuildServiceProvider();
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(provider);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.VerifiedProviderBackedL2);
+        state.HasVerifiedProviderBackedL2.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task LibDbAotHybridCache_ShouldInvalidateOnlyExistingTaggedEntries()
     {
         var cache = new LibDbAotHybridCache();

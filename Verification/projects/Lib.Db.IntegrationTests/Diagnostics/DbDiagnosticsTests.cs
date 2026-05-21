@@ -6,9 +6,12 @@
 
 using Lib.Db.Diagnostics;
 using Lib.Db.IntegrationTests.Infrastructure;
+using Lib.Db.Caching;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Logging;
 using System.Data;
 using System.Diagnostics;
+using System.Text.Json;
 using Lib.Db.Core;
 
 namespace Lib.Db.IntegrationTests.Diagnostics;
@@ -189,5 +192,77 @@ public sealed class DbDiagnosticsTests : IDisposable
             t => t.Key == "libdb.instance.id");
 
         Assert.Equal("Raw:[redacted]", instanceTag.Value);
+    }
+
+    [Fact]
+    public void CacheTopologyDiagnostics_ShouldReportTopologyWithoutSecrets()
+    {
+        var cache = new RecordingDistributedCache();
+        LibDbCacheTopologyState topology = LibDbCacheTopologyDetector.Detect(cache);
+
+        LibDbCacheTopologySnapshot snapshot = LibDbCacheTopologyDiagnostics.CreateSnapshot(
+            topology,
+            sharedMemoryEnabled: false,
+            epochCoordinationEnabled: false);
+
+        snapshot.Kind.Should().Be("UnverifiedDistributedCache");
+        snapshot.HasVerifiedProviderBackedL2.Should().BeFalse();
+        snapshot.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
+        snapshot.ProviderTypeName.Should().NotContain("Password");
+        snapshot.Warnings.Should().Contain(warning =>
+            warning.Contains("verified", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void CacheTopologyDiagnostics_ShouldNotEmitRawCacheKeysOrConnectionStrings()
+    {
+        LibDbCacheTopologyState topology = new(
+            LibDbCacheTopologyKind.VerifiedProviderBackedL2,
+            "Microsoft.Extensions.Caching.StackExchangeRedis.RedisCache",
+            HasVerifiedProviderBackedL2: true);
+
+        LibDbCacheTopologySnapshot snapshot = LibDbCacheTopologyDiagnostics.CreateSnapshot(
+            topology,
+            sharedMemoryEnabled: false,
+            epochCoordinationEnabled: false);
+
+        string rendered = JsonSerializer.Serialize(snapshot);
+
+        rendered.Should().NotContain("Server=");
+        rendered.Should().NotContain("Password=");
+        rendered.Should().NotContain("libdb:schema:");
+    }
+
+    private sealed class RecordingDistributedCache : IDistributedCache
+    {
+        public byte[]? Get(string key) => null;
+
+        public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
+            => Task.FromResult<byte[]?>(null);
+
+        public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
+        {
+        }
+
+        public Task SetAsync(
+            string key,
+            byte[] value,
+            DistributedCacheEntryOptions options,
+            CancellationToken token = default)
+            => Task.CompletedTask;
+
+        public void Refresh(string key)
+        {
+        }
+
+        public Task RefreshAsync(string key, CancellationToken token = default)
+            => Task.CompletedTask;
+
+        public void Remove(string key)
+        {
+        }
+
+        public Task RemoveAsync(string key, CancellationToken token = default)
+            => Task.CompletedTask;
     }
 }

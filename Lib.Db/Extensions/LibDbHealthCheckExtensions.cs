@@ -8,6 +8,7 @@
 
 using Lib.Db.Caching;
 using Lib.Db.Contracts.Infrastructure;
+using Lib.Db.Diagnostics;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
@@ -63,6 +64,7 @@ public static class LibDbHealthCheckExtensions
         private readonly IDbConnectionFactory _connFactory;
         private readonly LibDbOptions _options;
         private readonly IDistributedCache? _cache;
+        private readonly LibDbCacheTopologyOptions? _cacheTopologyOptions;
         private readonly SemaphoreSlim _checkGate = new(1, 1);
 
         public ThrottledDbHealthCheck(
@@ -73,6 +75,7 @@ public static class LibDbHealthCheckExtensions
             _connFactory = connFactory;
             _options = options;
             _cache = services.GetService<IDistributedCache>();
+            _cacheTopologyOptions = services.GetService<LibDbCacheTopologyOptions>();
             // LibDbOptions.HealthCheckThrottleSeconds 설정값 반영 (기본 1초)
             _throttleTicks = TimeSpan.FromSeconds(options.HealthCheckThrottleSeconds).Ticks;
             _lastResult = HealthCheckResult.Healthy("Initial State", GetCacheDiagnosticData());
@@ -127,20 +130,32 @@ public static class LibDbHealthCheckExtensions
 
         private IReadOnlyDictionary<string, object> GetCacheDiagnosticData()
         {
+            LibDbCacheTopologyState topology = LibDbCacheTopologyDetector.Detect(_cache, _cacheTopologyOptions);
+            LibDbCacheTopologySnapshot snapshot = LibDbCacheTopologyDiagnostics.CreateSnapshot(
+                topology,
+                sharedMemoryEnabled: _options.EnableSharedMemoryCache is true,
+                epochCoordinationEnabled: _options.EnableEpochCoordination is true);
+
+            Dictionary<string, object> data = new()
+            {
+                ["libdb.cache.topology"] = snapshot.Kind,
+                ["libdb.cache.has_verified_provider_l2"] = snapshot.HasVerifiedProviderBackedL2,
+                ["libdb.cache.provider_type"] = snapshot.ProviderTypeName ?? "unregistered",
+                ["libdb.cache.shared_memory_enabled"] = snapshot.SharedMemoryEnabled,
+                ["libdb.cache.epoch_coordination_enabled"] = snapshot.EpochCoordinationEnabled,
+                ["libdb.cache.warnings"] = snapshot.Warnings.ToArray()
+            };
+
             if (_cache is SharedMemoryCache sharedMemoryCache)
             {
-                return new Dictionary<string, object>
-                {
-                    ["libdb.cache.mode"] = sharedMemoryCache.CacheMode,
-                    ["libdb.cache.fallback_active"] = sharedMemoryCache.IsFallbackMode
-                };
+                data["libdb.cache.mode"] = sharedMemoryCache.CacheMode;
+                data["libdb.cache.fallback_active"] = sharedMemoryCache.IsFallbackMode;
+                return data;
             }
 
-            return new Dictionary<string, object>
-            {
-                ["libdb.cache.mode"] = _cache?.GetType().Name ?? "unregistered",
-                ["libdb.cache.fallback_active"] = false
-            };
+            data["libdb.cache.mode"] = _cache?.GetType().Name ?? "unregistered";
+            data["libdb.cache.fallback_active"] = false;
+            return data;
         }
 
         private string GetDefaultInstanceName()
