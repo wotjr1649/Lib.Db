@@ -33,7 +33,7 @@ The bootstrap reads the local SQL password from `LIBDB_TEST_SQL_PASSWORD` and al
 
 ## GitHub Actions AOT
 
-Windows Native AOT publish requires the Visual Studio C++ toolchain. The Windows AOT GitHub Actions workflow uses `windows-2022`, verifies the `Microsoft.VisualStudio.Workload.NativeDesktop` workload through `vswhere`, and then runs `Verification/scripts/Invoke-Aot.ps1`.
+Windows Native AOT publish requires the Visual Studio C++ toolchain. The Windows AOT GitHub Actions workflow uses `windows-2022`, verifies the Visual Studio Desktop C++ workload (`Microsoft.VisualStudio.Workload.NativeDesktop`) through `vswhere`, and then runs `Verification/scripts/Invoke-Aot.ps1`. If using standalone Visual Studio Build Tools instead of full Visual Studio, the equivalent workload family is documented as `Microsoft.VisualStudio.Workload.VCTools`.
 
 Linux release validation continues to use the existing release workflow. The Windows AOT workflow is an additional toolchain check for the Desktop development with C++ prerequisite, not a replacement for the package publishing workflow.
 
@@ -48,7 +48,9 @@ Linux release validation continues to use the existing release workflow. The Win
 - Microsoft Learn documents `IL3053` as an aggregate third-party AOT analysis warning: <https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/warnings/il3053>
 - Microsoft Learn documents Native AOT prerequisites, including the Windows Visual Studio Desktop development with C++ workload: <https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/>
 - GitHub Actions runner images document the installed software on Windows Server 2022 hosted runners: <https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md>
-- Microsoft Learn documents the Visual Studio Build Tools workload/component IDs used to detect the native desktop C++ workload: <https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools>
+- Microsoft Learn documents Visual Studio workload/component IDs for Desktop C++ and Build Tools C++ workloads:
+  - <https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-community>
+  - <https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools>
 
 ## AOT Warning Policy
 

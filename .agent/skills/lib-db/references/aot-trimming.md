@@ -27,6 +27,22 @@ This overload is `ConfigurationBinder`-based and can require runtime code genera
 
 Prefer `AddLibDbOptionsFromConfiguration(...)` or explicit assignment when the application needs configuration input without reflection-heavy binding.
 
+```csharp
+builder.Services
+    .AddLibDbOptionsFromConfiguration(builder.Configuration, "LibDb")
+    .WithPostConfigure(options =>
+    {
+        options.UseProductionSecurityDefaults();
+        options.RawSqlPolicy = RawSqlPolicy.DenyWriteText;
+    });
+
+builder.Services.RegisterLibDbCoreServices();
+builder.Services.AddLibDbHostedServices();
+```
+
+Verify strict AOT paths with a real publish-and-run step, not just `dotnet build`.
+On Windows, Native AOT requires the Visual Studio C++ toolchain.
+
 ## TVP
 
 Prefer static shapes:

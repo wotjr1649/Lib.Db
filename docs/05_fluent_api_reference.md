@@ -303,7 +303,7 @@ DbResult<int> result = await session.Default
     .ExecuteAsync();
 ```
 
-`[TvpRow]` is a legacy compatibility fallback. New call sites do not require `[TvpRow]` or a separate generator package.
+`[TvpRow]` is a legacy compatibility fallback. New call sites should use Runtime TVP APIs directly.
 
 ### 5-6. 파라미터 없이 실행
 

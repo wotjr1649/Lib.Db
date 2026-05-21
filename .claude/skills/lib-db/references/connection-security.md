@@ -64,6 +64,28 @@ DbResult<UserDto?> result = await db.Default
 
 Do not concatenate user input into SQL text.
 
+SQL identifiers are not values and cannot be protected by normal SQL parameters. Table names,
+column names, schema names, and sort directions must be selected from application-owned
+allow-lists:
+
+```csharp
+string orderBy = sortField switch
+{
+    OrderSortField.CreatedUtc => "CreatedUtc",
+    OrderSortField.Total => "Total",
+    _ => throw new ArgumentOutOfRangeException(nameof(sortField))
+};
+
+string direction = descending ? "DESC" : "ASC";
+string sql = $"SELECT Id, Total FROM dbo.Orders ORDER BY {orderBy} {direction}";
+
+DbResult<IAsyncEnumerable<OrderDto>> result = await db.Default
+    .Sql(sql)
+    .QueryAsync<OrderDto>(ct);
+```
+
+Keep the SQL fragments in the map constants, not in request strings.
+
 ## Sensitive APIs
 
 - `UseConnectionString(string)`: accepts a full connection string. Prefer named instances. Never print the value.

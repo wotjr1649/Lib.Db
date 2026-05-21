@@ -101,7 +101,7 @@ Use `DiagnosticCommandText` for logging. Avoid `CommandText` when it may contain
 
 These public contracts are infrastructure-level extension points, not normal application APIs: `IIsolationKeyGenerator`, `IQueryAnalyzer`, `IDbCommandInterceptor`, `IResiliencePipelineProvider`, `ITransientSqlErrorDetector`, `ISchemaService`, `ITvpSchemaValidator`, `ITvpStaticValidator`, and `ISchemaFlushCoordinator`.
 
-Use them only when extending Lib.Db internals or building platform infrastructure. Prefer consumer-facing APIs such as `AddLibDbInterceptor<T>`, `db.Schema`, `AddSchemaFlushCoordination(...)`, and normal options registration for application code.
+Use them only when extending Lib.Db internals or building platform infrastructure. Prefer consumer-facing APIs such as `IDbInterceptor`, `AddLibDbInterceptor<T>`, `db.Schema`, `AddSchemaFlushCoordination(...)`, and normal options registration for application code.
 
 ## Host Hook
 

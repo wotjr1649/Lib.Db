@@ -13,7 +13,7 @@ Keep this file as the router. Read only the reference files needed for the curre
 
 This skill documents application consumer-facing Lib.Db APIs. Internal, infrastructure-level, and low-level public contracts are outside normal application scope unless the user is extending Lib.Db itself.
 
-Exact-name index for validation and routing: `DbResultAttribute`, `ConfigurationBinder`, `IIsolationKeyGenerator`, `IQueryAnalyzer`, `IDbCommandInterceptor`, `IResiliencePipelineProvider`, `ITransientSqlErrorDetector`, `ISchemaService`, `ITvpSchemaValidator`, `ITvpStaticValidator`, and `ISchemaFlushCoordinator`.
+Exact-name index for validation and routing: consumer-facing `IDbInterceptor`; infrastructure-level `DbResultAttribute`, `ConfigurationBinder`, `IIsolationKeyGenerator`, `IQueryAnalyzer`, `IDbCommandInterceptor`, `IResiliencePipelineProvider`, `ITransientSqlErrorDetector`, `ISchemaService`, `ITvpSchemaValidator`, `ITvpStaticValidator`, and `ISchemaFlushCoordinator`.
 
 ## First Step
 
@@ -46,6 +46,7 @@ Exact-name index for validation and routing: `DbResultAttribute`, `Configuration
 - Prefer stored procedures for writes, administrative work, tenant-sensitive access, and SQL Server permission boundaries.
 - Treat `RawSqlPolicy` as a guardrail, not as a complete SQL parser or security boundary.
 - Use `SqlInterpolated(...)` or `.With(...)` for values in text SQL. Do not concatenate user input into SQL text.
+- Do not parameterize SQL identifiers. Table names, column names, schema names, and sort directions must come from application-owned allow-lists or enum-to-SQL maps.
 - Use `UseProductionSecurityDefaults()` for production-oriented examples unless the user explicitly asks for a constrained local-only sample.
 - Treat `UseConnectionString`, bulk insert, schema maintenance, interceptors, `IncludeParametersInTrace`, and `Use*Unsafe` snapshot extensions as sensitive APIs.
 - Do not add package maintenance, repository-internal, package build, or lifecycle workflows to this skill.

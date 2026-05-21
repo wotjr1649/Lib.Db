@@ -120,7 +120,7 @@ DbResult<int> result = await session.Default
 ### 1-5. Legacy compatibility fallback
 
 `[TvpRow]` 관련 타입은 과거 코드 호환과 제한적인 reflection fallback을 위해 남아 있습니다.
-New code does not require `[TvpRow]` or a TVP source generator. Native AOT 또는 고빈도 호출 경로에서는 `options.Tvp.Map<T>()` 또는 `TvpShape.For<T>()`를 사용합니다.
+New code should use Runtime TVP APIs directly. Native AOT 또는 고빈도 호출 경로에서는 `options.Tvp.Map<T>()` 또는 `TvpShape.For<T>()`를 사용합니다.
 
 | 경로 | 권장 사용처 | AOT 적합성 |
 |---|---|---|

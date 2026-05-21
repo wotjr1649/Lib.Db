@@ -346,7 +346,7 @@ builder.Services.AddLibDb(options =>
 ```
 
 **결과 타입**: `DbResult<int>`
-**주의사항**: TVP 타입 이름은 DB에 생성된 TVP type과 정확히 일치해야 합니다. New code does not require `[TvpRow]` or a separate generator package; Native AOT 또는 고빈도 경로는 `options.Tvp.Map<T>()`를 권장합니다.
+**주의사항**: TVP 타입 이름은 DB에 생성된 TVP type과 정확히 일치해야 합니다. New code should use Runtime TVP APIs directly; Native AOT 또는 고빈도 경로는 `options.Tvp.Map<T>()`를 권장합니다.
 
 ---
 

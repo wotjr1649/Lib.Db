@@ -87,7 +87,11 @@ DbResult<long?> result = await db.Default
 
 ## Multiple Result Sets
 
-`QueryMultipleAsync()` needs MARS support. Set `options.Mars = MarsPolicy.ForceEnable` only when the application accepts automatic connection-string adjustment.
+`QueryMultipleAsync()` requires MARS support in Lib.Db's current execution policy.
+
+- `MarsPolicy.Disabled`: blocks `QueryMultipleAsync()`.
+- `MarsPolicy.Auto`: requires the configured connection string to already include `MultipleActiveResultSets=True`; otherwise Lib.Db throws before executing.
+- `MarsPolicy.ForceEnable`: injects `MultipleActiveResultSets=True` during `AddLibDb(...)` registration. Use this only when the application accepts automatic connection-string adjustment.
 
 ```csharp
 DbResult<IMultipleResultReader> result = await db.Default

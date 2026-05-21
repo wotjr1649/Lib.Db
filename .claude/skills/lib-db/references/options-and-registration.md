@@ -34,7 +34,7 @@ using Microsoft.Extensions.Hosting; // UseHighPerformanceDb
 
 - `ConnectionStrings`: key to connection string dictionary.
 - `ConnectionStringNames`: names Lib.Db may use; first entry is the default.
-- `Mars`: `Disabled`, `Auto`, or `ForceEnable` for `QueryMultipleAsync()`.
+- `Mars`: `Disabled`, `Auto`, or `ForceEnable` for `QueryMultipleAsync()`. Use `Auto` when connection strings already opt in to `MultipleActiveResultSets=True`; use `ForceEnable` only when automatic connection-string adjustment is acceptable.
 - `ConnectionSecurityProfile`: `Development` or `Production`.
 - `AllowProductionTrustServerCertificateWaiver`, `AllowProductionSaLoginWaiver`: exceptional waivers; avoid by default.
 - `RawSqlPolicy`: `Allow`, `DenyAllText`, or `DenyWriteText`.
@@ -75,7 +75,7 @@ builder.Services.AddLibDb(builder.Configuration);
 
 This reads the `LibDb` section and only copies top-level `ConnectionStrings` entries listed by `ConnectionStringNames`.
 
-For Native AOT-sensitive code, prefer the explicit `Action<LibDbOptions>` overload or read `aot-trimming.md`.
+For Native AOT-sensitive code, prefer the explicit `Action<LibDbOptions>` overload, `AddLibDbOptionsFromConfiguration(...)`, or read `aot-trimming.md`.
 
 ## OptionsBuilder Pattern
 

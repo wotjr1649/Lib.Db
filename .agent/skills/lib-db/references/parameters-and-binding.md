@@ -119,3 +119,33 @@ DbResult<int> result = await db.Default
 ## Output Parameters
 
 For output parameters, keep a reference to the `SqlParameter` you supplied and read it only after a successful command. Prefer `QuerySingleAsync<T>()` or `ExecuteScalarAsync<T>()` for new application contracts when you control the stored procedure shape.
+
+```csharp
+var total = new SqlParameter("@Total", SqlDbType.Int)
+{
+    Direction = ParameterDirection.Output
+};
+
+var returnValue = new SqlParameter("@ReturnValue", SqlDbType.Int)
+{
+    Direction = ParameterDirection.ReturnValue
+};
+
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_RecalculateOrder")
+    .With(new
+    {
+        OrderId = orderId,
+        Total = total,
+        ReturnValue = returnValue
+    })
+    .ExecuteAsync(ct);
+
+if (!result.IsSuccess)
+    return;
+
+int? totalValue = total.Value is DBNull ? null : (int?)total.Value;
+int statusCode = returnValue.Value is DBNull ? 0 : (int)returnValue.Value;
+```
+
+Do not read output or return parameters after a failed command unless the stored procedure contract explicitly guarantees them.
