@@ -254,12 +254,12 @@ public static class LibDbServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Epoch 기반 분산 스키마 캐시 조정 서비스를 등록합니다.
+    /// Epoch 기반 스키마 캐시 조정 서비스를 등록합니다.
     /// <para>
-    /// <b>[플랫폼 자동 감지]</b><br/>
+    /// <b>[Provider-neutral 기본값]</b><br/>
     /// <see cref="LibDbOptions.EnableEpochCoordination"/>가 <c>null</c>이면:<br/>
-    /// - <see cref="LibDbOptions.EnableSharedMemoryCache"/>와 동일하게 설정<br/>
-    /// - Windows 공유 메모리 ON이면 Epoch도 ON, 그외 OFF
+    /// - <see cref="LibDbOptions.EnableSharedMemoryCache"/>가 <c>true</c>일 때만 활성화<br/>
+    /// - OS에 따라 자동 활성화하지 않음
     /// </para>
     /// <para>
     /// <b>[등록 서비스]</b><br/>
@@ -272,10 +272,10 @@ public static class LibDbServiceCollectionExtensions
     /// <param name="epochBasePath">Epoch 파일 저장 경로 (기본값: %TEMP%/Lib.Db.Epochs)</param>
     /// <returns>체이닝을 위한 IServiceCollection</returns>
     /// <remarks>
-    /// <b>경고 조건:</b><br/>
-    /// <see cref="LibDbOptions.EnableSharedMemoryCache"/> = <c>false</c>인데<br/>
+    /// <b>오류 조건:</b><br/>
+    /// <see cref="LibDbOptions.EnableSharedMemoryCache"/>가 <c>true</c>가 아닌데<br/>
     /// <see cref="LibDbOptions.EnableEpochCoordination"/> = <c>true</c>인 경우:<br/>
-    /// Epoch 파일 기반 동기화는 되지만 실제 캐시는 프로세스마다 독립적이므로 비효율적.
+    /// 조정할 shared-memory 캐시가 없으므로 fail-fast합니다.
     /// </remarks>
     public static IServiceCollection AddSchemaFlushCoordination(
         this IServiceCollection services,
@@ -287,12 +287,15 @@ public static class LibDbServiceCollectionExtensions
         {
             LibDbOptions options = sp.GetRequiredService<LibDbOptions>();
 
-            // 플랫폼 자동 감지: 옵션이 null이면 공유 메모리와 동일한 값으로 설정
-            bool enableSharedMemory = options.EnableSharedMemoryCache
-                ?? System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                    System.Runtime.InteropServices.OSPlatform.Windows);
+            bool enableSharedMemory = options.EnableSharedMemoryCache is true;
+            if (options.EnableEpochCoordination is true && !enableSharedMemory)
+            {
+                throw new InvalidOperationException(
+                    "Lib.Db: EnableEpochCoordination=true requires explicit shared-memory cache opt-in. " +
+                    "Call services.AddLibDbSharedMemoryCache(), or disable EnableEpochCoordination.");
+            }
 
-            bool enableEpoch = options.EnableEpochCoordination ?? enableSharedMemory;
+            bool enableEpoch = options.EnableEpochCoordination.GetValueOrDefault(enableSharedMemory);
 
             ILogger<EpochStore> logger = sp.GetRequiredService<ILogger<EpochStore>>();
 
@@ -300,16 +303,9 @@ public static class LibDbServiceCollectionExtensions
             {
                 logger.LogInformation(
                     "[Epoch] 비활성화됨 - EpochStore를 파일 시스템 없는 Noop 모드로 생성합니다 (명시적 설정: {ExplicitSetting})",
-                    options.EnableEpochCoordination?.ToString() ?? "null (auto-detect)");
+                    options.EnableEpochCoordination?.ToString() ?? "null (provider-neutral default)");
 
                 return EpochStore.Disabled(logger);
-            }
-            else if (!enableSharedMemory)
-            {
-                logger.LogWarning(
-                    "[Epoch] 경고: 공유 메모리 비활성화 상태에서 Epoch 사용 - " +
-                    "프로세스 간 스키마 동기화 불가. " +
-                    "권장: EnableSharedMemoryCache=true 또는 EnableEpochCoordination=false");
             }
 
             string basePath = epochBasePath ?? Path.Combine(

@@ -20,7 +20,7 @@ namespace Lib.Db.Caching;
 #region SharedMemoryCache 구현
 
 /// <summary>
-/// Windows 공유 메모리(<see cref="MemoryMappedFile"/>)를 활용하여 프로세스 간(IPC) 초고속 데이터를 공유하는 분산 캐시 구현체입니다.
+/// <see cref="MemoryMappedFile"/> 기반 파일 매핑을 활용하여 동일 호스트 프로세스 간(IPC) 데이터를 공유하는 캐시 구현체입니다.
 /// </summary>
 /// <remarks>
 /// <para>

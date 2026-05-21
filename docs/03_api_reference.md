@@ -221,8 +221,8 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `Tvp` | `TvpOptions` | `new()` | Runtime TVP 바인딩 옵션과 row type registry |
 | `EnableResilience` | `bool` | `false` | Polly 회복 탄력성 |
 | `Resilience` | `ResilienceOptions` | (내부 기본값) | 재시도/Circuit Breaker 설정 |
-| `EnableSharedMemoryCache` | `bool?` | `null` (자동) | L2 공유 메모리 캐시 |
-| `EnableEpochCoordination` | `bool?` | `null` | 프로세스 간 Epoch 동기화 |
+| `EnableSharedMemoryCache` | `bool?` | `null` | 내장 SharedMemoryCache opt-in 플래그. `null`은 Lib.Db가 `IDistributedCache`를 등록하지 않음을 의미 |
+| `EnableEpochCoordination` | `bool?` | `null` | SharedMemoryCache opt-in이 있을 때만 기본 활성화되는 epoch 동기화 |
 | `EnableDryRun` | `bool` | `false` | 모의 실행 모드 |
 | `EnableObservability` | `bool` | `false` | ActivitySource/Meter 기반 tracing/metrics 활성화 스위치. 일반 ILogger 로그는 별도 로깅 설정을 따름 |
 | `EnableOpenTelemetry` | `bool` | `false` | ⚠️ **Deprecated** — `EnableObservability`를 사용하세요. 향후 breaking release에서 제거 예정입니다. |
@@ -276,7 +276,7 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `RegisterLibDbCoreServices()` | `IServiceCollection` | 핵심 서비스만 등록 (테스트용) |
 | `AddLibDbResilience()` | `IServiceCollection` | Polly 파이프라인 등록 |
 | `AddLibDbHostedServices()` | `IServiceCollection` | 워밍업 Hosted Service 등록 |
-| `AddSchemaFlushCoordination(string?)` | `IServiceCollection` | Epoch 기반 분산 스키마 캐시 조정 |
+| `AddSchemaFlushCoordination(string?)` | `IServiceCollection` | SharedMemoryCache opt-in용 Epoch 기반 스키마 캐시 조정 |
 | `AddLibDbInterceptor<T>()` | `IServiceCollection` | 쿼리 인터셉터 등록 (다중 가능) |
 
 ---

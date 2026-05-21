@@ -463,7 +463,8 @@ if (!result.IsSuccess)
 **상황**: 자주 조회하지만 변경이 드문 데이터를 캐시합니다.
 
 ```csharp
-// DI: IDistributedCache cache (MemoryDistributedCache, Redis 등)
+// DI: IDistributedCache cache (Redis, SQL Server, Postgres 등 provider-backed L2)
+// MemoryDistributedCache는 프로세스 로컬 캐시이므로 운영 L2로 간주하지 않습니다.
 
 DbResult<UserDto?> result = await session.Default
     .Procedure("dbo.usp_GetUser")

@@ -269,27 +269,25 @@ DbResult의 `DbError.Kind`가 `DbErrorKind.Deadlock`으로 매핑됩니다.
 
 ## 5. 캐싱
 
-### 5-1. SharedMemoryCache (L2)
+### 5-1. Provider-neutral 기본값
 
-`MemoryMappedFile` 기반으로 프로세스 간 캐시를 공유합니다.
+Lib.Db는 기본 등록 경로에서 `IDistributedCache` provider를 만들지 않습니다. 애플리케이션이 Redis, SQL Server, Postgres, NCache 등 provider-backed L2를 직접 등록하면 `HybridCache`가 L1 뒤의 L2로 활용할 수 있고, provider가 없으면 프로세스 내 L1/local schema cache로 동작합니다.
 
-- **128 스트라이프 Mutex**: 키별 `XxHash128` 해시로 128개 Mutex를 분산하여 동시성 경합 최소화
-- **CRC32 무결성 검증**: 메모리 오염/쓰기 중단 감지
-- **자가 치유**: 손상 감지 시 자동 삭제 후 재생성 또는 MemoryCache 폴백
+`MemoryDistributedCache`는 `IDistributedCache` 인터페이스를 구현하지만 프로세스 로컬 메모리입니다. 운영용 L2로 간주하지 않습니다.
 
-### 5-2. 2단계 캐시 계층
+### 5-2. 캐시 계층
 
 ```
-요청 → L1 (MemoryCache, 프로세스 내)
+요청 → L1 (HybridCache / process-local)
        ↓ Miss
-       L2 (SharedMemoryCache, MMF 기반 IPC)
+       L2 (host-registered IDistributedCache provider, optional)
        ↓ Miss
        DB (SQL Server)
 ```
 
-- L1 Hit: 마이크로초 단위 응답
-- L2 Hit: 프로세스 간 공유, 네트워크 I/O 없음
-- L2 Miss: DB 조회 후 L2 → L1 순으로 자동 저장
+- L1 Hit: 프로세스 내 캐시 응답
+- L2 Hit: 애플리케이션이 등록한 provider-backed cache 응답
+- L2 없음: DB 조회 후 L1/local schema cache만 사용
 
 ### 5-3. 스키마 캐싱 (SchemaService)
 
@@ -299,9 +297,21 @@ DbResult의 `DbError.Kind`가 `DbErrorKind.Deadlock`으로 매핑됩니다.
 - `PrewarmSchemas`: 앱 시작 시 미리 로드할 스키마
 - `PrewarmIncludePatterns` / `PrewarmExcludePatterns`: 선택적 워밍업
 
-### 5-4. MMF 활성화
+### 5-4. SharedMemoryCache opt-in
 
-`EnableSharedMemoryCache`를 `true`로 설정하거나, `null`(기본값)이면 Windows에서 자동 활성화됩니다. `EnableEpochCoordination`으로 프로세스 간 동기화를 제어합니다.
+`SharedMemoryCache`는 동일 호스트 프로세스 간 공유를 위한 고급 opt-in 기능입니다. OS에 따라 자동 활성화되지 않습니다.
+
+```csharp
+builder.Services.AddLibDb(options =>
+{
+    options.ConnectionStrings["Main"] = "...";
+    options.ConnectionStringNames = ["Main"];
+});
+
+builder.Services.AddLibDbSharedMemoryCache();
+```
+
+`AddLibDbSharedMemoryCache()`는 `EnableSharedMemoryCache = true`를 최종 옵션에 반영합니다. Redis/SQL/Postgres/NCache 같은 외부 `IDistributedCache` provider와 함께 등록하면 Lib.Db가 fail-fast합니다.
 
 ---
 

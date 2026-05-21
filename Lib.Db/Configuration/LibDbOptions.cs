@@ -625,16 +625,30 @@ public sealed class LibDbOptions
     } = new();
 
     /// <summary>
-    /// 공유 메모리 기반 L2 캐시 사용 활성화 여부 (기본값: null = 자동 감지)
-    /// <para>null: Windows에서는 true, 그 외 OS에서는 false로 자동 설정됩니다.</para>
-    /// <para>true/false: OS 상관없이 강제 활성화/비활성화합니다.</para>
+    /// Lib.Db 내장 SharedMemoryCache opt-in 플래그입니다.
+    /// <para>
+    /// 기본값 <c>null</c>은 Lib.Db가 <see cref="Microsoft.Extensions.Caching.Distributed.IDistributedCache"/>를
+    /// 등록하지 않는다는 의미입니다. OS에 따라 자동 활성화되지 않습니다.
+    /// </para>
+    /// <para>
+    /// <c>true</c>는 반드시 <c>AddLibDbSharedMemoryCache()</c>와 함께 사용해야 합니다.
+    /// 범용 L2 캐시는 애플리케이션에서 Redis, SQL Server, Postgres 등 provider-backed
+    /// <see cref="Microsoft.Extensions.Caching.Distributed.IDistributedCache"/>를 직접 등록하는 방식을 권장합니다.
+    /// </para>
     /// </summary>
     public bool? EnableSharedMemoryCache { get; set; } = null;
 
 
     /// <summary>
-    /// 프로세스 간 에포크 조정(Epoch Coordination) 활성화 여부
-    /// <para>L2 캐시의 데이터 일관성을 위해 프로세스 간 동기화를 수행할지 결정합니다.</para>
+    /// SharedMemoryCache epoch 조정 활성화 여부입니다.
+    /// <para>
+    /// <c>null</c>이면 명시적 SharedMemoryCache opt-in이 있을 때만 활성화됩니다.
+    /// Windows 또는 특정 OS라는 이유만으로 자동 활성화되지 않습니다.
+    /// </para>
+    /// <para>
+    /// <c>true</c>는 <c>AddLibDbSharedMemoryCache()</c>로 등록된 shared-memory cache가 있을 때만 유효합니다.
+    /// Provider-backed L2의 무효화와 일관성은 해당 provider/애플리케이션 정책이 책임집니다.
+    /// </para>
     /// </summary>
     public bool? EnableEpochCoordination { get; set; } = null;
 

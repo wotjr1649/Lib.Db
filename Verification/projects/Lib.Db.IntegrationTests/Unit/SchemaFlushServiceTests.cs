@@ -105,6 +105,116 @@ public sealed class SchemaFlushServiceTests
     }
 
     [Fact]
+    public async Task AddSchemaFlushCoordination_ShouldAvoidEpochFilesystem_WhenOptionsAreProviderNeutralDefaults()
+    {
+        string basePath = Path.Combine(
+            Path.GetTempPath(),
+            "LibDbEpochProviderNeutralTests",
+            Guid.NewGuid().ToString("N"));
+        RecordingSchemaService schemaService = new();
+        ServiceCollection services = new();
+        services.AddLogging();
+        services.AddSingleton(new LibDbOptions
+        {
+            EnableSharedMemoryCache = null,
+            EnableEpochCoordination = null
+        });
+        services.AddSingleton<ISchemaService>(schemaService);
+        services.AddSchemaFlushCoordination(basePath);
+
+        try
+        {
+            using ServiceProvider provider = services.BuildServiceProvider();
+            Directory.Exists(basePath).Should().BeFalse();
+
+            EpochStore epochStore = provider.GetRequiredService<EpochStore>();
+            epochStore.GetEpoch("ProviderNeutralInstance").Should().Be(0);
+            epochStore.IncrementEpoch("ProviderNeutralInstance").Should().Be(0);
+
+            ISchemaFlushCoordinator coordinator = provider.GetRequiredService<ISchemaFlushCoordinator>();
+            await coordinator.FlushAsync("ProviderNeutralInstance", TestContext.Current.CancellationToken);
+
+            Directory.Exists(basePath).Should().BeFalse();
+            schemaService.FlushCalls.Should().Be(1);
+        }
+        finally
+        {
+            if (Directory.Exists(basePath))
+                Directory.Delete(basePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AddSchemaFlushCoordination_ShouldFailFast_WhenEpochEnabledWithoutSharedMemoryOptIn()
+    {
+        string basePath = Path.Combine(
+            Path.GetTempPath(),
+            "LibDbEpochInvalidTests",
+            Guid.NewGuid().ToString("N"));
+        ServiceCollection services = new();
+        services.AddLogging();
+        services.AddSingleton(new LibDbOptions
+        {
+            EnableSharedMemoryCache = null,
+            EnableEpochCoordination = true
+        });
+        services.AddSingleton<ISchemaService>(new RecordingSchemaService());
+        services.AddSchemaFlushCoordination(basePath);
+
+        try
+        {
+            using ServiceProvider provider = services.BuildServiceProvider();
+
+            Action act = () => provider.GetRequiredService<EpochStore>();
+
+            act.Should()
+                .Throw<InvalidOperationException>()
+                .WithMessage("*EnableEpochCoordination=true*AddLibDbSharedMemoryCache*");
+        }
+        finally
+        {
+            if (Directory.Exists(basePath))
+                Directory.Delete(basePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AddLibDbSharedMemoryCache_ShouldEnableEpochCoordinationByDefault()
+    {
+        string basePath = Path.Combine(
+            Path.GetTempPath(),
+            "LibDbEpochSharedMemoryOptInTests",
+            Guid.NewGuid().ToString("N"));
+        ServiceCollection services = new();
+        services.AddLogging();
+        services.AddLibDbOptions(options =>
+        {
+            options.ConnectionStringNames = ["Primary"];
+            options.ConnectionStrings["Primary"] =
+                "Server=(localdb)\\MSSQLLocalDB;Database=PrimaryDb;Integrated Security=True;TrustServerCertificate=True;Encrypt=False";
+            options.EnableSharedMemoryCache = null;
+            options.EnableEpochCoordination = null;
+        });
+        services.AddLibDbSharedMemoryCache();
+        services.AddSingleton<ISchemaService>(new RecordingSchemaService());
+        services.AddSchemaFlushCoordination(basePath);
+
+        try
+        {
+            using ServiceProvider provider = services.BuildServiceProvider();
+
+            EpochStore epochStore = provider.GetRequiredService<EpochStore>();
+
+            epochStore.IncrementEpoch("SharedMemoryOptInInstance").Should().Be(1);
+        }
+        finally
+        {
+            if (Directory.Exists(basePath))
+                Directory.Delete(basePath, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task FlushTvpAsync_ShouldIncrementEpochAndCallTargetedSchemaFlush()
     {
         string basePath = Path.Combine(
