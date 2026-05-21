@@ -12,8 +12,9 @@ namespace Lib.Db.IntegrationTests.Infrastructure;
 /// </summary>
 public sealed class MultiDbFixture : IAsyncLifetime
 {
-    private static readonly MatrixDatabaseScript[] s_matrixDatabaseScripts =
+    private static readonly DatabaseScript[] s_databaseScripts =
     [
+        new(TestConnectionStrings.Verification, "setup-libdb-verification-test.sql"),
         new(TestConnectionStrings.Stress, "setup-libdb-stress-test.sql", "verify-libdb-stress-test.sql"),
         new(TestConnectionStrings.Chaos, "setup-libdb-chaos-test.sql", "verify-libdb-chaos-test.sql"),
         new(TestConnectionStrings.Benchmark, "setup-libdb-bench-test.sql", "verify-libdb-bench-test.sql")
@@ -51,7 +52,7 @@ public sealed class MultiDbFixture : IAsyncLifetime
 
         TestConnectionStrings.RequireSafeSchemaInitialization(Configuration, TestConnectionStrings.Verification);
         TestConnectionStrings.RequireSafeSchemaInitialization(Configuration, TestConnectionStrings.Sorter);
-        await EnsureConfiguredMatrixDatabasesAsync().ConfigureAwait(false);
+        await EnsureConfiguredDatabasesAsync().ConfigureAwait(false);
 
         ServiceCollection services = new();
         services.AddSingleton<IConfiguration>(Configuration);
@@ -80,9 +81,9 @@ public sealed class MultiDbFixture : IAsyncLifetime
         return Session.Use(name);
     }
 
-    private async Task EnsureConfiguredMatrixDatabasesAsync()
+    private async Task EnsureConfiguredDatabasesAsync()
     {
-        foreach (MatrixDatabaseScript database in s_matrixDatabaseScripts)
+        foreach (DatabaseScript database in s_databaseScripts)
         {
             if (!TestConnectionStrings.TryGet(Configuration, database.ConnectionName, out string connectionString))
                 continue;
@@ -90,8 +91,12 @@ public sealed class MultiDbFixture : IAsyncLifetime
             TestConnectionStrings.RequireSafeSchemaInitialization(Configuration, database.ConnectionName);
             await SqlScriptRunner.ExecuteScriptAsync(connectionString, database.SetupScript, CancellationToken.None)
                 .ConfigureAwait(false);
-            await SqlScriptRunner.ExecuteScriptAsync(connectionString, database.VerifyScript, CancellationToken.None)
-                .ConfigureAwait(false);
+
+            if (database.VerifyScript is not null)
+            {
+                await SqlScriptRunner.ExecuteScriptAsync(connectionString, database.VerifyScript, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
         }
     }
 
@@ -103,5 +108,5 @@ public sealed class MultiDbFixture : IAsyncLifetime
             disposable.Dispose();
     }
 
-    private sealed record MatrixDatabaseScript(string ConnectionName, string SetupScript, string VerifyScript);
+    private sealed record DatabaseScript(string ConnectionName, string SetupScript, string? VerifyScript = null);
 }
