@@ -72,9 +72,10 @@ public sealed class SharedMemorySecurityTests : IDisposable
     }
 
     [Fact]
-    public void Chaos_Test_Read_While_Writing()
+    public async Task Chaos_Test_Read_While_Writing()
     {
-        CancellationTokenSource cts = new();
+        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
         CancellationToken token = cts.Token;
         int writerCount = 2;
         int readerCount = 2;
@@ -101,7 +102,7 @@ public sealed class SharedMemorySecurityTests : IDisposable
                         cts.Cancel();
                     }
                 }
-            }));
+            }, token));
         }
 
         for (int i = 0; i < readerCount; i++)
@@ -124,13 +125,19 @@ public sealed class SharedMemorySecurityTests : IDisposable
                         cts.Cancel();
                     }
                 }
-            }));
+            }, token));
         }
 
-        Thread.Sleep(2000);
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
         cts.Cancel();
 
-        try { Task.WaitAll([.. tasks]); } catch { }
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
 
         Assert.Empty(errors);
     }

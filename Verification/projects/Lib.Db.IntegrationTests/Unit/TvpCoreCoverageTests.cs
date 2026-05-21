@@ -9,7 +9,7 @@ using System.Data;
 using System.Data.Common;
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Runtime.Serialization;
+using System.Runtime.CompilerServices;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution.Tvp;
@@ -866,7 +866,7 @@ public sealed class TvpCoreCoverageTests
             {
                 new AttributedInferenceRow("abc", 12.34m)
             }));
-        DataTable attributedSchema = attributed.GetSchemaTable();
+        DataTable attributedSchema = attributed.GetSchemaTable()!;
         attributedSchema.Rows[0][SchemaTableColumn.ColumnSize].Should().Be(24);
         attributedSchema.Rows[1][SchemaTableColumn.NumericPrecision].Should().Be((short)9);
         attributedSchema.Rows[1][SchemaTableColumn.NumericScale].Should().Be((short)3);
@@ -938,7 +938,7 @@ public sealed class TvpCoreCoverageTests
             {
                 new LengthPrecisionInferenceRow("abc", 1.23m)
             }));
-        DataTable lengthPrecisionSchema = lengthPrecisionInferred.GetSchemaTable();
+        DataTable lengthPrecisionSchema = lengthPrecisionInferred.GetSchemaTable()!;
         lengthPrecisionSchema.Rows[0][SchemaTableColumn.ColumnSize].Should().Be(12);
         lengthPrecisionSchema.Rows[1][SchemaTableColumn.NumericPrecision].Should().Be((short)8);
         lengthPrecisionSchema.Rows[1][SchemaTableColumn.NumericScale].Should().Be((short)2);
@@ -1060,7 +1060,7 @@ public sealed class TvpCoreCoverageTests
     {
         TvpAccessorCache.Clear();
         TvpAccessorCache.Configure(new LibDbOptions { MaxCacheSize = 1000 });
-        TvpAccessorCache.Configure((LibDbOptions)FormatterServices.GetUninitializedObject(typeof(LibDbOptions)));
+        TvpAccessorCache.Configure((LibDbOptions)RuntimeHelpers.GetUninitializedObject(typeof(LibDbOptions)));
 
         TvpAccessorCache.Clear();
         TvpAccessorCache.GetTypedAccessors<DeclarationOrderCoverageRow>()

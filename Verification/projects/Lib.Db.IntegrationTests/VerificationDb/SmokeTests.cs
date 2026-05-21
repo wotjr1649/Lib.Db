@@ -47,10 +47,9 @@ public sealed class SmokeTests(MultiDbFixture fixture)
             .Sql("SELECT 99")
             .ExecuteScalarAsync<int>();
 
-        await Task.WhenAll(verificationTask, sorterTask).ConfigureAwait(false);
-
-        DbResult<int> vResult = verificationTask.Result;
-        DbResult<int> sResult = sorterTask.Result;
+        DbResult<int>[] results = await Task.WhenAll(verificationTask, sorterTask);
+        DbResult<int> vResult = results[0];
+        DbResult<int> sResult = results[1];
 
         vResult.IsSuccess.Should().BeTrue();
         vResult.Value.Should().Be(42);

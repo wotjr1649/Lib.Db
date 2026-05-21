@@ -24,7 +24,7 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
             tasks.Add(_verification.Sql("SELECT 1").ExecuteScalarAsync<int>());
         }
 
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
         results.Should().AllSatisfy(r => r.IsSuccess.Should().BeTrue());
     }
 
@@ -41,7 +41,7 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
                 .ExecuteAsync());
         }
 
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
         int successCount = results.Count(r => r.IsSuccess);
         successCount.Should().BeGreaterThan(0);
     }
@@ -56,7 +56,7 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
             tasks.Add(_sorter.Sql("SELECT 1").ExecuteScalarAsync<int>());
         }
 
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
         results.Should().AllSatisfy(r => r.IsSuccess.Should().BeTrue());
     }
 
@@ -110,12 +110,12 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
             .Sql("SELECT COUNT(*) FROM IF_CHUTE_INFO")
             .ExecuteScalarAsync<int>();
 
-        await Task.WhenAll(vTask, sTask).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(vTask, sTask);
 
-        vTask.Result.IsSuccess.Should().BeTrue();
-        sTask.Result.IsSuccess.Should().BeTrue();
-        vTask.Result.Value.Should().BeGreaterThan(0);
-        sTask.Result.Value.Should().BeGreaterThan(0);
+        results[0].IsSuccess.Should().BeTrue();
+        results[1].IsSuccess.Should().BeTrue();
+        results[0].Value.Should().BeGreaterThan(0);
+        results[1].Value.Should().BeGreaterThan(0);
     }
 
     [Fact]

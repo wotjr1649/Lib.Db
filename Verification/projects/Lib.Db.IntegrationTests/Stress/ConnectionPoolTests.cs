@@ -41,7 +41,7 @@ public sealed class ConnectionPoolTests(MultiDbFixture fixture)
         }
 
         // Act
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
 
         // Assert — 전부 성공, Value == 1
         results.Should().AllSatisfy(r =>
@@ -73,7 +73,7 @@ public sealed class ConnectionPoolTests(MultiDbFixture fixture)
         }
 
         // Act
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
 
         // Assert — 전부 성공
         results.Should().AllSatisfy(r => r.IsSuccess.Should().BeTrue());
@@ -100,7 +100,7 @@ public sealed class ConnectionPoolTests(MultiDbFixture fixture)
         }
 
         // Act
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
 
         // Assert — 전부 성공 (5개 연결이 10개 쿼리를 순차 처리)
         results.Should().AllSatisfy(r =>

@@ -43,7 +43,7 @@ public sealed class DeadlockTests(MultiDbFixture fixture)
             .Procedure("test.usp_Deadlock_TableB")
             .ExecuteAsync();
 
-        DbResult<int>[] results = await Task.WhenAll(taskA, taskB).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(taskA, taskB);
 
         // Assert — 둘 중 최소 하나가 Deadlock(1205)이어야 함
         bool anyDeadlock = results.Any(r =>

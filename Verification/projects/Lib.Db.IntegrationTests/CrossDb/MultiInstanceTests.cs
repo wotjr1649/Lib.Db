@@ -104,7 +104,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
             .Sql("SELECT 1")
             .ExecuteScalarAsync<int>();
 
-        DbResult<int>[] results = await Task.WhenAll(vTask, sTask).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(vTask, sTask);
 
         // Assert — 둘 다 성공
         results.Should().AllSatisfy(r =>

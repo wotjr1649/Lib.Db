@@ -63,7 +63,7 @@ public sealed class PoolMetricsTests(MultiDbFixture fixture)
         }
 
         // Act
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
 
         // Assert — 모든 쿼리가 메트릭 예외 없이 성공
         results.Should().AllSatisfy(r =>
