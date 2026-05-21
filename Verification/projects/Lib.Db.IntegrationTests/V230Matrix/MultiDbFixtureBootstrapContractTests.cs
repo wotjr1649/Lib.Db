@@ -4,6 +4,8 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using Lib.Db.IntegrationTests.Infrastructure;
+
 namespace Lib.Db.IntegrationTests.V230Matrix;
 
 public sealed class MultiDbFixtureBootstrapContractTests
@@ -14,7 +16,7 @@ public sealed class MultiDbFixtureBootstrapContractTests
         string sourcePath = ResolveSourcePath("MultiDbFixture.cs");
         string source = File.ReadAllText(sourcePath);
 
-        int verificationSetup = source.IndexOf("setup-libdb-verification-test.sql", StringComparison.Ordinal);
+        int verificationSetup = source.IndexOf("bootstrap-libdb-verification-database.sql", StringComparison.Ordinal);
         int bootstrapCall = source.IndexOf("EnsureConfiguredDatabasesAsync", StringComparison.Ordinal);
         int sessionRegistration = source.IndexOf("services.AddLibDb(Configuration)", StringComparison.Ordinal);
 
@@ -22,6 +24,18 @@ public sealed class MultiDbFixtureBootstrapContractTests
         bootstrapCall.Should().BeGreaterThanOrEqualTo(0);
         sessionRegistration.Should().BeGreaterThanOrEqualTo(0);
         bootstrapCall.Should().BeLessThan(sessionRegistration);
+    }
+
+    [Fact]
+    public void VerificationBootstrapScript_ShouldCreateOnlyTheDatabase()
+    {
+        string scriptPath = SqlScriptRunner.ResolveScriptPath("bootstrap-libdb-verification-database.sql");
+        string script = File.ReadAllText(scriptPath);
+
+        script.Should().Contain("CREATE DATABASE [LIBDB_VERIFICATION_TEST]");
+        script.Should().NotContain("CREATE TABLE");
+        script.Should().NotContain("CREATE TYPE");
+        script.Should().NotContain("CREATE OR ALTER PROCEDURE");
     }
 
     private static string ResolveSourcePath(string fileName)

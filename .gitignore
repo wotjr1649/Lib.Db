@@ -37,10 +37,17 @@ Thumbs.db
 /Benchmarks/
 /Tests/
 
-# Internal planning, review, and security notes are not release docs
-/docs/reviews/
-/docs/security/
-/docs/superpowers/
+# Internal planning, review, and security notes are not release docs.
+# Keep only the small policy/readme/archive files that release-gate tests validate.
+/docs/reviews/*
+!/docs/reviews/README.md
+!/docs/reviews/archive/
+!/docs/reviews/archive/*.md
+/docs/security/*
+!/docs/security/aot-tvp-risk-ledger.md
+!/docs/security/libdb-server-chaos-harness.md
+/docs/superpowers/*
+!/docs/superpowers/README.md
 
 # Local verification secrets
 Verification/scripts/Set-LibDbVerificationEnvironment.local.ps1

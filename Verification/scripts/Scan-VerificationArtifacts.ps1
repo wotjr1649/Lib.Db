@@ -60,7 +60,11 @@ foreach ($root in $roots) {
     Write-Output "Scanning verification artifact path: $root"
 
     Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop |
-        Where-Object { $textExtensions -contains $_.Extension.ToLowerInvariant() } |
+        Where-Object {
+            $extension = $_.Extension.ToLowerInvariant()
+            $name = $_.Name.ToLowerInvariant()
+            $textExtensions -contains $extension -or $textExtensions -contains $name
+        } |
         ForEach-Object {
             $file = $_.FullName
             $content = [System.IO.File]::ReadAllText($file)

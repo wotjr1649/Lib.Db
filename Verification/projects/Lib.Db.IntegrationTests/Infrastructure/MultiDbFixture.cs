@@ -14,7 +14,7 @@ public sealed class MultiDbFixture : IAsyncLifetime
 {
     private static readonly DatabaseScript[] s_databaseScripts =
     [
-        new(TestConnectionStrings.Verification, "setup-libdb-verification-test.sql"),
+        new(TestConnectionStrings.Verification, "bootstrap-libdb-verification-database.sql"),
         new(TestConnectionStrings.Stress, "setup-libdb-stress-test.sql", "verify-libdb-stress-test.sql"),
         new(TestConnectionStrings.Chaos, "setup-libdb-chaos-test.sql", "verify-libdb-chaos-test.sql"),
         new(TestConnectionStrings.Benchmark, "setup-libdb-bench-test.sql", "verify-libdb-bench-test.sql")

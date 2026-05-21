@@ -130,7 +130,9 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
     [Fact]
     public void SM05_Fallback_ShouldActivate_On_InitFailure()
     {
-        string invalidPath = Path.Combine(_basePath, "in<valid>name");
+        Directory.CreateDirectory(_basePath);
+        string invalidPath = Path.Combine(_basePath, "not-a-directory");
+        File.WriteAllText(invalidPath, "occupied");
 
         SharedMemoryCacheOptions options = new()
         {
