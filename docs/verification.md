@@ -25,6 +25,18 @@ Release-grade maintainer validation covers:
 7. Secret-pattern scanning of generated verification artifacts before preserving or sharing reports.
 8. Generated artifact tracking gates so benchmark, test, coverage, and AOT outputs are not committed as source.
 
+## Local Bootstrap
+
+Local maintainers can use `Verification/scripts/Set-LibDbVerificationEnvironment.example.ps1` as the template for process-scoped verification environment variables.
+
+The bootstrap reads the local SQL password from `LIBDB_TEST_SQL_PASSWORD` and also sets process-scoped `SQLCMDPASSWORD` for direct `sqlcmd -U` verification paths. Keep the local script outside source control, do not print secret values, and run direct SQL setup only against disposable verification databases.
+
+## GitHub Actions AOT
+
+Windows Native AOT publish requires the Visual Studio C++ toolchain. The Windows AOT GitHub Actions workflow uses `windows-2022`, verifies the `Microsoft.VisualStudio.Workload.NativeDesktop` workload through `vswhere`, and then runs `Verification/scripts/Invoke-Aot.ps1`.
+
+Linux release validation continues to use the existing release workflow. The Windows AOT workflow is an additional toolchain check for the Desktop development with C++ prerequisite, not a replacement for the package publishing workflow.
+
 ## Official References
 
 - Microsoft Learn documents Coverlet-style `dotnet test` coverage collection and Cobertura reporting for .NET test projects: <https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-code-coverage>
@@ -34,6 +46,9 @@ Release-grade maintainer validation covers:
 - Microsoft Learn documents memory-optimized table variables, TVP usage, and filegroup requirements: <https://learn.microsoft.com/en-us/sql/relational-databases/in-memory-oltp/faster-temp-table-and-table-variable-by-using-memory-optimization>
 - Microsoft Learn documents Native AOT warning handling and the need to validate remaining warnings: <https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/fixing-warnings>
 - Microsoft Learn documents `IL3053` as an aggregate third-party AOT analysis warning: <https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/warnings/il3053>
+- Microsoft Learn documents Native AOT prerequisites, including the Windows Visual Studio Desktop development with C++ workload: <https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/>
+- GitHub Actions runner images document the installed software on Windows Server 2022 hosted runners: <https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md>
+- Microsoft Learn documents the Visual Studio Build Tools workload/component IDs used to detect the native desktop C++ workload: <https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools>
 
 ## AOT Warning Policy
 
@@ -53,5 +68,4 @@ Generated verification artifacts are internal maintainer evidence. They are not 
 
 ## Related Documents
 
-- [AOT/TVP Risk Ledger](./security/aot-tvp-risk-ledger.md)
 - [History](./history.md)

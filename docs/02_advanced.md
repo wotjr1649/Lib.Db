@@ -396,6 +396,7 @@ public enum DbInterceptionResult
 | 속성 | 타입 | 설명 |
 |---|---|---|
 | `CommandText` | `string` | SP 이름 또는 SQL 텍스트 |
+| `DiagnosticCommandText` | `string?` | 진단/로그용 명령 텍스트. Raw SQL 원문 노출을 피하려면 이 값을 우선 사용 |
 | `CommandType` | `CommandType` | 명령 유형 (StoredProcedure / Text) |
 | `InstanceName` | `string` | 대상 인스턴스 이름 |
 | `StartTime` | `DateTime` | 실행 시작 시각 (UTC) |
@@ -424,7 +425,7 @@ public sealed class SlowQueryInterceptor(ILogger<SlowQueryInterceptor> logger) :
         {
             logger.LogWarning(
                 "[Slow Query] {CommandText} took {ElapsedMs}ms on {Instance}",
-                context.CommandText, context.ElapsedMs, context.InstanceName);
+                context.DiagnosticCommandText, context.ElapsedMs, context.InstanceName);
         }
         return ValueTask.CompletedTask;
     }
@@ -434,7 +435,7 @@ public sealed class SlowQueryInterceptor(ILogger<SlowQueryInterceptor> logger) :
     {
         logger.LogError(context.Exception,
             "[DB Error] {CommandText} on {Instance}",
-            context.CommandText, context.InstanceName);
+            context.DiagnosticCommandText, context.InstanceName);
         return ValueTask.CompletedTask;
     }
 }

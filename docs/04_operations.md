@@ -216,7 +216,7 @@ Lib.Db는 options validation 단계에서 연결 문자열 이름, 키 매핑, �
 
 `EnableObservability`를 `true`로 설정합니다.
 
-`EnableObservability` is a process-wide Lib.Db switch in v2.3.0. Configure it once at
+`EnableObservability` is a process-wide Lib.Db switch. Configure it once at
 startup through `AddLibDb`/`AddHighPerformanceDb`, or use
 `LibDbRuntime.ConfigureMetrics(bool)` as an explicit process-wide override.
 

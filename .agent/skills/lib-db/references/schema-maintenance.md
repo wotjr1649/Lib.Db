@@ -45,4 +45,8 @@ await db.UseSchema("Default").FlushSchemaAsync(ct);
 
 ## Hosted Coordination
 
-`AddLibDbHostedServices()` registers schema warmup services. `AddSchemaFlushCoordination(...)` registers epoch-based coordination and watcher services. Read `operations-integration.md`.
+`AddLibDbHostedServices()` registers schema warmup services. Configure `EnableSchemaCaching`,
+`PrewarmSchemas`, `PrewarmIncludePatterns`, `PrewarmExcludePatterns`, and
+`PrewarmMaxConcurrency` in `LibDbOptions` before registering hosted services.
+`AddSchemaFlushCoordination(...)` registers epoch-based coordination and watcher services.
+Read `operations-integration.md` for a complete schema warmup example.

@@ -98,3 +98,26 @@ builder.Services.AddLibDbHostedServices();
 ```
 
 Use modular registration only when the application needs advanced control over service composition.
+
+## Schema Warmup Options
+
+```csharp
+builder.Services.AddLibDb(options =>
+{
+    options.ConnectionStringNames = new[] { "Default" };
+    options.ConnectionStrings["Default"] =
+        builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string key 'Default' is missing.");
+
+    options.EnableSchemaCaching = true;
+    options.PrewarmSchemas = new() { "dbo" };
+    options.PrewarmIncludePatterns = new() { "usp_*", "*Tvp" };
+    options.PrewarmExcludePatterns = new() { "usp_Archive*" };
+    options.PrewarmMaxConcurrency = 0;
+});
+
+builder.Services.AddLibDbHostedServices();
+```
+
+Use include patterns to keep startup work focused. Leave `PrewarmIncludePatterns` empty only when
+the application intentionally wants to warm every supported object in the listed schemas.

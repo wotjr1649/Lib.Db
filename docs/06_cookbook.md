@@ -568,7 +568,7 @@ public sealed class AuditInterceptor(ILogger<AuditInterceptor> logger) : IDbInte
     {
         logger.LogInformation(
             "[DB 실행] {CommandType}: {CommandText} on {Instance}",
-            context.CommandType, context.CommandText, context.InstanceName);
+            context.CommandType, context.DiagnosticCommandText, context.InstanceName);
         return ValueTask.FromResult(DbInterceptionResult.Continue);
     }
 
@@ -577,7 +577,7 @@ public sealed class AuditInterceptor(ILogger<AuditInterceptor> logger) : IDbInte
     {
         logger.LogInformation(
             "[DB 완료] {CommandText} - {ElapsedMs}ms",
-            context.CommandText, context.ElapsedMs);
+            context.DiagnosticCommandText, context.ElapsedMs);
         return ValueTask.CompletedTask;
     }
 
@@ -586,7 +586,7 @@ public sealed class AuditInterceptor(ILogger<AuditInterceptor> logger) : IDbInte
     {
         logger.LogError(context.Exception,
             "[DB 오류] {CommandText} - {ElapsedMs}ms",
-            context.CommandText, context.ElapsedMs);
+            context.DiagnosticCommandText, context.ElapsedMs);
         return ValueTask.CompletedTask;
     }
 }
@@ -596,7 +596,7 @@ builder.Services.AddLibDbInterceptor<AuditInterceptor>();
 ```
 
 **결과 타입**: (인터셉터는 결과를 반환하지 않음)
-**주의사항**: `OnExecutingAsync`에서 `DbInterceptionResult.Suppress`를 반환하면 실제 DB 호출이 건너뛰어집니다. 다중 인터셉터는 DI 등록 순서대로 체인 실행됩니다.
+**주의사항**: 로그에는 `DiagnosticCommandText`를 우선 사용하세요. `CommandText`는 Raw SQL 원문일 수 있습니다. `OnExecutingAsync`에서 `DbInterceptionResult.Suppress`를 반환하면 실제 DB 호출이 건너뛰어집니다. 다중 인터셉터는 DI 등록 순서대로 체인 실행됩니다.
 
 ---
 

@@ -121,7 +121,7 @@ builder.Services.AddLibDb(options =>
 });
 ```
 
-See [Advanced Features](https://github.com/wotjr1649/Lib.Db/blob/main/docs/02_advanced.md) for schema-adaptive descriptors, cache flush behavior, AOT guidance, and TVP versus bulk insert tradeoffs.
+See [Configuration and Advanced Features](https://github.com/wotjr1649/Lib.Db/blob/main/docs/02_advanced.md) for schema-adaptive descriptors, cache flush behavior, AOT guidance, and TVP versus bulk insert tradeoffs.
 
 ## Key Features
 
@@ -143,11 +143,12 @@ See [Advanced Features](https://github.com/wotjr1649/Lib.Db/blob/main/docs/02_ad
 ## Documentation
 
 - [Guide](https://github.com/wotjr1649/Lib.Db/blob/main/docs/01_guide.md) introduces setup, configuration, and day-to-day usage.
-- [Advanced Features](https://github.com/wotjr1649/Lib.Db/blob/main/docs/02_advanced.md) covers Runtime TVP, AOT, resilience, caching, JSON mapping, bulk insert, and pool metrics.
+- [Configuration and Advanced Features](https://github.com/wotjr1649/Lib.Db/blob/main/docs/02_advanced.md) covers Runtime TVP, AOT, resilience, caching, JSON mapping, bulk insert, and pool metrics.
 - [API Reference](https://github.com/wotjr1649/Lib.Db/blob/main/docs/03_api_reference.md) lists the public API surface and extension points.
 - [Operations](https://github.com/wotjr1649/Lib.Db/blob/main/docs/04_operations.md) covers production configuration and operational guardrails.
 - [Fluent API Reference](https://github.com/wotjr1649/Lib.Db/blob/main/docs/05_fluent_api_reference.md) documents the staged procedure call API.
 - [Cookbook](https://github.com/wotjr1649/Lib.Db/blob/main/docs/06_cookbook.md) provides task-focused examples.
+- [Verification](https://github.com/wotjr1649/Lib.Db/blob/main/docs/verification.md) explains maintainer-only release validation and generated artifact policy.
 - [History](https://github.com/wotjr1649/Lib.Db/blob/main/docs/history.md) contains release notes and migration history.
 
 ## License

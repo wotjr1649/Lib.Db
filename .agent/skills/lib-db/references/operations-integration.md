@@ -25,6 +25,32 @@ builder.Services.AddLibDbHostedServices();
 
 This registers Lib.Db hosted services such as schema warmup. `AddHighPerformanceDb(...)` already calls it.
 
+## Schema Warmup
+
+Enable schema caching, list the schemas to warm, and optionally narrow the object set with include
+and exclude patterns. `PrewarmMaxConcurrency = 0` lets Lib.Db choose the default concurrency.
+
+```csharp
+builder.Services.AddLibDb(options =>
+{
+    options.ConnectionStringNames = new[] { "Default" };
+    options.ConnectionStrings["Default"] =
+        builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string key 'Default' is missing.");
+
+    options.EnableSchemaCaching = true;
+    options.PrewarmSchemas = new() { "dbo", "sales" };
+    options.PrewarmIncludePatterns = new() { "usp_*", "*Tvp" };
+    options.PrewarmExcludePatterns = new() { "usp_Archive*" };
+    options.PrewarmMaxConcurrency = 0;
+});
+
+builder.Services.AddLibDbHostedServices();
+```
+
+Use warmup for startup-time metadata preparation. Keep schema flush and warmup operations behind
+maintainer or platform controls, not ordinary user-facing endpoints.
+
 ## Schema Flush Coordination
 
 ```csharp

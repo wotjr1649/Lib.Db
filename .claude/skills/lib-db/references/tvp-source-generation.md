@@ -80,6 +80,23 @@ builder.Services.AddLibDb(options =>
 ```
 
 `options.Tvp.EnableAutoTvpBinding` controls automatic binding for registered row sequences.
+It is enabled by default. After `options.Tvp.Map<T>()` is registered, pass the registered
+`IEnumerable<T>` row sequence directly in `.With(...)`; Lib.Db converts that property to the
+registered TVP type and leaves scalar parameters as normal parameters.
+
+```csharp
+DbResult<int> result = await db.Default
+    .Procedure("dbo.usp_ImportOrderLines")
+    .With(new
+    {
+        RequestedBy = userId,
+        Lines = rows
+    })
+    .ExecuteAsync(ct);
+```
+
+Use `LibDb.Tvp(...)` instead when the row type is not registered, when choosing a TVP type name
+per call, or when `EnableAutoTvpBinding` has been disabled.
 
 ## Runtime Descriptor
 
