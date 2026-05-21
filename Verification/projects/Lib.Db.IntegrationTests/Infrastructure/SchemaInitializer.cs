@@ -849,7 +849,39 @@ internal static class SchemaInitializer
             END
             """).ExecuteAsync().ConfigureAwait(false);
 
+        await db.Sql("""
+            IF OBJECT_ID('[core].[CursorState]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [core].[CursorState] (
+                    [InstanceHash] VARCHAR(100) NOT NULL,
+                    [QueryKey] VARCHAR(100) NOT NULL,
+                    [CursorValue] NVARCHAR(MAX) NULL,
+                    [UpdatedAt] DATETIME2(7) NOT NULL CONSTRAINT [DF_core_CursorState_UpdatedAt] DEFAULT SYSUTCDATETIME(),
+                    CONSTRAINT [PK_core_CursorState] PRIMARY KEY ([InstanceHash], [QueryKey])
+                )
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
         // TVP 타입: Tvp_Core_User
+        await db.Sql("""
+            IF TYPE_ID(N'core.Tvp_Core_User') IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1
+                FROM sys.table_types AS tt
+                INNER JOIN sys.schemas AS s ON s.schema_id = tt.schema_id
+                WHERE s.name = N'core'
+                  AND tt.name = N'Tvp_Core_User'
+                  AND (SELECT COUNT(*) FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id) = 3
+                  AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 1 AND c.name = N'UserName')
+                  AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 2 AND c.name = N'Email')
+                  AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 3 AND c.name = N'Age')
+            )
+            BEGIN
+                DROP PROCEDURE IF EXISTS [core].[usp_Core_Bulk_Insert_Users];
+                DROP TYPE [core].[Tvp_Core_User];
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
         await db.Sql("""
             IF TYPE_ID('[core].[Tvp_Core_User]') IS NULL
             BEGIN
@@ -1219,6 +1251,26 @@ internal static class SchemaInitializer
             END
             """).ExecuteAsync().ConfigureAwait(false);
 
+        await db.Sql("""
+            IF TYPE_ID(N'dbo.T_StandardEvent') IS NULL
+            BEGIN
+                CREATE TYPE [dbo].[T_StandardEvent] AS TABLE (
+                    [EventId] INT NULL,
+                    [CreatedAt] DATETIME2(3) NULL
+                )
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            IF TYPE_ID(N'dbo.T_PrecisionEvent') IS NULL
+            BEGIN
+                CREATE TYPE [dbo].[T_PrecisionEvent] AS TABLE (
+                    [EventId] INT NULL,
+                    [CreatedAt] DATETIME2(7) NULL
+                )
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
         // TVP 타입: TypeTest (기본)
         await db.Sql("""
             IF TYPE_ID('[tvp].[TypeTest]') IS NULL
@@ -1232,6 +1284,27 @@ internal static class SchemaInitializer
             """).ExecuteAsync().ConfigureAwait(false);
 
         // TVP 타입: Tvp_Tvp_AllTypes
+        await db.Sql("""
+            IF TYPE_ID(N'tvp.Tvp_Tvp_AllTypes') IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1
+                FROM sys.table_types AS tt
+                INNER JOIN sys.schemas AS s ON s.schema_id = tt.schema_id
+                WHERE s.name = N'tvp'
+                  AND tt.name = N'Tvp_Tvp_AllTypes'
+                  AND (SELECT COUNT(*) FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id) = 5
+                  AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 1 AND c.name = N'DateOnlyValue')
+                  AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 2 AND c.name = N'TimeOnlyValue')
+                  AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 3 AND c.name = N'HalfValue')
+                  AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 4 AND c.name = N'GuidValue')
+                  AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 5 AND c.name = N'DecimalValue')
+            )
+            BEGIN
+                DROP PROCEDURE IF EXISTS [tvp].[usp_Tvp_Bulk_Insert_AllTypes];
+                DROP TYPE [tvp].[Tvp_Tvp_AllTypes];
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
         await db.Sql("""
             IF TYPE_ID('[tvp].[Tvp_Tvp_AllTypes]') IS NULL
             BEGIN

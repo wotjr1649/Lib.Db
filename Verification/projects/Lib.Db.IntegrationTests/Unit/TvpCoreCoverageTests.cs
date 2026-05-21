@@ -1063,6 +1063,15 @@ public sealed class TvpCoreCoverageTests
         TvpAccessorCache.Configure((LibDbOptions)FormatterServices.GetUninitializedObject(typeof(LibDbOptions)));
 
         TvpAccessorCache.Clear();
+        TvpAccessorCache.GetTypedAccessors<DeclarationOrderCoverageRow>()
+            .Properties
+            .Select(static property => property.Name)
+            .Should()
+            .Equal(
+                nameof(DeclarationOrderCoverageRow.UserName),
+                nameof(DeclarationOrderCoverageRow.Email),
+                nameof(DeclarationOrderCoverageRow.Age));
+
         TvpAccessorCache.GetTypedAccessors<DelegateCacheCoverageRow>()
             .Properties
             .Should()
@@ -1540,6 +1549,8 @@ public sealed class TvpCoreCoverageTests
     private sealed record RegistryInitialCoverageRow(int Id, string Name);
 
     private sealed record DelegateCacheCoverageRow(int Id);
+
+    private sealed record DeclarationOrderCoverageRow(string UserName, string Email, int? Age);
 
     private sealed record RegistryOrderRow(int Id, string Name);
 

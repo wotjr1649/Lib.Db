@@ -111,7 +111,7 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
             .ExecuteScalarAsync<int>();
 
         // Assert
-        scalarResult.IsSuccess.Should().BeTrue();
+        scalarResult.IsSuccess.Should().BeTrue(scalarResult.Error?.Message);
         scalarResult.Value.Should().BeGreaterThanOrEqualTo(3, "시드 데이터 Alice, Bob, Charlie가 존재해야 합니다.");
     }
 
@@ -141,7 +141,9 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
             .ExecuteScalarAsync<int>();
 
         // Assert
-        scalarResult.IsSuccess.Should().BeTrue();
+        if (!scalarResult.IsSuccess)
+            throw new InvalidOperationException(
+                $"TVP insert failed: {scalarResult.Error?.Kind} ({scalarResult.Error?.SqlErrorCode}) {scalarResult.Error?.Message} {scalarResult.Error?.InnerException?.Message}");
         scalarResult.Value.Should().Be(3, "3명의 사용자가 삽입되어야 합니다.");
 
         // Cleanup

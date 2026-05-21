@@ -55,7 +55,7 @@ public sealed class LiveDbTests : IClassFixture<LiveDbFixture>
             .With(new { Items = list })
             .ExecuteScalarAsync<int>();
 
-        result.IsSuccess.Should().BeTrue();
+        result.IsSuccess.Should().BeTrue(result.Error?.Message);
         result.Value.Should().Be(1);
     }
 }
@@ -77,10 +77,10 @@ public sealed class BulkTestItem
 public sealed class AllTypesTvp
 {
     public DateOnly DateOnlyValue { get; set; }
-    public decimal DecimalValue { get; set; }
-    public Guid GuidValue { get; set; }
-    public float HalfValue { get; set; }
     public TimeOnly TimeOnlyValue { get; set; }
+    public float HalfValue { get; set; }
+    public Guid GuidValue { get; set; }
+    public decimal DecimalValue { get; set; }
 }
 
 /// <summary>
