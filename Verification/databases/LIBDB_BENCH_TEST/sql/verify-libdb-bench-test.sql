@@ -1,7 +1,7 @@
 -- ============================================================================
 -- File: verify-libdb-bench-test.sql
 -- Purpose: Benchmark database readiness checks for LIBDB_BENCH_TEST.
--- Run after: setup-libdb-bench-test.sql and setup-libdb-bench-memory-optimized-tvp-optin.sql
+-- Run after: setup-libdb-bench-test.sql
 -- Secret: set SQLCMDPASSWORD in the environment before running sqlcmd.
 -- Run: sqlcmd -S localhost -U SA -N o -i verify-libdb-bench-test.sql -f 65001 -b
 -- ============================================================================
@@ -27,7 +27,7 @@ INSERT INTO @ExpectedTables VALUES
 (N'dbo.libdb_bench_CompositeItems'), (N'dbo.libdb_bench_MultiHeaders'),
 (N'dbo.libdb_bench_MultiLines'), (N'dbo.libdb_bench_MethodRuns'),
 (N'dbo.libdb_bench_MethodRunMetrics'), (N'dbo.libdb_bench_BulkCopyStage'),
-(N'dbo.libdb_bench_DataReaderStage'), (N'dbo.libdb_bench_MemoryOptimizedOrderItems');
+(N'dbo.libdb_bench_DataReaderStage');
 
 INSERT INTO @Failures
 SELECT N'table-exists', CONCAT(N'Missing table: ', [Name])
@@ -42,8 +42,7 @@ INSERT INTO @ExpectedTypes VALUES
 (N'dbo.libdb_bench_LobOrderItem'), (N'dbo.libdb_bench_BinaryOrderItem'),
 (N'dbo.libdb_bench_DecimalOrderItem'), (N'dbo.libdb_bench_TemporalOrderItem'),
 (N'dbo.libdb_bench_GuidOrderItem'), (N'dbo.libdb_bench_JsonOrderItem'),
-(N'dbo.libdb_bench_CompositeOrderItem'), (N'dbo.libdb_bench_MultiOrderHeader'),
-(N'dbo.libdb_bench_MemoryOptimizedOrderItem');
+(N'dbo.libdb_bench_CompositeOrderItem'), (N'dbo.libdb_bench_MultiOrderHeader');
 
 INSERT INTO @Failures
 SELECT N'tvp-type-exists', CONCAT(N'Missing TVP type: ', [Name])
@@ -72,8 +71,7 @@ INSERT INTO @ExpectedProcedures VALUES
 (N'dbo.libdb_bench_ClearGuidOrderItems'), (N'dbo.libdb_bench_ClearJsonOrderItems'),
 (N'dbo.libdb_bench_ClearCompositeOrderItems'), (N'dbo.libdb_bench_ClearMultiOrderGraph'),
 (N'dbo.libdb_bench_StartMethodRun'), (N'dbo.libdb_bench_FinishMethodRun'),
-(N'dbo.libdb_bench_RecordMethodMetric'), (N'dbo.libdb_bench_ResetBenchmarkMatrix'),
-(N'dbo.libdb_bench_InsertMemoryOptimizedOrderItems');
+(N'dbo.libdb_bench_RecordMethodMetric'), (N'dbo.libdb_bench_ResetBenchmarkMatrix');
 
 INSERT INTO @Failures
 SELECT N'procedure-exists', CONCAT(N'Missing procedure: ', [Name])
@@ -90,49 +88,6 @@ IF
       AND tt.name = N'libdb_bench_WideOrderItem'
 ) <> 16
     INSERT INTO @Failures VALUES (N'wide-tvp-shape', N'dbo.libdb_bench_WideOrderItem must have 16 columns.');
-
-IF EXISTS (SELECT 1 FROM sys.databases WHERE [name] = DB_NAME() AND [is_auto_close_on] = 1)
-    INSERT INTO @Failures VALUES (N'memory-optimized-auto-close', N'AUTO_CLOSE must be OFF because LIBDB_BENCH_TEST includes MEMORY_OPTIMIZED_DATA.');
-
-IF NOT EXISTS (SELECT 1 FROM sys.filegroups WHERE [type] = N'FX')
-    INSERT INTO @Failures VALUES (N'memory-optimized-filegroup', N'LIBDB_BENCH_TEST must include a MEMORY_OPTIMIZED_DATA filegroup.');
-
-IF NOT EXISTS
-(
-    SELECT 1
-    FROM sys.table_types AS table_types
-    WHERE SCHEMA_NAME(table_types.[schema_id]) = N'dbo'
-      AND table_types.[name] = N'libdb_bench_MemoryOptimizedOrderItem'
-      AND table_types.[is_memory_optimized] = 1
-)
-    INSERT INTO @Failures VALUES (N'memory-optimized-type', N'dbo.libdb_bench_MemoryOptimizedOrderItem must be memory optimized.');
-
-IF NOT EXISTS
-(
-    SELECT 1
-    FROM sys.table_types AS table_types
-    INNER JOIN sys.hash_indexes AS hash_indexes
-        ON hash_indexes.[object_id] = table_types.[type_table_object_id]
-    WHERE SCHEMA_NAME(table_types.[schema_id]) = N'dbo'
-      AND table_types.[name] = N'libdb_bench_MemoryOptimizedOrderItem'
-      AND hash_indexes.[bucket_count] = 1024
-)
-    INSERT INTO @Failures VALUES (N'memory-optimized-hash-index', N'dbo.libdb_bench_MemoryOptimizedOrderItem must expose the expected hash index.');
-
-IF NOT EXISTS
-(
-    SELECT 1
-    FROM sys.parameters AS parameters
-    INNER JOIN sys.table_types AS table_types
-        ON table_types.[user_type_id] = parameters.[user_type_id]
-    WHERE parameters.[object_id] = OBJECT_ID(N'[dbo].[libdb_bench_InsertMemoryOptimizedOrderItems]', N'P')
-      AND parameters.[name] = N'@Rows'
-      AND parameters.[is_readonly] = 1
-      AND SCHEMA_NAME(table_types.[schema_id]) = N'dbo'
-      AND table_types.[name] = N'libdb_bench_MemoryOptimizedOrderItem'
-      AND table_types.[is_memory_optimized] = 1
-)
-    INSERT INTO @Failures VALUES (N'memory-optimized-tvp-param', N'dbo.libdb_bench_InsertMemoryOptimizedOrderItems @Rows must be READONLY dbo.libdb_bench_MemoryOptimizedOrderItem.');
 
 DECLARE @Rows [dbo].[libdb_bench_OrderItem];
 INSERT INTO @Rows ([Id], [Sku], [Qty], [Price]) VALUES (1, N'BENCH-VERIFY', 2, 12.30);
@@ -157,19 +112,6 @@ INSERT INTO @Wide EXEC [dbo].[libdb_bench_InsertWideOrderItems] @OrderId = 231, 
 IF NOT EXISTS (SELECT 1 FROM @Wide WHERE [InsertedCount] >= 1)
     INSERT INTO @Failures VALUES (N'wide-tvp-smoke', N'Wide benchmark TVP insert did not return inserted count.');
 
-DECLARE @MemoryOptimizedRows [dbo].[libdb_bench_MemoryOptimizedOrderItem];
-INSERT INTO @MemoryOptimizedRows ([Id], [Sku], [Qty], [Price])
-VALUES (1, N'BENCH-MEMOPT-1', 2, 12.30),
-       (2, N'BENCH-MEMOPT-2', 3, 15.40);
-DECLARE @MemoryOptimized TABLE ([InsertedCount] BIGINT);
-INSERT INTO @MemoryOptimized
-EXEC [dbo].[libdb_bench_InsertMemoryOptimizedOrderItems]
-    @OrderId = 232,
-    @RequestedBy = N'verify',
-    @Rows = @MemoryOptimizedRows;
-IF NOT EXISTS (SELECT 1 FROM @MemoryOptimized WHERE [InsertedCount] = 2)
-    INSERT INTO @Failures VALUES (N'memory-optimized-tvp-smoke', N'Memory-optimized benchmark TVP insert did not return inserted count.');
-
 IF NOT EXISTS
 (
     SELECT 1
@@ -190,5 +132,5 @@ SELECT N'LIBDB_BENCH_TEST verification passed.' AS [Result],
        (SELECT COUNT(*) FROM @ExpectedTables) AS [ExpectedTables],
        (SELECT COUNT(*) FROM @ExpectedTypes) AS [ExpectedTypes],
        (SELECT COUNT(*) FROM @ExpectedProcedures) AS [ExpectedProcedures],
-       N'SqlBulkCopy and BenchmarkDotNet timing require .NET benchmark harness. Memory-optimized TVP opt-in is part of the final BENCH sync manifest.' AS [BenchmarkNote];
+       N'SqlBulkCopy and BenchmarkDotNet timing require .NET benchmark harness. Memory-optimized TVP is verified by the separate opt-in BENCH script.' AS [BenchmarkNote];
 GO
