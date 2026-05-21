@@ -8,7 +8,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 
 - Added Runtime TVP binding in the single `Lib.Db` runtime package, without requiring a separate `Lib.Db.TvpGen` package.
 - Added the `LibDb.Tvp("dbo.TypeName", rows)` wrapper so TVP rows can be passed alongside regular scalar, output, return, and provider parameters.
-- Added `Lib.Db.Tvp` static-shape registration for repeated and Native AOT-oriented TVP calls. `options.Tvp.Map<T>(...).Column(...)` records SQL metadata and static getters, then uses an `IEnumerable<SqlDataRecord>` fast path instead of runtime property discovery on hot paths.
+- Added static-shape Runtime TVP registration for repeated and Native AOT-oriented TVP calls. `options.Tvp.Map<T>(...).Column(...)` records SQL metadata and static getters, then uses an `IEnumerable<SqlDataRecord>` fast path instead of runtime property discovery on hot paths.
 - Added `TvpShape.For` as the standalone static-shape construction path for callers that need an explicit reusable TVP shape outside the options registration flow.
 - Added schema-adaptive TVP binding through descriptors: callers can retrieve a DB descriptor with `db.UseSchema(...).GetTvpAsync(...)` and pass it to `LibDb.Tvp(descriptor, rows, TvpBindingPolicy.Adaptive)` so nullable/default-safe schema drift can be corrected deliberately.
 - Added targeted TVP schema cache flush APIs such as `db.Schema.FlushTvpAsync(...)` and `db.UseSchema(...).FlushTvpAsync(...)` for refreshing a single TVP descriptor after verified drift.

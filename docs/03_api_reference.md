@@ -263,6 +263,8 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `ReadSingleAsync<T>` | `Task<T?> ReadSingleAsync<T>(CancellationToken ct)` | 현재 ResultSet에서 단건 |
 | (상속) | `IAsyncDisposable` | 리소스 해제 |
 
+`ReadAsync`와 `ReadSingleAsync`는 SP가 반환하는 ResultSet 순서대로 호출합니다. 호출부가 읽지 않는 뒤쪽 추가 ResultSet은 허용됩니다. 반대로 호출부가 다음 ResultSet을 기대했는데 SP/배치가 더 이상 ResultSet을 반환하지 않으면 계약 오류로 `InvalidOperationException`이 발생합니다. 실제 ResultSet이 존재하지만 행이 0개인 경우에는 `ReadAsync<T>`는 빈 리스트, `ReadSingleAsync<T>`는 `default`를 반환합니다.
+
 ---
 
 ## 11. Extension Methods

@@ -28,17 +28,32 @@ public sealed class SqlGridReaderCoverageTests
         List<int> first = await grid.ReadAsync<int>();
         string? second = await grid.ReadSingleAsync<string>();
         int emptySingle = await grid.ReadSingleAsync<int>();
-        List<int> afterLast = await grid.ReadAsync<int>();
-        string? afterLastSingle = await grid.ReadSingleAsync<string>();
-
-        await grid.DisposeAsync();
+        Func<Task> afterLast = () => grid.ReadAsync<int>();
 
         first.Should().Equal(1, 2);
         second.Should().Be("second");
         emptySingle.Should().Be(0);
-        afterLast.Should().BeEmpty();
-        afterLastSingle.Should().BeNull();
+        await afterLast.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*result set #4*System.Int32*");
+
+        await grid.DisposeAsync();
         reader.Disposed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ReadSingleAsync_ShouldThrowWhenExpectedResultSetIsMissing()
+    {
+        var reader = new SequenceDbDataReader([[1]]);
+        var grid = new SqlGridReader(reader, new ValueMapperFactory());
+
+        int first = await grid.ReadSingleAsync<int>();
+        Func<Task> missingSecond = () => grid.ReadSingleAsync<string>();
+
+        first.Should().Be(1);
+        await missingSecond.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*result set #2*System.String*");
     }
 
     [Fact]

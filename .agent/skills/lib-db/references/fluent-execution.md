@@ -103,7 +103,7 @@ List<OrderDto> orders = await grid.ReadAsync<OrderDto>(ct);
 OrderSummaryDto? summary = await grid.ReadSingleAsync<OrderSummaryDto>(ct);
 ```
 
-`IMultipleResultReader` is stateful and single-consumer. Read result sets in order.
+`IMultipleResultReader` is stateful and single-consumer. Read result sets in order. Extra trailing result sets can be ignored by not reading them. If application code asks for another result set and the stored procedure returned no more result sets, Lib.Db throws `InvalidOperationException`. If the result set exists but has no rows, `ReadAsync<T>()` returns an empty list and `ReadSingleAsync<T>()` returns `default`.
 
 ## Advanced Snapshot Overrides
 

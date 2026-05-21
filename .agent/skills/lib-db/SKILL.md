@@ -1,10 +1,6 @@
 ---
 name: lib-db
 description: Use when using the Lib.Db NuGet package in application code, especially for SQL Server data access, dependency injection, options, connection security, fluent queries, parameters, DbResult handling, mapping, TVP, bulk insert, schema maintenance, caching, transactions, health checks, interceptors, diagnostics, resilience, AOT/trimming, JSON helpers, or production-safe examples.
-allowed-tools:
-  - Read
-  - Grep
-  - Glob
 ---
 
 # Lib.Db

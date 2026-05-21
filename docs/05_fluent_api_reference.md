@@ -143,6 +143,8 @@ public interface IMultipleResultReader : IAsyncDisposable
 }
 ```
 
+Calls must follow the stored procedure's ResultSet order. Extra trailing ResultSets may be ignored by not reading them. If a call expects another ResultSet and the batch has no more ResultSets, Lib.Db throws `InvalidOperationException`; an existing empty ResultSet still maps to an empty list or `default`.
+
 ---
 
 ## 3. 실행 메서드별 TResult 지원 타입 매트릭스

@@ -15,6 +15,8 @@ if ([string]::IsNullOrWhiteSpace($password)) {
     throw "Set $PasswordEnvironmentVariable before loading this script."
 }
 
+[Environment]::SetEnvironmentVariable('SQLCMDPASSWORD', $password, 'Process')
+
 function New-LibDbVerificationConnectionString {
     param(
         [Parameter(Mandatory = $true)] [string] $Database

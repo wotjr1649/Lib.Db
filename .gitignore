@@ -37,5 +37,10 @@ Thumbs.db
 /Benchmarks/
 /Tests/
 
+# Internal planning, review, and security notes are not release docs
+/docs/reviews/
+/docs/security/
+/docs/superpowers/
+
 # Local verification secrets
 Verification/scripts/Set-LibDbVerificationEnvironment.local.ps1

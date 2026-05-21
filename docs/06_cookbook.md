@@ -142,7 +142,7 @@ if (result.IsSuccess)
 ```
 
 **결과 타입**: `DbResult<IMultipleResultReader>`
-**주의사항**: `ReadAsync` / `ReadSingleAsync`는 반드시 SP가 반환하는 ResultSet 순서대로 호출해야 합니다. C#에서 읽지 않은 추가 ResultSet은 `IMultipleResultReader` dispose 시 정리되므로, SP가 뒤에 진단용 SELECT를 추가해도 호출부가 선언한 ResultSet만 읽을 수 있습니다. `QueryMultipleAsync`는 MARS가 가능한 연결에서 사용하세요.
+**주의사항**: `ReadAsync` / `ReadSingleAsync`는 반드시 SP가 반환하는 ResultSet 순서대로 호출해야 합니다. C#에서 읽지 않은 추가 ResultSet은 `IMultipleResultReader` dispose 시 정리되므로, SP가 뒤에 진단용 SELECT를 추가해도 호출부가 선언한 ResultSet만 읽을 수 있습니다. 반대로 호출부가 다음 ResultSet을 기대했는데 SP가 더 이상 ResultSet을 반환하지 않으면 `InvalidOperationException`이 발생합니다. ResultSet은 존재하지만 행이 0개인 경우에는 빈 리스트 또는 `default`를 반환합니다. `QueryMultipleAsync`는 MARS가 가능한 연결에서 사용하세요.
 
 ---
 

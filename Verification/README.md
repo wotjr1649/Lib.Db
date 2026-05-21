@@ -13,7 +13,7 @@ This directory is the canonical root for Lib.Db v2.3.0 verification assets.
 - LIBDB_BENCHMARK_CONNECTION
 - SQLCMDPASSWORD
 
-Scripts print only whether each key is present and do not print values. `Invoke-Tests.ps1`, `Invoke-Coverage.ps1`, `Invoke-Benchmarks.ps1`, and `Invoke-Verification.ps1` load `Verification/scripts/Set-LibDbVerificationEnvironment.local.ps1` automatically when it exists.
+Scripts print only whether each key is present and do not print values. `Invoke-Tests.ps1`, `Invoke-Coverage.ps1`, `Invoke-Benchmarks.ps1`, and `Invoke-Verification.ps1` load `Verification/scripts/Set-LibDbVerificationEnvironment.local.ps1` automatically when it exists. The example bootstrap reads `LIBDB_TEST_SQL_PASSWORD` and sets process-scoped `SQLCMDPASSWORD` so `Invoke-VerificationDb.ps1` can call `sqlcmd -U` without putting the password on the command line.
 
 Do not run database-backed tests through raw `dotnet test`. The integration-test project has an MSBuild guard that fails before VSTest when the verification environment is missing. Use `Invoke-Tests.ps1` for focused tests and `Invoke-Verification.ps1` for release gates.
 

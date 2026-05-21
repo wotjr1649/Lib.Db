@@ -122,13 +122,19 @@ public interface IMultipleResultReader : IAsyncDisposable
 {
     /// <summary>
     /// 현재 ResultSet 전체를 리스트로 읽습니다.
+    /// <para>
+    /// 첫 호출 이후 기대한 다음 ResultSet이 없으면 저장 프로시저/배치 계약 오류로
+    /// <see cref="InvalidOperationException"/>을 발생시킵니다. 실제 ResultSet이 존재하지만 행이 없는 경우에는
+    /// 빈 리스트를 반환합니다.
+    /// </para>
     /// </summary>
     Task<List<T>> ReadAsync<T>(CancellationToken ct = default);
 
     /// <summary>
     /// 현재 ResultSet에서 단일 레코드만 읽습니다.
     /// <para>
-    /// 결과가 없으면 <c>default</c>를 반환합니다.
+    /// 실제 ResultSet이 존재하지만 행이 없으면 <c>default</c>를 반환합니다. 첫 호출 이후 기대한 다음
+    /// ResultSet이 없으면 저장 프로시저/배치 계약 오류로 <see cref="InvalidOperationException"/>을 발생시킵니다.
     /// </para>
     /// </summary>
     Task<T?> ReadSingleAsync<T>(CancellationToken ct = default);
