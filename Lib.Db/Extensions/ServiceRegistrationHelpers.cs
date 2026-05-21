@@ -6,8 +6,8 @@
 
 #nullable enable
 
-using System.Runtime.InteropServices;
 using Lib.Db.Caching;
+using Lib.Db.Contracts.Cache;
 using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Models;
@@ -18,8 +18,8 @@ using Lib.Db.Execution.Executors;
 using Lib.Db.Hosting;
 using Lib.Db.Infrastructure;
 using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -145,122 +145,121 @@ internal static class ServiceRegistrationHelpers
     #region [헬퍼] 공유 메모리 캐시 및 프로세스 슬롯 등록
 
     /// <summary>
-    /// 옵션 및 플랫폼 기반으로 IDistributedCache와 IProcessSlotAllocator를 등록합니다.
+    /// Provider-neutral core cache prerequisites를 등록합니다.
     /// </summary>
     /// <remarks>
-    /// <para><b>[v3 개선사항]</b></para>
-    /// <list type="bullet">
-    ///   <item>
-    ///     <description>
-    ///       <b>BuildServiceProvider() 제거</b>: DI 안티패턴 제거, Factory Pattern 적용
-    ///     </description>
-    ///   </item>
-    ///   <item>
-    ///     <description>
-    ///       <b>자동 격리 (Isolation)</b>: Connection String 기반 IsolationKey 자동 생성
-    ///     </description>
-    ///   </item>
-    ///   <item>
-    ///     <description>
-    ///       <b>프로세스 슬롯 할당</b>: IProcessSlotAllocator 자동 등록 (Leader Election 지원)
-    ///     </description>
-    ///   </item>
-    ///   <item>
-    ///     <description>
-    ///       <b>Passive Mode</b>: 비활성화 시 PassiveProcessSlotAllocator 반환 (Null Object Pattern)
-    ///     </description>
-    ///   </item>
-    /// </list>
-    ///
-    /// <para><b>[플랫폼 자동 감지]</b></para>
-    /// <para>
-    /// <see cref="LibDbOptions.EnableSharedMemoryCache"/>가 <c>null</c>이면:
-    /// <br/>- Windows: <c>true</c> (공유 메모리 사용)
-    /// <br/>- Linux/macOS/기타: <c>false</c> (프로세스 내 메모리 캐시 사용)
-    /// </para>
+    /// 이 경로는 <see cref="IDistributedCache"/>를 소유하지 않습니다. L2 캐시는 애플리케이션이 Redis, SQL,
+    /// Postgres 등 provider를 직접 등록하거나, 명시적으로 <c>AddLibDbSharedMemoryCache()</c>를 호출해야 합니다.
     /// </remarks>
     internal static void RegisterConditionalSharedMemoryCache(IServiceCollection services)
     {
         // ====================================================================
         // 0. IIsolationKeyGenerator 등록 (DI)
         // ====================================================================
-        services.TryAddSingleton<Lib.Db.Contracts.Cache.IIsolationKeyGenerator, Lib.Db.Caching.IsolationKeyGenerator>();
+        services.TryAddSingleton<IIsolationKeyGenerator, IsolationKeyGenerator>();
 
         // ====================================================================
-        // 1. IProcessSlotAllocator 등록
+        // 1. IProcessSlotAllocator 등록 (provider-neutral 기본값)
         // ====================================================================
         services.TryAddSingleton<IProcessSlotAllocator>(sp =>
         {
             LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
-            ILogger<ProcessSlotAllocator> logger = sp.GetRequiredService<ILogger<Lib.Db.Hosting.ProcessSlotAllocator>>();
-            IIsolationKeyGenerator keyGenerator = sp.GetRequiredService<Lib.Db.Contracts.Cache.IIsolationKeyGenerator>();
 
-            // 플랫폼별 기본값 결정
-            bool enableSharedMemory = options.EnableSharedMemoryCache
-                ?? RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-
-            if (!enableSharedMemory)
+            if (options.EnableSharedMemoryCache is true)
             {
-                logger.LogInformation("[ProcessSlot] 공유 메모리 비활성화 - Passive Mode");
-                return new Lib.Db.Hosting.PassiveProcessSlotAllocator();
+                throw new InvalidOperationException(
+                    "Lib.Db: EnableSharedMemoryCache=true requires explicit opt-in. " +
+                    "Call services.AddLibDbSharedMemoryCache() to use Lib.Db SharedMemoryCache, " +
+                    "or disable EnableSharedMemoryCache and register a provider-backed IDistributedCache for L2.");
             }
 
-            // IsolationKey 생성 (DI를 통한 서비스 사용)
-            string connectionString = GetPrimaryConnectionStringOrThrow(options, "ProcessSlotAllocator");
-
-            string isolationKey = keyGenerator.Generate(connectionString) ?? "Shared";
-
-            return new Lib.Db.Hosting.ProcessSlotAllocator(isolationKey, logger);
+            return new PassiveProcessSlotAllocator();
         });
+    }
 
-        // ====================================================================
-        // 2. IDistributedCache 등록
-        // ====================================================================
-        services.TryAddSingleton<IDistributedCache>(sp =>
+    /// <summary>
+    /// Lib.Db SharedMemoryCache를 명시적 opt-in으로 등록합니다.
+    /// </summary>
+    internal static void RegisterSharedMemoryCacheOptIn(IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        if (services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(LibDbSharedMemoryOptInMarker)))
         {
-            LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
-            ILogger<SharedMemoryCache> logger = sp.GetRequiredService<ILogger<SharedMemoryCache>>();
-            IIsolationKeyGenerator keyGenerator = sp.GetRequiredService<Lib.Db.Contracts.Cache.IIsolationKeyGenerator>();
+            return;
+        }
 
-            bool enableSharedMemory = options.EnableSharedMemoryCache
-                ?? RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        if (services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(IDistributedCache)))
+        {
+            throw new InvalidOperationException(
+                "Lib.Db: AddLibDbSharedMemoryCache() cannot be used after another IDistributedCache provider " +
+                "has been registered. Use either Lib.Db SharedMemoryCache opt-in or an external provider-backed L2, not both.");
+        }
 
-            if (!enableSharedMemory)
-            {
-                logger.LogInformation(
-                    "[공유메모리캐시] 비활성화 - MemoryDistributedCache 사용 (플랫폼: {OS}, 명시적 설정: {ExplicitSetting})",
-                    RuntimeInformation.OSDescription,
-                    options.EnableSharedMemoryCache?.ToString() ?? "null (auto-detect)");
+        services.TryAddSingleton<IIsolationKeyGenerator, IsolationKeyGenerator>();
+        services.TryAddSingleton<LibDbSharedMemoryOptInMarker>();
+        services.PostConfigure<LibDbOptions>(static options =>
+            options.EnableSharedMemoryCache = true);
 
-                return new MemoryDistributedCache(
-                    Microsoft.Extensions.Options.Options.Create(new MemoryDistributedCacheOptions()));
-            }
+        services.RemoveAll<IProcessSlotAllocator>();
+        services.AddSingleton<IProcessSlotAllocator>(CreateProcessSlotAllocator);
+        services.AddSingleton<IDistributedCache>(CreateSharedMemoryCache);
 
-            // 공유 메모리 활성화 - IsolationKey 생성 (DI 사용)
-            string connectionString = GetPrimaryConnectionStringOrThrow(options, "SharedMemoryCache");
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, CacheMaintenanceService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, LibDbSharedMemoryCacheStartupValidator>());
+    }
 
-            string? isolationKey = keyGenerator.Generate(connectionString);
-            string basePath = Path.Combine(Path.GetTempPath(), "LibDbCache");
+    private static IProcessSlotAllocator CreateProcessSlotAllocator(IServiceProvider sp)
+    {
+        LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
+        ILogger<ProcessSlotAllocator> logger = sp.GetRequiredService<ILogger<ProcessSlotAllocator>>();
+        IIsolationKeyGenerator keyGenerator = sp.GetRequiredService<IIsolationKeyGenerator>();
 
-            logger.LogInformation(
-                "[공유메모리캐시] 활성화 - SharedMemoryCache 사용 (플랫폼: {OS}, 격리키: {Key})",
-                RuntimeInformation.OSDescription,
-                isolationKey ?? "None");
+        string connectionString = GetPrimaryConnectionStringOrThrow(options, "ProcessSlotAllocator");
+        string isolationKey = keyGenerator.Generate(connectionString) ?? "Shared";
 
-            SharedMemoryCacheOptions cacheOptions = new SharedMemoryCacheOptions
-            {
-                BasePath = basePath,
-                IsolationKey = isolationKey ?? "Shared",
-                EnableObservability = options.EnableObservability
-            };
+        return new ProcessSlotAllocator(isolationKey, logger);
+    }
 
-            return new SharedMemoryCache(Microsoft.Extensions.Options.Options.Create(cacheOptions), logger);
-        });
+    private static IDistributedCache CreateSharedMemoryCache(IServiceProvider sp)
+    {
+        LibDbOptions options = sp.GetRequiredService<IOptions<LibDbOptions>>().Value;
+        ILogger<SharedMemoryCache> logger = sp.GetRequiredService<ILogger<SharedMemoryCache>>();
+        IIsolationKeyGenerator keyGenerator = sp.GetRequiredService<IIsolationKeyGenerator>();
 
-        // ====================================================================
-        // 3. CacheMaintenanceService 등록 (Hosted Service)
-        // ====================================================================
-        services.AddHostedService<CacheMaintenanceService>();
+        string connectionString = GetPrimaryConnectionStringOrThrow(options, "SharedMemoryCache");
+        string generatedIsolationKey = keyGenerator.Generate(connectionString) ?? "Shared";
+        SharedMemoryCacheOptions cacheOptions = CreateSharedMemoryCacheOptions(options, generatedIsolationKey);
+
+        logger.LogInformation(
+            "[SharedMemoryCache] explicit opt-in enabled (Scope: {Scope}, Observability: {Observability})",
+            cacheOptions.Scope,
+            cacheOptions.EnableObservability);
+
+        return new SharedMemoryCache(Microsoft.Extensions.Options.Options.Create(cacheOptions), logger);
+    }
+
+    private static SharedMemoryCacheOptions CreateSharedMemoryCacheOptions(
+        LibDbOptions options,
+        string generatedIsolationKey)
+    {
+        SharedMemoryCacheOptions configured = options.SharedMemoryCache;
+
+        return new SharedMemoryCacheOptions
+        {
+            BasePath = configured.BasePath,
+            Scope = configured.Scope,
+            MaxCacheSizeBytes = configured.MaxCacheSizeBytes,
+            FallbackCache = configured.FallbackCache,
+            IsolationKey = string.IsNullOrWhiteSpace(configured.IsolationKey)
+                ? generatedIsolationKey
+                : configured.IsolationKey,
+            EnableObservability = configured.EnableObservability || options.EnableObservability
+        };
     }
 
     #endregion

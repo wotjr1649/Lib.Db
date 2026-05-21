@@ -198,6 +198,24 @@ public static class LibDbServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Lib.Db의 내장 SharedMemoryCache를 명시적으로 L2 캐시 provider로 등록합니다.
+    /// </summary>
+    /// <remarks>
+    /// 기본 <see cref="AddLibDb(IServiceCollection, Action{LibDbOptions})"/> 경로는
+    /// <see cref="Microsoft.Extensions.Caching.Distributed.IDistributedCache"/>를 등록하지 않습니다.
+    /// Redis, SQL Server, Postgres 등 외부 provider-backed L2를 사용할 경우 이 메서드를 호출하지 말고
+    /// 해당 provider를 애플리케이션에서 직접 등록하세요.
+    /// </remarks>
+    public static IServiceCollection AddLibDbSharedMemoryCache(
+        this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        ServiceRegistrationHelpers.RegisterSharedMemoryCacheOptIn(services);
+        return services;
+    }
+
+    /// <summary>
     /// Polly Resilience 파이프라인을 등록합니다.
     /// <para>
     /// CircuitBreaker + Retry + Timeout 조합으로 DB 연결 안정성을 확보합니다.
