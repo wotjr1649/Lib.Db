@@ -116,7 +116,7 @@ public static class TvpAccessorRegistry
 /// <b>[설계의도 (Design Rationale)]</b><br/>
 /// 1. 등록 fast-path가 없는 환경에서의 런타임 Fallback 처리<br/>
 /// 2. Bounded Cache(제한된 크기)를 통한 메모리 관리<br/>
-/// 3. PropertyInfo 정렬 규칙(MetadataToken 기반)의 기준점 제공
+/// 3. PropertyInfo 정렬 규칙(선언 순서 기반)의 기준점 제공
 /// </para>
 /// </summary>
 public static class TvpAccessorCache
@@ -178,7 +178,7 @@ public static class TvpAccessorCache
     /// </summary>
     internal static TvpAccessors<T> CompileAccessors<T>()
     {
-        // 1. 프로퍼티 추출 및 정렬 (MetadataToken 순서 준수)
+        // 1. 프로퍼티 추출 및 정렬 (선언 순서 준수)
         PropertyInfo[] props = GetAllPublicReadablePropsRuntime(typeof(T)).ToArray();
         int count = props.Length;
 
@@ -243,7 +243,7 @@ public static class TvpAccessorCache
             current = current.BaseType;
         }
 
-        // [Strict Compliance] MetadataToken 기반 정렬로 컴파일러 생성 순서 보장
+        // SQL Server TVP는 ordinal 기반이므로 소스 선언 순서를 보존한다.
         list.Sort(StableRuntimePropertyComparer.Instance);
         return list;
     }
@@ -281,16 +281,10 @@ public static class TvpAccessorCache
 
     /// <summary>
     /// PropertyInfo 목록을 안정적으로 정렬하기 위한 Comparer입니다.
-    /// <para>
-    /// ✅ 등록 fast-path 접근자와 동일한 알파벳 순서 정렬을 사용합니다.
-    /// ✅ 이를 통해 DEBUG 모드의 ValidateAgainstFallback 검증을 통과합니다.
-    /// </para>
     /// </summary>
     /// <remarks>
-    /// [Change Log 2025-12-19]
-    /// - Before: MetadataToken-based complex sort (Inheritance depth → Type Token → Property Token → Name)
-    /// - After: StringComparer.Ordinal simple alphabetical sort
-    /// - Reason: Must match registered fast-path accessor ordering
+    /// SQL Server TVP binding is ordinal-based, so fallback accessors must preserve
+    /// declaration order instead of alphabetical order.
     /// </remarks>
     private sealed class StableRuntimePropertyComparer : IComparer<PropertyInfo>
     {
@@ -298,8 +292,14 @@ public static class TvpAccessorCache
 
         public int Compare(PropertyInfo? a, PropertyInfo? b)
         {
-            // 등록 fast-path와 동일한 알파벳 순서 정렬
-            return StringComparer.Ordinal.Compare(a?.Name, b?.Name);
+            if (ReferenceEquals(a, b))
+                return 0;
+            if (a is null)
+                return -1;
+            if (b is null)
+                return 1;
+
+            return a.MetadataToken.CompareTo(b.MetadataToken);
         }
     }
 }

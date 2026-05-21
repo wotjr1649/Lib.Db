@@ -59,7 +59,7 @@ $hits = [System.Collections.Generic.HashSet[string]]::new()
 foreach ($root in $roots) {
     Write-Output "Scanning verification artifact path: $root"
 
-    Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop |
+    Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction Stop |
         Where-Object {
             $extension = $_.Extension.ToLowerInvariant()
             $name = $_.Name.ToLowerInvariant()

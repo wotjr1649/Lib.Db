@@ -38,6 +38,31 @@ public sealed class MultiDbFixtureBootstrapContractTests
         script.Should().NotContain("CREATE OR ALTER PROCEDURE");
     }
 
+    [Fact]
+    public void SchemaInitializer_ShouldCreateObjectsRequiredByVerificationSql()
+    {
+        string sourcePath = ResolveSourcePath("SchemaInitializer.cs");
+        string source = File.ReadAllText(sourcePath);
+
+        source.Should().Contain("[core].[CursorState]");
+        source.Should().Contain("[dbo].[T_StandardEvent]");
+        source.Should().Contain("[dbo].[T_PrecisionEvent]");
+    }
+
+    [Fact]
+    public void VerificationSetup_ShouldRepairKnownTvpColumnOrders()
+    {
+        string sourcePath = ResolveSourcePath("SchemaInitializer.cs");
+        string source = File.ReadAllText(sourcePath);
+        string scriptPath = SqlScriptRunner.ResolveScriptPath("setup-libdb-verification-test.sql");
+        string script = File.ReadAllText(scriptPath);
+
+        source.Should().Contain("DROP TYPE [core].[Tvp_Core_User]");
+        source.Should().Contain("DROP TYPE [tvp].[Tvp_Tvp_AllTypes]");
+        script.Should().Contain("DROP TYPE [core].[Tvp_Core_User]");
+        script.Should().Contain("DROP TYPE [tvp].[Tvp_Tvp_AllTypes]");
+    }
+
     private static string ResolveSourcePath(string fileName)
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);

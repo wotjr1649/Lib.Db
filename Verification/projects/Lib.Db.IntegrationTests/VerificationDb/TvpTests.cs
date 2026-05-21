@@ -103,7 +103,7 @@ public sealed class TvpTests(MultiDbFixture fixture)
             .ExecuteScalarAsync<int>();
 
         // Assert — 삽입 성공 검증
-        scalarResult.IsSuccess.Should().BeTrue();
+        scalarResult.IsSuccess.Should().BeTrue(scalarResult.Error?.Message);
         scalarResult.Value.Should().Be(1, "1행이 삽입되어야 합니다.");
 
         // Act — 삽입된 데이터 조회로 타입 매핑 검증

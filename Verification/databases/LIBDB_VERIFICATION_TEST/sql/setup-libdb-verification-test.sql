@@ -415,8 +415,46 @@ IF OBJECT_ID(N'[dbo].[TS_TRAY_FLOW]', N'U') IS NULL
     CREATE TABLE [dbo].[TS_TRAY_FLOW] ([Id] INT IDENTITY(1,1) NOT NULL CONSTRAINT [PK_TS_TRAY_FLOW] PRIMARY KEY, [EventName] NVARCHAR(50) NOT NULL, [Payload] NVARCHAR(4000) NULL, [CreatedAt] DATETIME2(7) NOT NULL CONSTRAINT [DF_TS_TRAY_FLOW_CreatedAt] DEFAULT SYSUTCDATETIME());
 GO
 
+IF TYPE_ID(N'core.Tvp_Core_User') IS NOT NULL
+AND NOT EXISTS (
+    SELECT 1
+    FROM sys.table_types AS tt
+    INNER JOIN sys.schemas AS s ON s.schema_id = tt.schema_id
+    WHERE s.name = N'core'
+      AND tt.name = N'Tvp_Core_User'
+      AND (SELECT COUNT(*) FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id) = 3
+      AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 1 AND c.name = N'UserName')
+      AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 2 AND c.name = N'Email')
+      AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 3 AND c.name = N'Age')
+)
+BEGIN
+    DROP PROCEDURE IF EXISTS [core].[usp_Core_Bulk_Insert_Users];
+    DROP TYPE [core].[Tvp_Core_User];
+END
+GO
+
 IF TYPE_ID(N'core.Tvp_Core_User') IS NULL
     CREATE TYPE [core].[Tvp_Core_User] AS TABLE ([UserName] NVARCHAR(100) NOT NULL, [Email] NVARCHAR(255) NOT NULL, [Age] INT NULL);
+GO
+
+IF TYPE_ID(N'tvp.Tvp_Tvp_AllTypes') IS NOT NULL
+AND NOT EXISTS (
+    SELECT 1
+    FROM sys.table_types AS tt
+    INNER JOIN sys.schemas AS s ON s.schema_id = tt.schema_id
+    WHERE s.name = N'tvp'
+      AND tt.name = N'Tvp_Tvp_AllTypes'
+      AND (SELECT COUNT(*) FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id) = 5
+      AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 1 AND c.name = N'DateOnlyValue')
+      AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 2 AND c.name = N'TimeOnlyValue')
+      AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 3 AND c.name = N'HalfValue')
+      AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 4 AND c.name = N'GuidValue')
+      AND EXISTS (SELECT 1 FROM sys.columns AS c WHERE c.object_id = tt.type_table_object_id AND c.column_id = 5 AND c.name = N'DecimalValue')
+)
+BEGIN
+    DROP PROCEDURE IF EXISTS [tvp].[usp_Tvp_Bulk_Insert_AllTypes];
+    DROP TYPE [tvp].[Tvp_Tvp_AllTypes];
+END
 GO
 
 IF TYPE_ID(N'tvp.Tvp_Tvp_AllTypes') IS NULL
