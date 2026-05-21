@@ -613,16 +613,16 @@ public sealed class TvpCoreCoverageTests
     [Fact]
     public void TvpAccessorRegistry_ShouldRegisterFallbackAccessorsAndResolveByType()
     {
-        TvpAccessorRegistry.TryGet<RegistryCoverageRow>(out TvpAccessors<RegistryCoverageRow>? missing)
+        TvpAccessorRegistry.TryGet<RegistryInitialCoverageRow>(out TvpAccessors<RegistryInitialCoverageRow>? missing)
             .Should()
             .BeFalse();
         missing.Should().BeNull();
 
-        TvpAccessors<RegistryCoverageRow> accessors = TvpAccessorCache.GetTypedAccessors<RegistryCoverageRow>();
+        TvpAccessors<RegistryInitialCoverageRow> accessors = TvpAccessorCache.GetTypedAccessors<RegistryInitialCoverageRow>();
 
         TvpAccessorRegistry.Register(accessors);
 
-        TvpAccessorRegistry.TryGet<RegistryCoverageRow>(out TvpAccessors<RegistryCoverageRow>? resolved)
+        TvpAccessorRegistry.TryGet<RegistryInitialCoverageRow>(out TvpAccessors<RegistryInitialCoverageRow>? resolved)
             .Should()
             .BeTrue();
         resolved.Should().BeSameAs(accessors);
@@ -1536,6 +1536,8 @@ public sealed class TvpCoreCoverageTests
         int Quantity);
 
     private sealed record RegistryCoverageRow(int Id, string Name);
+
+    private sealed record RegistryInitialCoverageRow(int Id, string Name);
 
     private sealed record DelegateCacheCoverageRow(int Id);
 
