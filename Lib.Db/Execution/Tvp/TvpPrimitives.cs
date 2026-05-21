@@ -13,6 +13,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -357,6 +358,10 @@ public sealed class ColumnarTvpReader : DbDataReader, IAsyncDisposable
             throw new NotSupportedException("SchemaTable is not available.");
         return (string)_schemaTable.Rows[ordinal][SchemaTableColumn.ColumnName];
     }
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2093",
+        Justification = "DbDataReader exposes schema Type values only; Lib.Db does not reflect over returned members here.")]
     public override Type GetFieldType(int ordinal)
     {
         if (_schemaTable is null)

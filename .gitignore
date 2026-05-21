@@ -15,6 +15,9 @@
 
 ## Test Results
 TestResults/
+BenchmarkDotNet.Artifacts/
+artifacts/
+Verification/artifacts/
 *.trdx
 *.coverage
 *.bak
@@ -28,3 +31,16 @@ Thumbs.db
 *.mmf
 # 임시 파일
 .gemini/
+
+# Legacy roots superseded by Verification/ and runtime TVP
+/Lib.Db.TvpGen/
+/Benchmarks/
+/Tests/
+
+# Internal planning, review, and security notes are not release docs
+/docs/reviews/
+/docs/security/
+/docs/superpowers/
+
+# Local verification secrets
+Verification/scripts/Set-LibDbVerificationEnvironment.local.ps1

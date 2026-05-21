@@ -407,7 +407,9 @@ internal sealed partial class SqlDbExecutor(
         System.Data.Common.DbDataReader? rawReader;
         long startTicks = Stopwatch.GetTimestamp();
 
-        using (Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("DB QueryMultiple"))
+        using (Activity? activity = _options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("DB QueryMultiple")
+            : null)
         {
             string diagnosticCommandText = GetDiagnosticCommandText(commandText, commandType);
             activity?.SetTag("db.system", "mssql");
@@ -577,7 +579,9 @@ internal sealed partial class SqlDbExecutor(
             _ => ActivityNameCommand
         };
 
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity(activityName);
+        using Activity? activity = _options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity(activityName)
+            : null;
         activity?.SetTag("db.system", "mssql");
         activity?.SetTag("db.operation", request.CommandType.ToString());
         activity?.SetTag("db.statement", diagnosticCommandText);
@@ -791,7 +795,9 @@ internal sealed partial class SqlDbExecutor(
         System.Data.Common.DbDataReader? reader;
         long startTicks = Stopwatch.GetTimestamp();
 
-        using (Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("DB QueryStream"))
+        using (Activity? activity = _options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("DB QueryStream")
+            : null)
         {
             string diagnosticCommandText = GetDiagnosticCommandText(commandText, commandType);
             activity?.SetTag("db.system", "mssql");
@@ -1185,7 +1191,7 @@ internal sealed partial class SqlDbExecutor(
     {
         throw new InvalidOperationException(
             "QueryMultipleAsync를 안전하게 사용하려면 ConnectionString에 'MultipleActiveResultSets=True' 설정이 필요합니다. " +
-            "(설정 예: Server=...; Database=...; MultipleActiveResultSets=True;)");
+            "(설정 예: Server=localhost;Database=ExampleDb;MultipleActiveResultSets=True;)");
     }
 
     #region 로깅 메서드

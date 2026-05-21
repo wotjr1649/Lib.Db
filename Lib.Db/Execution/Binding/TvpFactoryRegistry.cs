@@ -1,6 +1,6 @@
 // ============================================================================
 // 파일: Lib.Db/Execution/Binding/TvpFactoryRegistry.cs
-// 설명: TVP 팩토리 레지스트리 — 소스 생성기 기반 TVP 팩토리 등록/조회 관리
+// 설명: TVP 팩토리 레지스트리 — 명시 등록 Fast TVP 팩토리 등록/조회 관리
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
@@ -10,16 +10,18 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Diagnostics.CodeAnalysis;
+using Lib.Db.Execution.Tvp;
 
 namespace Lib.Db.Execution.Binding;
 
 /// <summary>
-/// Source Generator가 생성한 TVP Reader 팩토리를 등록하는 레지스트리입니다.
+/// 명시 등록된 TVP Reader 팩토리를 관리하는 레지스트리입니다.
 /// <para>이 클래스는 내부 인프라용이며 직접 사용해서는 안 됩니다.</para>
 /// <para>
 /// <b>[설계의도 (Design Rationale)]</b><br/>
-/// Source Generator가 생성한 코드를 런타임에 검색할 수 있도록 연결 고리를 제공합니다.
-/// 리플렉션을 통한 타입 스캔을 피하고, 정적 초기화 시점에 팩토리를 등록하여 AOT 호환성을 확보합니다.
+/// 반복 호출 경로에서 리플렉션 기반 타입 스캔을 피할 수 있도록 정적 팩토리 연결 고리를 제공합니다.
+/// 수동 등록 또는 호환 레거시 등록 경로에서 팩토리를 등록하여 AOT 친화적인 fast-path를 확보합니다.
 /// Concrete Type에 대한 캐싱(Smart Cache)을 통해 Generic Interface 조회 비용을 최소화합니다.
 /// </para>
 /// </summary>
@@ -42,14 +44,18 @@ public static class TvpFactoryRegistry
     #region 공개 API (Registration & Lookup)
 
     /// <summary>
-    /// TVP Reader 팩토리를 등록합니다. (ModuleInitializer에서 호출)
+    /// TVP Reader 팩토리를 등록합니다.
     /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public static void Register(Type type, Func<object, IDataReader> factory, string typeName)
     {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentNullException.ThrowIfNull(factory);
+        string normalizedTypeName = TvpTypeName.Parse(typeName).FullName;
+
         lock (s_registry)
         {
-            s_registry[type] = (factory, typeName);
+            s_registry[type] = (factory, normalizedTypeName);
         }
     }
 
@@ -74,6 +80,10 @@ public static class TvpFactoryRegistry
 
     #region 내부 로직 (Resolve & Cache)
 
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2070",
+        Justification = "Source-generated TVP factories are registered explicitly; interface scanning only matches concrete IEnumerable<T> wrappers to those factories.")]
     private static bool TryResolveAndCache(Type concreteType, out Func<object, IDataReader>? factory, out string? typeName)
     {
         // Check direct registry match (rare for List<T>)

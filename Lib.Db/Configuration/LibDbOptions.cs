@@ -13,6 +13,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Lib.Db.Execution.Tvp;
 
 namespace Lib.Db.Configuration;
 
@@ -46,9 +47,11 @@ public sealed class LibDbOptions
         get;
         set
         {
-            field = value ?? throw new ArgumentNullException(nameof(value), "연결 문자열 딕셔너리는 null일 수 없습니다.");
+            field = value is null
+                ? throw new ArgumentNullException(nameof(value), "연결 문자열 딕셔너리는 null일 수 없습니다.")
+                : new Dictionary<string, string>(value, StringComparer.OrdinalIgnoreCase);
         }
-    } = [];
+    } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// MARS(다중 활성 결과 집합) 정책입니다. (기본값: <see cref="MarsPolicy.Auto"/>)
@@ -62,6 +65,25 @@ public sealed class LibDbOptions
     /// </para>
     /// </summary>
     public MarsPolicy Mars { get; set; } = MarsPolicy.Auto;
+
+    /// <summary>
+    /// 런타임 TVP 바인딩 옵션입니다.
+    /// <para>
+    /// 명시 API(<c>LibDb.Tvp(...)</c>)는 이 설정 없이도 동작하며,
+    /// 반복 사용 fast-path가 필요한 경우
+    /// <c>AddLibDb(o => o.Tvp.Map&lt;TRow&gt;("dbo.Type").Column(...))</c>
+    /// 형태로 CLR row type과 SQL Server TVP type name 및 정적 컬럼 shape를 등록합니다.
+    /// </para>
+    /// </summary>
+    [JsonIgnore]
+    public TvpOptions Tvp
+    {
+        get;
+        set
+        {
+            field = value ?? throw new ArgumentNullException(nameof(value), "TVP 옵션은 null일 수 없습니다.");
+        }
+    } = new();
 
     /// <summary>
     /// 연결 문자열 보안 검증 프로필입니다. (기본값: <see cref="ConnectionSecurityProfile.Development"/>)
@@ -257,10 +279,10 @@ public sealed class LibDbOptions
     public TvpValidationMode TvpValidationMode { get; set; } = TvpValidationMode.Strict;
 
     /// <summary>
-    /// Source Generator 기반의 Fast TVP Binder 사용 여부 (기본값: true)
+    /// 등록된 Fast TVP runtime binder 사용 여부 (기본값: true)
     /// <para>
-    /// <c>true</c>: SG가 등록한 <c>TvpFactoryRegistry</c>를 통해 Reflection 없이 TVP를 바인딩합니다.<br/>
-    /// <c>false</c>: 기존 Reflection 기반 바인딩을 강제합니다. (SG 문제 발생 시 폴백용)
+    /// <c>true</c>: 런타임에 명시 등록된 정적 shape/factory를 통해 Reflection 없이 TVP를 바인딩합니다.<br/>
+    /// <c>false</c>: 런타임 Reflection 기반 바인딩을 강제합니다. 등록 팩토리 호환성 문제가 있을 때만 사용하세요.
     /// </para>
     /// </summary>
     public bool EnableGeneratedTvpBinder { get; set; } = true;
@@ -396,8 +418,8 @@ public sealed class LibDbOptions
     /// <b>[중요]</b> EnableResilience가 true일 때만 사용됩니다.
     /// </para>
     /// <para>
-    /// <b>[v2.0 Breaking Change]</b><br/>
-    /// 기존 루트 레벨 속성이 제거되었습니다. 아래 경로로 변경하세요:<br/>
+    /// <b>[마이그레이션]</b><br/>
+    /// 기존 루트 레벨 회복 탄력성 속성은 아래 경로로 이동되었습니다:<br/>
     /// - CircuitBreakerFailureRatio → Resilience.CircuitBreakerFailureRatio<br/>
     /// - CircuitBreakerDurationSeconds → Resilience.CircuitBreakerBreakDurationMs (단위 변경: 초 → ms)<br/>
     /// - RetryMaxAttempts → Resilience.MaxRetryCount
@@ -674,10 +696,11 @@ public sealed class LibDbOptions
     } = 2;
 
     /// <summary>
-    /// 관측 가능성(Logging, Metrics, Tracing) 기능 활성화 여부 (기본값: false)
+    /// 관측 가능성 메트릭/추적 활성화 여부 (기본값: false)
     /// <para>
-    /// <b>[설계 의도]</b> v2.2에서 <c>EnableOpenTelemetry</c>와 통합된 단일 마스터 스위치입니다.
+    /// <b>[설계 의도]</b> <c>EnableOpenTelemetry</c>를 대체하는 단일 마스터 스위치입니다.
     /// <c>true</c> 설정 시 ActivitySource("Lib.Db")와 Meter("Lib.Db")를 통해 텔레메트리 데이터를 생성합니다.
+    /// 일반 ILogger 로그는 이 옵션과 별개로 기존 로깅 설정을 따릅니다.
     /// 비활성 시 오버헤드는 0에 가깝습니다 (분기 1회).
     /// </para>
     /// </summary>
@@ -915,6 +938,12 @@ public sealed class SharedMemoryCacheOptions : Microsoft.Extensions.Options.IOpt
     /// (내부용) 격리 키. ConnectionString 해시 등이 설정됩니다.
     /// </summary>
     public string? IsolationKey { get; set; }
+
+    /// <summary>
+    /// SharedMemoryCache 내부 Activity 계측 활성화 여부입니다. 기본값은 false입니다.
+    /// <para>일반 사용자는 <see cref="LibDbOptions.EnableObservability"/>를 통해 제어합니다.</para>
+    /// </summary>
+    public bool EnableObservability { get; set; } = false;
 
     SharedMemoryCacheOptions Microsoft.Extensions.Options.IOptions<SharedMemoryCacheOptions>.Value => this;
 }

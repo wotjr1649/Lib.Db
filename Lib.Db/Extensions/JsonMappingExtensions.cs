@@ -26,6 +26,12 @@ namespace Lib.Db.Extensions;
 /// </summary>
 public static class JsonMappingExtensions
 {
+    private const string JsonMappingRequiresUnreferencedCodeMessage =
+        "JSON mapping convenience overloads use JsonSerializerOptions-based serialization. Use source-generated JsonTypeInfo overloads for Native AOT.";
+
+    private const string JsonMappingRequiresDynamicCodeMessage =
+        "JSON mapping convenience overloads can require runtime code generation. Use source-generated JsonTypeInfo overloads for Native AOT.";
+
     #region Dictionary 기반 JSON 매핑
 
     /// <summary>
@@ -36,7 +42,8 @@ public static class JsonMappingExtensions
     /// <param name="columnName">JSON 데이터가 저장된 컬럼 이름</param>
     /// <param name="options">JSON 직렬화 옵션 (null 시 기본 Web 옵션 사용). DI 환경에서는 LibDbOptions.JsonOptions를 전달하세요.</param>
     /// <returns>역직렬화된 객체, JSON이 없거나 null이면 default(T)</returns>
-    [RequiresUnreferencedCode("JSON 직렬화는 AOT 환경에서 지원되지 않습니다.")]
+    [RequiresUnreferencedCode(JsonMappingRequiresUnreferencedCodeMessage)]
+    [RequiresDynamicCode(JsonMappingRequiresDynamicCodeMessage)]
     public static T? MapJsonColumn<T>(
         this Dictionary<string, object?> row,
         string columnName,
@@ -59,7 +66,8 @@ public static class JsonMappingExtensions
     /// <param name="columnName">JSON 데이터가 저장된 컬럼 이름</param>
     /// <param name="options">JSON 직렬화 옵션. DI 환경에서는 LibDbOptions.JsonOptions를 전달하세요.</param>
     /// <returns>역직렬화된 (행, JSON 객체) 튜플의 비동기 스트림</returns>
-    [RequiresUnreferencedCode("JSON 직렬화는 AOT 환경에서 지원되지 않습니다.")]
+    [RequiresUnreferencedCode(JsonMappingRequiresUnreferencedCodeMessage)]
+    [RequiresDynamicCode(JsonMappingRequiresDynamicCodeMessage)]
     public static async IAsyncEnumerable<(Dictionary<string, object?> Row, T? Json)>
         WithJsonColumnAsync<T>(
             this IAsyncEnumerable<Dictionary<string, object?>> rows,
@@ -84,7 +92,8 @@ public static class JsonMappingExtensions
     /// <param name="json">JSON 문자열</param>
     /// <param name="options">JSON 직렬화 옵션 (null 시 기본 Web 옵션 사용). DI 환경에서는 LibDbOptions.JsonOptions를 전달하세요.</param>
     /// <returns>역직렬화된 객체, null 또는 빈 문자열이면 default(T)</returns>
-    [RequiresUnreferencedCode("JSON 직렬화는 AOT 환경에서 지원되지 않습니다.")]
+    [RequiresUnreferencedCode(JsonMappingRequiresUnreferencedCodeMessage)]
+    [RequiresDynamicCode(JsonMappingRequiresDynamicCodeMessage)]
     public static T? FromJson<T>(this string? json, JsonSerializerOptions? options = null)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -100,7 +109,8 @@ public static class JsonMappingExtensions
     /// <param name="value">직렬화할 객체</param>
     /// <param name="options">JSON 직렬화 옵션 (null 시 기본 Web 옵션 사용). DI 환경에서는 LibDbOptions.JsonOptions를 전달하세요.</param>
     /// <returns>JSON 문자열</returns>
-    [RequiresUnreferencedCode("JSON 직렬화는 AOT 환경에서 지원되지 않습니다.")]
+    [RequiresUnreferencedCode(JsonMappingRequiresUnreferencedCodeMessage)]
+    [RequiresDynamicCode(JsonMappingRequiresDynamicCodeMessage)]
     public static string ToJson<T>(this T value, JsonSerializerOptions? options = null)
     {
         return JsonSerializer.Serialize(value, options ?? JsonDefaults.WebOptions);

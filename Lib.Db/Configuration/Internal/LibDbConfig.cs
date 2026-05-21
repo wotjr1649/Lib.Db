@@ -192,7 +192,7 @@ internal sealed class LibDbConfig
     } = 2;
 
     public bool EnableOpenTelemetry { get; set; } = false;
-    public bool EnableObservability { get; set; } = false;
+    public bool? EnableObservability { get; set; }
     public bool IncludeParametersInTrace { get; set; } = false;
 
     // [12] 내부 튜닝
@@ -296,8 +296,9 @@ internal sealed class LibDbConfig
         // [11]
         options.HealthCheckThrottleSeconds = this.HealthCheckThrottleSeconds;
         options.HealthCheckTimeoutSeconds = this.HealthCheckTimeoutSeconds;
-        // EnableOpenTelemetry(구 설정 키)와 EnableObservability(신 설정 키) 중 하나라도 true면 활성화
-        options.EnableObservability = this.EnableObservability || this.EnableOpenTelemetry;
+        // EnableObservability(신 설정 키)가 명시되면 구 설정 키보다 우선합니다.
+        // 신 키가 없을 때만 EnableOpenTelemetry(구 설정 키)를 호환 alias로 사용합니다.
+        options.EnableObservability = this.EnableObservability ?? this.EnableOpenTelemetry;
         options.IncludeParametersInTrace = this.IncludeParametersInTrace;
 
         // [12]

@@ -99,6 +99,14 @@ public interface ISchemaService
     Task FlushSchemaAsync(string instanceHash, CancellationToken ct);
 
     /// <summary>
+    /// 지정된 TVP 타입의 스키마 캐시만 선택적으로 제거합니다.
+    /// </summary>
+    /// <param name="tvpName">대상 TVP 타입 이름</param>
+    /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
+    /// <param name="ct">취소 토큰</param>
+    Task FlushTvpAsync(string tvpName, string instanceHash, CancellationToken ct);
+
+    /// <summary>
     /// 특정 SP의 스키마만 선택적으로 무효화합니다.
     /// <para>
     /// 파라미터 불일치 오류 발생 시 자동 복구(Self-Healing)를 유도할 때 사용합니다.
@@ -107,6 +115,13 @@ public interface ISchemaService
     /// <param name="spName">대상 SP 이름</param>
     /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
     void InvalidateSpSchema(string spName, string instanceHash);
+
+    /// <summary>
+    /// 특정 TVP 타입의 스키마만 선택적으로 무효화합니다.
+    /// </summary>
+    /// <param name="tvpName">대상 TVP 타입 이름</param>
+    /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
+    void InvalidateTvpSchema(string tvpName, string instanceHash);
 
     #endregion
 
@@ -181,6 +196,15 @@ public interface ISchemaService
     async Task FlushSchemaAsync(DbInstanceId instance, CancellationToken ct)
         => await FlushSchemaAsync(instance.Value, ct).ConfigureAwait(false);
 
+    /// <summary>
+    /// <see cref="TvpName"/> 및 <see cref="DbInstanceId"/>를 사용하는 TVP Flush 오버로드입니다.
+    /// </summary>
+    /// <param name="tvpName">대상 TVP 타입 이름</param>
+    /// <param name="instance">DB 인스턴스 식별 값 객체</param>
+    /// <param name="ct">취소 토큰</param>
+    async Task FlushTvpAsync(TvpName tvpName, DbInstanceId instance, CancellationToken ct)
+        => await FlushTvpAsync(tvpName.FullName, instance.Value, ct).ConfigureAwait(false);
+
     #endregion
 }
 
@@ -209,7 +233,7 @@ public interface ITvpSchemaValidator
     /// </summary>
     /// <typeparam name="T">TVP 행(Row) 모델 타입</typeparam>
     /// <param name="tvpTypeName">DB에 정의된 TVP 타입 이름</param>
-    /// <param name="accessors">소스 제너레이터 또는 캐시에서 제공되는 고속 접근자</param>
+    /// <param name="accessors">등록 fast-path 또는 캐시에서 제공되는 고속 접근자</param>
     /// <param name="instanceHash">DB 인스턴스 해시</param>
     /// <param name="ct">취소 토큰</param>
     Task ValidateAsync<T>(
@@ -220,10 +244,10 @@ public interface ITvpSchemaValidator
 }
 
 /// <summary>
-/// Source Generator가 생성하는 정적 TVP 검증기 계약입니다.
+/// 등록된 static-shape TVP 검증기 계약입니다.
 /// <para>
 /// <b>[설계 의도]</b><br/>
-/// - <b>AOT 최적화</b>: 런타임 리플렉션 없이 컴파일 타임에 생성된 검증 로직을 사용하여 속도와 안전성을 모두 확보합니다.
+/// - <b>AOT 최적화</b>: 런타임 리플렉션 없이 명시적으로 등록된 검증 로직을 사용하여 속도와 안전성을 모두 확보합니다.
 /// </para>
 /// <para>
 /// 런타임 리플렉션 없이, 컴파일 타임에 확정된 규칙으로 구조를 검증합니다.
@@ -320,7 +344,7 @@ public sealed class TvpSchemaValidationException(
 /// - <b>리더 없는 조정</b>: 리더 선출 없이 Redis/DB의 원자적 카운터를 활용하여 간단하게 구현할 수 있는 Epoch 방식을 채택했습니다.
 /// </para>
 /// <para>
-/// v9 FINAL: EpochStore를 활용하여 멀티 프로세스 환경에서
+/// EpochStore를 활용하여 멀티 프로세스 환경에서
 /// 스키마 Flush를 동기화합니다.
 /// </para>
 /// </summary>
@@ -332,6 +356,14 @@ public interface ISchemaFlushCoordinator
     /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
     /// <param name="ct">취소 토큰</param>
     Task FlushAsync(string instanceHash, CancellationToken ct = default);
+
+    /// <summary>
+    /// 지정된 TVP 타입의 스키마 캐시를 무효화하고 Epoch를 증가시킵니다.
+    /// </summary>
+    /// <param name="instanceHash">대상 DB 인스턴스 해시</param>
+    /// <param name="tvpName">대상 TVP 타입 이름</param>
+    /// <param name="ct">취소 토큰</param>
+    Task FlushTvpAsync(string instanceHash, string tvpName, CancellationToken ct = default);
 
     /// <summary>
     /// 현재 Epoch 값을 가져옵니다.

@@ -45,12 +45,12 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// <summary>
     /// [Gen0] 젊은 세대 캐시 - 새로 생성된 매퍼 + 접근 횟수 추적
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, CacheEntry> s_gen0Cache = new();
+    private static readonly ConcurrentDictionary<MapperCacheKey, CacheEntry> s_gen0Cache = new();
 
     /// <summary>
     /// [Gen1] 오래된 세대 캐시 - 자주 사용되는 매퍼 (승격된 항목)
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, object> s_gen1Cache = new();
+    private static readonly ConcurrentDictionary<MapperCacheKey, object> s_gen1Cache = new();
 
     /// <summary>Source Generator가 생성한 매퍼 타입 캐시 (Type → Mapper Type)</summary>
     private static volatile FrozenDictionary<Type, Type>? s_generatedMapperTypes;
@@ -62,6 +62,11 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
 
     /// <summary>승격 임계값 - Gen0에서 이 횟수만큼 접근되면 Gen1로 승격</summary>
     private const int PromotionThreshold = 2;
+
+    /// <summary>
+    /// 캐시 키 - 매퍼 대상 타입 + 런타임 dynamic-code 지원 모드
+    /// </summary>
+    private readonly record struct MapperCacheKey(Type Type, bool DynamicCodeSupported);
 
     /// <summary>
     /// 캐시 항목 - 매퍼 인스턴스 + 접근 횟수
@@ -80,11 +85,15 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
             return diMapper;
 
         Type type = typeof(T);
+        bool dynamicCodeSupported =
+            RuntimeFeatureSwitch.IsRuntimeDynamicCodeSupported &&
+            RuntimeFeatureSwitch.DynamicCodeSupportedOverride is not false;
+        MapperCacheKey cacheKey = new(type, dynamicCodeSupported);
 
         // ---------------------------------------------------------------------
         // 2) Gen1 캐시 조회 (가장 자주 사용되는 매퍼)
         // ---------------------------------------------------------------------
-        if (s_gen1Cache.TryGetValue(type, out object? gen1Cached))
+        if (s_gen1Cache.TryGetValue(cacheKey, out object? gen1Cached))
         {
             return (ISqlMapper<T>)gen1Cached;
         }
@@ -92,7 +101,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // ---------------------------------------------------------------------
         // 3) Gen0 캐시 조회
         // ---------------------------------------------------------------------
-        if (s_gen0Cache.TryGetValue(type, out CacheEntry gen0Entry))
+        if (s_gen0Cache.TryGetValue(cacheKey, out CacheEntry gen0Entry))
         {
             // 접근 횟수 증가
             int newAccessCount = gen0Entry.AccessCount + 1;
@@ -100,12 +109,12 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
             // ✅ [승격 조건] 접근 횟수가 임계값 이상이면 Gen1로 승격
             if (newAccessCount >= PromotionThreshold)
             {
-                PromoteToGen1(type, gen0Entry.Mapper);
+                PromoteToGen1(cacheKey, gen0Entry.Mapper);
             }
             else
             {
                 // 접근 횟수만 증가 (CAS 패턴)
-                s_gen0Cache.TryUpdate(type,
+                s_gen0Cache.TryUpdate(cacheKey,
                     new CacheEntry(gen0Entry.Mapper, newAccessCount),
                     gen0Entry);
             }
@@ -125,11 +134,11 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         }
 
         // 매퍼 생성
-        ISqlMapper<T> mapper = CreateMapper<T>();
+        ISqlMapper<T> mapper = CreateMapper<T>(dynamicCodeSupported);
 
         // Gen0에 추가 (초기 접근 횟수 = 0)
         CacheEntry entry = new CacheEntry(mapper, 0);
-        s_gen0Cache.TryAdd(type, entry);
+        s_gen0Cache.TryAdd(cacheKey, entry);
 
         return mapper;
     }
@@ -137,13 +146,13 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// <summary>
     /// Gen0에서 Gen1로 매퍼를 승격합니다.
     /// </summary>
-    private static void PromoteToGen1(Type type, object mapper)
+    private static void PromoteToGen1(MapperCacheKey cacheKey, object mapper)
     {
         // Gen1에 추가
-        s_gen1Cache.TryAdd(type, mapper);
+        s_gen1Cache.TryAdd(cacheKey, mapper);
 
         // Gen0에서 제거
-        s_gen0Cache.TryRemove(type, out _);
+        s_gen0Cache.TryRemove(cacheKey, out _);
     }
 
     /// <summary>
@@ -172,10 +181,10 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // 접근 빈도와 무관하게 무작위로 50%를 선택하여 제거
         // 이는 LRU보다 구현이 단순하며 충분히 효과적임
 
-        List<Type> toRemove = new List<Type>(s_gen0Cache.Count / 2);
+        List<MapperCacheKey> toRemove = new List<MapperCacheKey>(s_gen0Cache.Count / 2);
 
         // Random.Shared는 .NET 6+에서 제공하는 Thread-safe 난수 생성기
-        foreach (KeyValuePair<Type, CacheEntry> kv in s_gen0Cache)
+        foreach (KeyValuePair<MapperCacheKey, CacheEntry> kv in s_gen0Cache)
         {
             // 50% 확률로 제거 대상에 추가
             if (Random.Shared.Next(2) == 0)
@@ -188,7 +197,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         if (toRemove.Count < s_gen0Cache.Count / 4)
         {
             int needed = (s_gen0Cache.Count / 2) - toRemove.Count;
-            foreach (KeyValuePair<Type, CacheEntry> kv in s_gen0Cache)
+            foreach (KeyValuePair<MapperCacheKey, CacheEntry> kv in s_gen0Cache)
             {
                 if (needed <= 0)
                     break;
@@ -201,7 +210,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         }
 
         // 실제 제거
-        foreach (Type key in toRemove)
+        foreach (MapperCacheKey key in toRemove)
         {
             s_gen0Cache.TryRemove(key, out _);
         }
@@ -213,7 +222,15 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// 우선순위: Source Generator (100) → ExpressionTree (50) → Reflection (0)
     /// </para>
     /// </summary>
-    private ISqlMapper<T> CreateMapper<T>()
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2091",
+        Justification = "MapperFactory selects generated/static mappers when available. Reflection and expression mappers are documented non-AOT convenience paths.")]
+    [UnconditionalSuppressMessage(
+        "Aot",
+        "IL3050:RequiresDynamicCode",
+        Justification = "ExpressionTreeMapper is selected only when RuntimeFeatureSwitch reports dynamic code support; the test override can only disable dynamic code and Native AOT returns false.")]
+    private ISqlMapper<T> CreateMapper<T>(bool dynamicCodeSupported)
     {
         Type type = typeof(T);
 
@@ -247,7 +264,7 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
         // =====================================================================
         // [2순위] JIT 환경: Expression Tree 기반 DTO 매퍼
         // =====================================================================
-        if (RuntimeFeature.IsDynamicCodeSupported)
+        if (dynamicCodeSupported)
             return new ExpressionTreeMapper<T>(options.JsonOptions, options.StrictRequiredParameterCheck);
 
         // =====================================================================
@@ -263,6 +280,10 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// - IGeneratedMapper&lt;T&gt; 구현체를 우선적으로 사용
     /// </para>
     /// </summary>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2067",
+        Justification = "Generated mapper discovery is a legacy convenience. Native AOT applications should register explicit/generated mappings and do not rely on discovery.")]
     private static ISqlMapper<T>? DiscoverGeneratedMapper<T>()
     {
         // 첫 호출 시 Assembly Scan 수행
@@ -292,6 +313,18 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
     /// <summary>
     /// Assembly를 Scan하여 IGeneratedMapper&lt;T&gt; 구현체를 검색합니다.
     /// </summary>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2026",
+        Justification = "Generated mapper assembly scan is a legacy discovery convenience. Native AOT applications should register static mappings explicitly.")]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2075",
+        Justification = "Generated mapper assembly scan is a legacy discovery convenience. Native AOT applications should register static mappings explicitly.")]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2065",
+        Justification = "Generated mapper assembly scan is a legacy discovery convenience. Native AOT applications should register static mappings explicitly.")]
     private static void ScanGeneratedMappers()
     {
         Assembly assembly = typeof(MapperFactory).Assembly;
@@ -359,6 +392,10 @@ internal static class ReflectionCache
     /// 지정 타입의 Public 인스턴스 프로퍼티를 캐시에서 반환합니다.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2070",
+        Justification = "ReflectionCache is used by non-AOT mapper fallback paths. Native AOT hot paths use generated or explicit mappings.")]
     public static PropertyInfo[] GetPublicProperties(Type type)
         => s_propertyCache.GetOrAdd(type, static t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance));
 
@@ -366,6 +403,10 @@ internal static class ReflectionCache
     /// 지정 타입의 Public 인스턴스 생성자를 캐시에서 반환합니다.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2070",
+        Justification = "ReflectionCache is used by non-AOT mapper fallback paths. Native AOT hot paths use generated or explicit mappings.")]
     public static ConstructorInfo[] GetPublicConstructors(Type type)
         => s_ctorCache.GetOrAdd(type, static t => t.GetConstructors(BindingFlags.Public | BindingFlags.Instance));
 }
@@ -617,6 +658,18 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
     /// - Nullable/ValueType에 대한 DBNull 처리 최적화
     /// </para>
     /// </summary>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2026",
+        Justification = "ExpressionTreeMapper is a JIT-only mapper. Native AOT result mapping uses generated or explicit mappers.")]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2087",
+        Justification = "ExpressionTreeMapper is a JIT-only mapper. Native AOT result mapping uses generated or explicit mappers.")]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2111",
+        Justification = "ExpressionTreeMapper is a JIT-only mapper. Native AOT result mapping uses generated or explicit mappers.")]
     private Func<DbDataReader, T> BuildDeserializer(DbDataReader reader)
     {
         ParameterExpression rParam = Expression.Parameter(typeof(DbDataReader), "reader");
@@ -647,7 +700,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
             MethodCallExpression checkNull = Expression.Call(rParam, isDbNull, idxExp);
 
             Type propType = prop.PropertyType;
-            Type dbFieldType = reader.GetFieldType(i);
+            Type dbFieldType = reader.GetFieldType(i) ?? Nullable.GetUnderlyingType(propType) ?? propType;
             Expression valueExp;
 
             // [1] DB 컬럼 타입과 프로퍼티 타입이 동일하면 Typed Getter 우선 사용 (Boxing 제거)
@@ -1344,6 +1397,7 @@ internal sealed class ReflectionParameterMapper<
         public static readonly FrozenDictionary<string, PropertyInfo> Properties;
         public static readonly FrozenDictionary<string, PropertyInfo> NormalizedProperties;
         public static readonly PropertyMeta[] AllProperties;
+        private static readonly bool s_canReadMetadataTokens = RuntimeFeatureSwitch.IsDynamicCodeSupported;
 
         static TypeCache()
         {
@@ -1354,13 +1408,21 @@ internal sealed class ReflectionParameterMapper<
 
             AllProperties = props
                 .Where(p => p.CanRead)
-                .OrderBy(p => p.MetadataToken)
+                .OrderBy(GetMetadataTokenOrMax)
+                .ThenBy(p => p.Name, StringComparer.Ordinal)
                 .Select(p => new PropertyMeta(p, p.GetCustomAttribute<DbParameterAttribute>()))
                 .ToArray();
         }
 
         public static bool TryGetProperty(string name, [NotNullWhen(true)] out PropertyInfo? property)
             => SqlIdentifierName.TryGetProperty(Properties, NormalizedProperties, name, out property);
+
+        private static int GetMetadataTokenOrMax(PropertyInfo property)
+            => property.Module.Assembly.IsDynamic
+                ? int.MaxValue
+                : s_canReadMetadataTokens
+                    ? property.MetadataToken
+                    : int.MaxValue;
     }
 
     /// <inheritdoc />
@@ -1457,7 +1519,7 @@ internal sealed class ReflectionParameterMapper<
 /// </para>
 /// </summary>
 internal sealed class GeneratedResultMapper<
-    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicMethods)] T>
     : ISqlMapper<T>
 {
     private readonly Func<DbDataReader, T> _mapFunc;
@@ -1466,6 +1528,14 @@ internal sealed class GeneratedResultMapper<
     /// <summary>
     /// Source Generator가 제공하는 <c>T.Map(DbDataReader)</c> 메서드를 우선 사용합니다.
     /// </summary>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2090",
+        Justification = "Generated result mapper requires public static Map methods. The generic parameter annotation preserves public methods.")]
+    [UnconditionalSuppressMessage(
+        "Aot",
+        "IL3050:RequiresDynamicCode",
+        Justification = "ExpressionTreeMapper is selected only when RuntimeFeatureSwitch reports dynamic code support; Native AOT uses ReflectionParameterMapper.")]
     public GeneratedResultMapper(LibDbOptions options)
     {
         MethodInfo? dbReaderMethod = typeof(T).GetMethod(
@@ -1494,12 +1564,17 @@ internal sealed class GeneratedResultMapper<
                 ? sqlMapFunc(sqlReader)
                 : throw new InvalidOperationException(
                     $"'{typeof(T).Name}' generated mapper only exposes Map(SqlDataReader). " +
-                    "Regenerate the [DbResult] mapper so MonitoredSqlDataReader/DbDataReader wrappers can be used.");
+                    "Update the [DbResult] mapper so MonitoredSqlDataReader/DbDataReader wrappers can be used.");
         }
 
-        _parameterMapper = RuntimeFeature.IsDynamicCodeSupported
-            ? new ExpressionTreeMapper<T>(options.JsonOptions, options.StrictRequiredParameterCheck)
-            : new ReflectionParameterMapper<T>(options.StrictRequiredParameterCheck);
+        if (RuntimeFeatureSwitch.IsDynamicCodeSupported)
+        {
+            _parameterMapper = new ExpressionTreeMapper<T>(options.JsonOptions, options.StrictRequiredParameterCheck);
+        }
+        else
+        {
+            _parameterMapper = new ReflectionParameterMapper<T>(options.StrictRequiredParameterCheck);
+        }
     }
 
     /// <inheritdoc />

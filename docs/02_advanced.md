@@ -1,82 +1,134 @@
-# Lib.Db v2 고급 기능
+# Lib.Db Advanced Features
 
-TVP, AOT, 성능 최적화, Resilience, 캐싱을 다루는 고급 가이드입니다.
+Runtime TVP, AOT, 성능 최적화, Resilience, 캐싱을 다루는 고급 가이드입니다.
 
 ---
 
-## 1. TVP (Table-Valued Parameters) & Source Generator
+## 1. Runtime TVP (Table-Valued Parameters)
 
-### 1-1. TvpRow 정의 (입력용)
+TVP 입력은 별도 생성기 패키지가 아니라 `Lib.Db` 런타임이 직접 처리합니다.
+SQL Server에는 사용자 정의 table type과 `READONLY` TVP 파라미터가 있어야 하며, C# 호출부에서는 TVP row sequence를 명시 wrapper 또는 등록형 static shape로 전달합니다.
 
-```csharp
-using Lib.Db.Contracts.Models;
+### 1-1. 기본 API: 명시 TVP wrapper
 
-namespace MyApp.Features.Products;
-
-[TvpRow(TypeName = "dbo.T_Product_V2", UseDatetime2 = true)]
-public record ProductRow
-{
-    public int ProductId { get; init; }
-    public string Name { get; init; } = "";
-    public decimal Price { get; init; }
-    public DateTime CreatedAt { get; init; }
-}
-```
-
-### 1-2. DbResult 결과 매핑 (출력용)
+가장 단순한 경로는 `LibDb.Tvp("schema.TypeName", rows)`입니다.
+한 저장 프로시저에 스칼라 파라미터와 TVP 파라미터가 함께 있어도 동일한 `.With(new { ... })` 객체 안에 넣습니다.
 
 ```csharp
-using Lib.Db.Contracts.Mapping;
+using Lib.Db;
 
-namespace MyApp.Features.Products;
+public sealed record ProductRow(
+    int ProductId,
+    string Name,
+    decimal Price,
+    DateTime CreatedAt);
 
-[DbResult]
-public partial record ProductDto
-{
-    public required int Id { get; init; }
-    public required string Name { get; init; }
-    public string? Description { get; init; }
-    public ProductDto() { }
-}
-```
-
-### 1-3. DB-First 자동 생성
-
-`libdb.schema.json`에서 TVP 스키마를 정의하면 DTO가 자동 생성됩니다.
-
-```csharp
-using Lib.Db.Contracts.Models;
-
-[GenerateTvpFromDb(TvpName = "dbo.T_Product")]
-public partial class ProductRow { }
-```
-
-### 1-4. TVP 사용 예시
-
-```csharp
 List<ProductRow> products =
 [
-    new() { ProductId = 1, Name = "Laptop", Price = 1200m, CreatedAt = DateTime.UtcNow },
-    new() { ProductId = 2, Name = "Mouse", Price = 25.5m, CreatedAt = DateTime.UtcNow }
+    new(1, "Laptop", 1_200_000m, DateTime.UtcNow),
+    new(2, "Mouse", 25_000m, DateTime.UtcNow)
 ];
 
 DbResult<int> result = await session.Default
-    .Procedure("dbo.usp_InsertProducts")
-    .With(new { Products = products })
-    .ExecuteAsync();
+    .Procedure("dbo.usp_UpsertProducts")
+    .With(new
+    {
+        RequestedBy = userId,
+        Products = LibDb.Tvp("dbo.T_Product_V2", products)
+    })
+    .ExecuteAsync(ct);
 ```
 
-### 1-5. Source Generator 동작 원리
+이 경로는 기존 POCO/record를 그대로 받을 수 있어 전환 비용이 낮습니다. 다만 row metadata를 런타임에 해석해야 하므로 Native AOT 또는 매우 잦은 반복 호출에서는 아래 static-shape fast-path를 우선 사용합니다.
 
-| 어트리뷰트 | Generator | 생성 코드 |
+### 1-2. 고성능 반복 호출: 등록형 static-shape fast-path
+
+동일 row type과 동일 TVP type을 반복 호출하는 경로는 애플리케이션 시작 시 한 번 등록합니다.
+등록된 shape는 컬럼 이름, SQL 타입, precision/scale/size, null 허용 여부, static getter를 고정하므로 reflection 의존도를 제거하고 Native AOT에 가장 적합합니다.
+
+```csharp
+using System.Data;
+using Lib.Db.Configuration;
+
+builder.Services.AddLibDb(options =>
+{
+    options.Tvp.Map<ProductRow>("dbo.T_Product_V2")
+        .Column("ProductId", SqlDbType.Int, static row => row.ProductId)
+        .Column("Name", SqlDbType.NVarChar, static row => row.Name, size: 100)
+        .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2)
+        .Column("CreatedAt", SqlDbType.DateTime2, static row => row.CreatedAt, scale: 7);
+});
+```
+
+등록 후에는 `EnableAutoTvpBinding` 기본값이 `true`이므로 같은 row type의 `IEnumerable<T>`를 그대로 전달해도 TVP로 바인딩됩니다.
+
+```csharp
+DbResult<int> result = await session.Default
+    .Procedure("dbo.usp_UpsertProducts")
+    .With(new { RequestedBy = userId, Products = products })
+    .ExecuteAsync(ct);
+```
+
+### 1-3. 명시 wrapper + 재사용 shape
+
+자동 바인딩보다 호출부에서 TVP임을 드러내고 싶으면 static shape를 직접 만들어 wrapper에 넘깁니다.
+
+```csharp
+using System.Data;
+using Lib.Db;
+using Lib.Db.Execution.Tvp;
+
+static readonly TvpShape<ProductRow> ProductTvpShape = TvpShape.For<ProductRow>()
+    .Column("ProductId", SqlDbType.Int, static row => row.ProductId)
+    .Column("Name", SqlDbType.NVarChar, static row => row.Name, size: 100)
+    .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2)
+    .Column("CreatedAt", SqlDbType.DateTime2, static row => row.CreatedAt, scale: 7)
+    .Build();
+
+DbResult<int> result = await session.Default
+    .Procedure("dbo.usp_UpsertProducts")
+    .With(new
+    {
+        RequestedBy = userId,
+        Products = LibDb.Tvp("dbo.T_Product_V2", products, ProductTvpShape)
+    })
+    .ExecuteAsync(ct);
+```
+
+### 1-4. Schema-adaptive descriptor
+
+DB TVP 스키마가 운영 중에 nullable/default-safe 범위에서 확장될 수 있는 경로는 descriptor를 조회해 `Adaptive` 정책을 명시합니다.
+필수 컬럼 누락이나 타입 불일치처럼 데이터 손상을 만들 수 있는 변경은 보정하지 않고 실패해야 합니다.
+
+```csharp
+using Lib.Db;
+using Lib.Db.Execution.Tvp;
+
+TvpSchemaDescriptor descriptor = await session.UseSchema("Default")
+    .GetTvpAsync("dbo.T_Product_V2", ct);
+
+DbResult<int> result = await session.Default
+    .Procedure("dbo.usp_UpsertProducts")
+    .With(new
+    {
+        RequestedBy = userId,
+        Products = LibDb.Tvp(descriptor, products, TvpBindingPolicy.Adaptive)
+    })
+    .ExecuteAsync(ct);
+```
+
+### 1-5. Legacy compatibility fallback
+
+`[TvpRow]` 관련 타입은 과거 코드 호환과 제한적인 reflection fallback을 위해 남아 있습니다.
+New code should use Runtime TVP APIs directly. Native AOT 또는 고빈도 호출 경로에서는 `options.Tvp.Map<T>()` 또는 `TvpShape.For<T>()`를 사용합니다.
+
+| 경로 | 권장 사용처 | AOT 적합성 |
 |---|---|---|
-| `[TvpRow]` | TvpAccessorGenerator | `TvpRegistry_*.g.cs` (SqlDataRecord 바인딩) |
-| `[DbResult]` | ResultAccessorGenerator | `ResultRegistry_*.g.cs` (DbDataReader 매핑) |
-| `[GenerateTvpFromDb]` | DbFirstTvpGenerator | DTO 속성 자동 생성 |
-
-**Track 5 하이브리드 알고리즘**:
-- **Small (12컬럼 이하)**: `Span.SequenceEqual` 기반 `else-if` 분기
-- **Large (12컬럼 초과)**: `FNV-1a` 해시 기반 `switch` 분기 (O(1) 근접)
+| `LibDb.Tvp("dbo.Type", rows)` | 전환 초기, 저빈도 호출, 호출부 명시성 | reflection fallback 경고 가능 |
+| `options.Tvp.Map<T>().Column(...)` | 반복 호출, 서비스 전역 fast-path | 권장 |
+| `LibDb.Tvp("dbo.Type", rows, shape)` | 호출부 명시성 + static shape | 권장 |
+| `LibDb.Tvp(descriptor, rows, Adaptive)` | nullable/default-safe schema drift 대응 | reflection fallback 경고 가능 |
+| `[TvpRow]` fallback | Legacy compatibility | 신규 코드 비권장 |
 
 ---
 
@@ -87,9 +139,11 @@ DbResult<int> result = await session.Default
 ```xml
 <PropertyGroup>
     <IsAotCompatible>true</IsAotCompatible>
-    <EnableGeneratedTvpBinder>true</EnableGeneratedTvpBinder>
+    <IsTrimmable>true</IsTrimmable>
 </PropertyGroup>
 ```
+
+TVP 입력 경로는 별도 MSBuild source-generator 플래그가 아니라 `options.Tvp.Map<T>()` 또는 `TvpShape.For<T>()`로 static shape를 고정합니다.
 
 ### 2-2. Shadow DTO 패턴
 
@@ -151,7 +205,7 @@ public sealed class UserRepository(IDbSession session)
 |---|---|---|
 | SQL 파라미터 | `SqlInterpolated($"...{value}")` 보간 | 문자열 연결 |
 | DTO 타입 | `[DbResult] partial record` | 리플렉션 매핑 |
-| TVP 전송 | `[TvpRow]` Source Generator | DataTable 수동 구성 |
+| TVP 전송 | `LibDb.Tvp(..., shape)` 또는 `options.Tvp.Map<T>()` | DataTable 수동 구성 |
 | 클래스 선언 | `sealed class` | 비sealed |
 | 대량 결과 | `QueryAsync` (스트리밍) | ToList 전체 적재 |
 
@@ -253,7 +307,7 @@ DbResult의 `DbError.Kind`가 `DbErrorKind.Deadlock`으로 매핑됩니다.
 
 ## 6. Always Encrypted 지원
 
-Lib.Db v2는 SQL Server Always Encrypted를 연결 문자열 수준에서 완전 지원합니다.
+Lib.Db는 SQL Server Always Encrypted를 연결 문자열 수준에서 지원합니다.
 
 ### 6-1. 설정 방법
 
@@ -342,6 +396,7 @@ public enum DbInterceptionResult
 | 속성 | 타입 | 설명 |
 |---|---|---|
 | `CommandText` | `string` | SP 이름 또는 SQL 텍스트 |
+| `DiagnosticCommandText` | `string?` | 진단/로그용 명령 텍스트. Raw SQL 원문 노출을 피하려면 이 값을 우선 사용 |
 | `CommandType` | `CommandType` | 명령 유형 (StoredProcedure / Text) |
 | `InstanceName` | `string` | 대상 인스턴스 이름 |
 | `StartTime` | `DateTime` | 실행 시작 시각 (UTC) |
@@ -370,7 +425,7 @@ public sealed class SlowQueryInterceptor(ILogger<SlowQueryInterceptor> logger) :
         {
             logger.LogWarning(
                 "[Slow Query] {CommandText} took {ElapsedMs}ms on {Instance}",
-                context.CommandText, context.ElapsedMs, context.InstanceName);
+                context.DiagnosticCommandText, context.ElapsedMs, context.InstanceName);
         }
         return ValueTask.CompletedTask;
     }
@@ -380,7 +435,7 @@ public sealed class SlowQueryInterceptor(ILogger<SlowQueryInterceptor> logger) :
     {
         logger.LogError(context.Exception,
             "[DB Error] {CommandText} on {Instance}",
-            context.CommandText, context.InstanceName);
+            context.DiagnosticCommandText, context.InstanceName);
         return ValueTask.CompletedTask;
     }
 }
@@ -541,10 +596,10 @@ DbResult<long> result = await session.BulkInsertAsync(
 
 ### 10-4. TVP vs BulkInsert 비교
 
-| 항목 | TVP ([TvpRow]) | BulkInsertAsync |
+| 항목 | TVP (Runtime TVP) | BulkInsertAsync |
 |---|---|---|
 | 적합 건수 | ~수천 건 | 수만~수십만 건 이상 |
-| AOT 호환 | O (Source Generator) | X (Reflection) |
+| AOT 호환 | O (static-shape fast-path) | X (Reflection) |
 | SP 통합 | O (파라미터로 전달) | X (직접 테이블 INSERT) |
 | 트리거/제약조건 | SP 내에서 제어 | 옵션으로 제어 |
 | 트랜잭션 | SP 트랜잭션 활용 | 내부 트랜잭션 |
@@ -568,8 +623,11 @@ Lib.Db는 OpenTelemetry 기반의 연결 풀 모니터링 메트릭을 제공합
 | `libdb.cache_op_duration_ms` | Histogram | ms | 캐시 연산 소요 시간 |
 | `libdb.cache_cleanup_total` | Counter | - | 캐시 정리 사이클 수 |
 | `libdb.cache_bytes_freed` | Gauge | bytes | 캐시 정리 시 해제된 바이트 |
+| `libdb.cache.bytes_freed` | Counter | bytes | 캐시 정리 이벤트에서 누적 기록된 해제 바이트 |
 
 ### 11-2. OpenTelemetry 연동
+
+`EnableObservability = true`이면 Lib.Db ActivitySource/Meter 기반 추적과 메트릭 기록이 활성화됩니다. 일반 `ILogger` 로그는 이 옵션과 별개로 애플리케이션 로깅 설정을 따릅니다.
 
 ```csharp
 builder.Services.AddOpenTelemetry()

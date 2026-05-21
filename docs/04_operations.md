@@ -1,6 +1,6 @@
-# Lib.Db v2 운영 가이드
+# Lib.Db Operations
 
-트러블슈팅, 에러 코드 매핑, 프로덕션 체크리스트를 다루는 운영 가이드입니다.
+트러블슈팅, 에러 코드 매핑, 현재 검증 절차, 프로덕션 체크리스트를 다루는 운영 가이드입니다.
 
 ---
 
@@ -119,18 +119,19 @@ if (result.Error is { IsTransient: true } transientError)
 
 ---
 
-## 3. 연결 문자열 검증 (6단계 방어)
+## 3. 연결 문자열 검증
 
-Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니다.
+Lib.Db는 options validation 단계에서 연결 문자열 이름, 키 매핑, 문자열 형식, 프로덕션 보안 프로필을 검증합니다. 실제 DB 연결 확인은 health check 경로에서 수행합니다.
 
 | 단계 | 검증 내용 | 실패 시 |
 |---|---|---|
-| 1 | `ConnectionStringNames` 비어있는지 확인 | `ArgumentException` |
-| 2 | 각 Name에 대응하는 ConnectionString 존재 여부 | 경고 로그 |
-| 3 | 연결 문자열 형식 유효성 (`SqlConnectionStringBuilder` 파싱) | 시작 실패 |
-| 4 | `Server` 속성 존재 여부 | 시작 실패 |
-| 5 | `Database` 속성 존재 여부 | 경고 로그 (master 폴백) |
-| 6 | 실제 연결 테스트 (`SELECT 1`) | 경고 로그 (지연 연결) |
+| 1 | `ConnectionStringNames`가 비어있지 않은지 확인 | 시작 실패 |
+| 2 | 이름 공백 및 중복 확인 | 시작 실패 |
+| 3 | 각 이름에 대응하는 `ConnectionStrings` 키 존재 및 값 공백 확인 | 시작 실패 |
+| 4 | 연결 문자열 형식 유효성 (`SqlConnectionStringBuilder` 파싱) | 시작 실패 |
+| 5 | `ConnectionSecurityProfile.Production` 사용 시 암호화, 인증서 신뢰, 고권한 SQL 로그인 waiver 확인 | 시작 실패 |
+
+`SELECT 1` 기반 연결성 확인은 startup options validation이 아니라 `AddLibDbHealthChecks(...)`로 등록한 health check에서 수행됩니다.
 
 ---
 
@@ -139,9 +140,10 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 ### 4-1. 빌드 및 테스트
 
 - [ ] `dotnet build` 경고/에러 0건
-- [ ] `dotnet test` 전체 통과
-- [ ] AOT 빌드 시 IL 트리밍 경고 0건
-- [ ] `[TvpRow]`/`[DbResult]` DTO에 `partial` 키워드 확인
+- [ ] 릴리스 담당자는 내부 릴리스 검증 절차 전체 통과 확인
+- [ ] AOT 빌드 시 Lib.Db-owned IL 트리밍/AOT 경고 0건, provider-owned warning은 릴리스 담당자가 별도 검토
+- [ ] `[DbResult]` generated result mapper를 쓰는 DTO에 `partial` 키워드 확인
+- [ ] TVP 고빈도/Native AOT 경로는 `options.Tvp.Map<T>()` 또는 `TvpShape.For<T>()` static shape 등록 확인
 
 ### 4-2. 설정 검증
 
@@ -151,6 +153,7 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 - [ ] Raw SQL Text가 필요한 경우에도 운영 기본값은 `RawSqlPolicy = DenyWriteText`, 보안 경계가 필요하면 `DenyAllText`
 - [ ] `Encrypt=True;TrustServerCertificate=False` (프로덕션)
 - [ ] sa 계정 대신 최소 권한 Application User 사용
+- [ ] TVP 사용 계정은 대상 routine의 `EXECUTE`와 user-defined table type, schema, 또는 database의 `REFERENCES` 권한만 최소 부여
 - [ ] **MARS 정책 설정**: `"Mars": "ForceEnable"` (권장) 또는 `"Mars": "Auto"` (기본값)
   - `ForceEnable`: `AddLibDb()` 등록 시 ConnectionString에 `MultipleActiveResultSets=True` 자동 주입
   - `Auto`: `QueryMultipleAsync` 사용 시 MARS 미설정이면 경고 로그 후 예외 (수동 설정 필요)
@@ -169,7 +172,7 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 ### 4-4. HealthCheck
 
 - [ ] `HealthCheckThrottleSeconds`: 1~10 (기본값: 1초)
-  - v2.2부터 이 설정이 실제로 적용됩니다 (이전 버전에서는 1초 하드코딩)
+  - 이 설정은 실제 HealthCheck 최소 실행 간격으로 적용됩니다
 - [ ] HealthCheck 응답의 캐시 진단 데이터 확인
   - `libdb.cache.mode`: `shared-memory`, `fallback`, `unregistered` 중 하나
   - `libdb.cache.fallback_active`: SharedMemory 사용이 기대되는 환경에서 `true`면 degraded 상태로 취급
@@ -177,56 +180,7 @@ Lib.Db는 시작 시 연결 문자열에 대해 다단계 검증을 수행합니
 
 ---
 
-## 5. v2.2.1 회귀 검증 체크리스트
-
-v2.2.1에는 실 DB에서 확인된 세 가지 차단 이슈에 대한 전용 검증 경로가 포함됩니다.
-검증 DB 이름은 `LIBDB_VERIFICATION_TEST`를 사용하며, 테스트 실행 시 연결 문자열은 환경변수로만 제공합니다.
-문서나 로그에는 연결 문자열 값을 남기지 마세요.
-
-### 5-1. 검증 DB 배포 객체
-
-테스트 fixture는 안전한 테스트 DB에서만 다음 객체를 멱등 배포합니다.
-
-| 객체 | 목적 |
-|---|---|
-| `[verify].[ResultMappingRows]` | `CELL_NO`, `SLOT_NAME`, `SCAN_DATE` 등 회귀 검증용 시드 데이터 |
-| `[verify].[usp_GetSuspendRows]` | UPPER_SNAKE ResultSet -> PascalCase positional record 매핑 검증 |
-| `[verify].[usp_GetGeneratedRows]` | `[DbResult]` generated mapper + monitored reader 검증 |
-| `[verify].[QuotedIdentifierRows]` | `SET QUOTED_IDENTIFIER ON` 기반 computed column index 생성 검증 |
-| `IX_QuotedIdentifierRows_NormalizedCode` | computed column index가 실제 생성됐는지 확인 |
-
-### 5-2. 검증 대상
-
-| 테스트 | 확인하는 문제 |
-|---|---|
-| `V22101_DefaultMapper_ShouldMapUpperSnakeResultSet_ToPascalCasePositionalRecord` | `CELL_NO -> CellNo` 기본 매퍼 convention |
-| `V22102_GeneratedDbResult_ShouldMapThroughMonitoredDbDataReader` | `[DbResult]` mapper가 `MonitoredSqlDataReader` wrapper에서 동작 |
-| `V22103_RawSqlDateOnlyParameter_ShouldBindAsSqlDate` | Raw SQL `DateOnly` 파라미터가 SQL `date`로 동작 |
-| `V22104_QuotedIdentifierVerificationIndex_ShouldBeCreated` | `SET QUOTED_IDENTIFIER ON`이 필요한 computed column index 생성 |
-
-### 5-3. 실행 명령
-
-다음 환경변수 키를 현재 셸 프로세스에만 설정한 뒤 실행합니다.
-값 자체는 출력하거나 커밋하지 않습니다.
-
-| 환경변수 | 설명 |
-|---|---|
-| `LIBDB_TEST_CONNECTION_VERIFICATION` | `LIBDB_VERIFICATION_TEST` 연결 문자열 |
-| `LIBDB_TEST_CONNECTION_SORTER` | 멀티 DB 테스트용 연결 문자열. 같은 테스트 DB를 가리켜도 됩니다. |
-
-```powershell
-dotnet test .\Tests\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj `
-  -c Release `
-  --filter "FullyQualifiedName~V221BlockerVerificationTests"
-```
-
-전체 회귀 확인:
-
-```powershell
-dotnet test .\Tests\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj -c Release
-```
-
-### 5-4. 보안 운영 메모
+## 5. Security Notes
 
 - 검증 DB에서는 DDL 배포를 허용하지만, 프로덕션 DB에서 테스트 초기화 코드를 실행하지 마세요.
 - `RawSqlPolicy.DenyWriteText`는 SQL 파서가 아니라 guardrail입니다. 운영 보안 경계는 최소 권한 DB 계정, `DenyAllText`, SP 권한 분리로 구성하세요.
@@ -262,6 +216,15 @@ dotnet test .\Tests\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj -c Re
 
 `EnableObservability`를 `true`로 설정합니다.
 
-> ⚠️ `EnableOpenTelemetry`는 v2.2부터 **Deprecated**되었습니다. `EnableObservability`로 대체하세요. (v3.0에서 완전 제거 예정)
+`EnableObservability` is a process-wide Lib.Db switch. Configure it once at
+startup through `AddLibDb`/`AddHighPerformanceDb`, or use
+`LibDbRuntime.ConfigureMetrics(bool)` as an explicit process-wide override.
+
+If multiple service providers or runtime configuration calls are used in the same
+process, the last configuration call wins. Recommended order: configure DI/runtime
+once during startup, then call `LibDbRuntime.ConfigureMetrics(bool)` only when an
+intentional process-wide override is required.
+
+> ⚠️ `EnableOpenTelemetry`는 **Deprecated**되었습니다. `EnableObservability`로 대체하세요. 향후 breaking release에서 제거 예정입니다.
 
 `IncludeParametersInTrace`는 보안상 개발 환경에서만 `true`로 설정하세요.

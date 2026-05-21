@@ -18,7 +18,8 @@ public sealed class CacheMaintenanceService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<CacheMaintenanceService> _logger;
-    private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(5); // 5분 주기
+    private readonly TimeSpan _checkInterval;
+    private readonly Func<ICacheMaintenanceTickSource> _tickSourceFactory;
 
     /// <summary>
     /// 캐시 유지보수 서비스를 초기화합니다.
@@ -28,9 +29,34 @@ public sealed class CacheMaintenanceService : BackgroundService
     public CacheMaintenanceService(
         IServiceProvider serviceProvider,
         ILogger<CacheMaintenanceService> logger)
+        : this(serviceProvider, logger, TimeSpan.FromMinutes(5))
     {
+    }
+
+    internal CacheMaintenanceService(
+        IServiceProvider serviceProvider,
+        ILogger<CacheMaintenanceService> logger,
+        TimeSpan checkInterval)
+        : this(serviceProvider, logger, checkInterval, null)
+    {
+    }
+
+    internal CacheMaintenanceService(
+        IServiceProvider serviceProvider,
+        ILogger<CacheMaintenanceService> logger,
+        TimeSpan checkInterval,
+        Func<ICacheMaintenanceTickSource>? tickSourceFactory)
+    {
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        if (checkInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(checkInterval), checkInterval, "Check interval must be greater than zero.");
+
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _checkInterval = checkInterval;
+        _tickSourceFactory = tickSourceFactory ?? (() => new PeriodicTimerTickSource(checkInterval));
     }
 
     /// <inheritdoc />
@@ -38,22 +64,31 @@ public sealed class CacheMaintenanceService : BackgroundService
     {
         _logger.LogInformation("[CacheMaintenance] 서비스 시작 (Interval: {Interval}분)", _checkInterval.TotalMinutes);
 
-        using PeriodicTimer timer = new PeriodicTimer(_checkInterval);
+        await using ICacheMaintenanceTickSource timer = _tickSourceFactory();
 
-        while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+        try
         {
-            try
+            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                await PerformMaintenanceAsync(stoppingToken).ConfigureAwait(false);
+                try
+                {
+                    await PerformMaintenanceAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[CacheMaintenance] 유지보수 작업 중 오류 발생");
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[CacheMaintenance] 유지보수 작업 중 오류 발생");
-            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
         }
 
         _logger.LogInformation("[CacheMaintenance] 서비스 중지");
     }
+
+    internal Task PerformMaintenanceCycleAsync(CancellationToken ct)
+        => PerformMaintenanceAsync(ct);
 
     /// <summary>
     /// 한 사이클의 캐시 유지보수 작업을 수행합니다.
@@ -87,5 +122,24 @@ public sealed class CacheMaintenanceService : BackgroundService
         await Task.Run(() => sharedCache.Compact(0.8), ct).ConfigureAwait(false);
 
         _logger.LogInformation("[CacheMaintenance] 정리 작업 완료.");
+    }
+}
+
+internal interface ICacheMaintenanceTickSource : IAsyncDisposable
+{
+    ValueTask<bool> WaitForNextTickAsync(CancellationToken stoppingToken);
+}
+
+internal sealed class PeriodicTimerTickSource(TimeSpan interval) : ICacheMaintenanceTickSource
+{
+    private readonly PeriodicTimer _timer = new(interval);
+
+    public ValueTask<bool> WaitForNextTickAsync(CancellationToken stoppingToken)
+        => _timer.WaitForNextTickAsync(stoppingToken);
+
+    public ValueTask DisposeAsync()
+    {
+        _timer.Dispose();
+        return ValueTask.CompletedTask;
     }
 }

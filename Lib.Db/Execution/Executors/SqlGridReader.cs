@@ -24,21 +24,22 @@ namespace Lib.Db.Execution.Executors;
 /// 타입 안전하고 성능 최적화된(Zero-Reflection) 매핑을 제공합니다.
 /// </para>
 /// 
-/// <para><strong>💡 핵심 기능</strong></para>
+/// <para><strong>핵심 기능</strong></para>
 /// <list type="bullet">
 /// <item><strong>ReadAsync&lt;T&gt;</strong>: 현재 ResultSet의 모든 행을 List&lt;T&gt;로 반환</item>
 /// <item><strong>ReadSingleAsync&lt;T&gt;</strong>: 현재 ResultSet의 첫 번째 행만 반환</item>
 /// <item><strong>NextResult 자동 호출</strong>: 두 번째 호출부터 DbDataReader.NextResultAsync 자동 실행</item>
+/// <item><strong>Strict ResultSet 계약</strong>: 기대한 다음 ResultSet이 없으면 계약 오류로 예외 발생</item>
 /// </list>
 /// 
-/// <para><strong>⚡ 성능 특성</strong></para>
+/// <para><strong>성능 특성</strong></para>
 /// <list type="bullet">
 /// <item><strong>메모리 할당</strong>: 최소 (List&lt;T&gt; 만 생성)</item>
 /// <item><strong>DB I/O</strong>: Streaming (행 단위 Fetch)</item>
 /// <item><strong>시간 복잡도</strong>: O(N) 매핑</item>
 /// </list>
 /// 
-/// <para><strong>🔒 스레드 안전성</strong></para>
+/// <para><strong>스레드 안전성</strong></para>
 /// <list type="bullet">
 /// <item><strong>NOT Thread-Safe</strong>: 동일 인스턴스를 동시에 여러 스레드에서 사용 불가</item>
 /// <item><strong>StatefulDesign</strong>: _isConsumed 플래그로 상태 관리</item>
@@ -59,12 +60,12 @@ internal sealed class SqlGridReader(
     ) : IMultipleResultReader
 {
     private bool _isConsumed;
+    private int _resultSetIndex = 1;
 
     /// <inheritdoc />
     public async Task<List<T>> ReadAsync<T>(CancellationToken ct = default)
     {
-        if (_isConsumed && !await reader.NextResultAsync(ct).ConfigureAwait(false))
-            return [];
+        await AdvanceIfNeededAsync(typeof(T), ct).ConfigureAwait(false);
 
         _isConsumed = true;
 
@@ -80,8 +81,7 @@ internal sealed class SqlGridReader(
     /// <inheritdoc />
     public async Task<T?> ReadSingleAsync<T>(CancellationToken ct = default)
     {
-        if (_isConsumed && !await reader.NextResultAsync(ct).ConfigureAwait(false))
-            return default;
+        await AdvanceIfNeededAsync(typeof(T), ct).ConfigureAwait(false);
 
         _isConsumed = true;
 
@@ -89,6 +89,21 @@ internal sealed class SqlGridReader(
         return await reader.ReadAsync(ct).ConfigureAwait(false)
             ? mapper.MapResult(reader)
             : default;
+    }
+
+    private async Task AdvanceIfNeededAsync(Type resultType, CancellationToken ct)
+    {
+        if (!_isConsumed)
+            return;
+
+        if (await reader.NextResultAsync(ct).ConfigureAwait(false))
+        {
+            _resultSetIndex++;
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"The stored procedure or batch did not return result set #{_resultSetIndex + 1} required for '{resultType.FullName}'.");
     }
 
     /// <inheritdoc />
@@ -105,19 +120,19 @@ internal sealed class SqlGridReader(
 /// <para>
 /// <b>[설계의도 (Design Rationale)]</b><br/>
 /// 조건문 없이 안전하게 사용 가능한 Null Object 패턴을 적용하여, Dry-Run 모드나 결과가 없는 상황에서도
-/// 호출 코드를 단순하게 유지할 수 있습니다. 빈 컬렉션을 반환하여 메모리 할당을 최소화합니다.
+/// 호출 코드를 단순하게 유지할 수 있습니다. 빈 결과 목록을 반환합니다.
 /// </para>
 /// 
-/// <para><strong>⚡ 성능 특성</strong></para>
+/// <para><strong>성능 특성</strong></para>
 /// <list type="bullet">
-/// <item><strong>메모리 할당</strong>: Zero (빈 컴렉션 재사용)</item>
+/// <item><strong>메모리 할당</strong>: 빈 <see cref="List{T}"/>와 완료된 <see cref="Task{TResult}"/> 반환</item>
 /// <item><strong>시간 복잡도</strong>: O(1)</item>
 /// <item><strong>DB I/O</strong>: None</item>
 /// </list>
 /// </remarks>
 internal sealed class EmptyGridReader : IMultipleResultReader
 {
-    // [성능 최적화] 빈 리스트를 매번 생성하지 않고 정적 빈 배열 반환 (Zero-Allocation)
+    // Return an empty list through the async contract used by real grid readers.
     public Task<List<T>> ReadAsync<T>(CancellationToken ct = default)
         => Task.FromResult<List<T>>([]);
 

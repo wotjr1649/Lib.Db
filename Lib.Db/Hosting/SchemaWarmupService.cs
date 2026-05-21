@@ -47,6 +47,12 @@ public sealed class SchemaWarmupService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // 1. 워밍업 대상이 없으면 바로 Skip
+        if (!_options.EnableSchemaCaching)
+        {
+            _logger.LogFastInfo($"[SchemaWarmup] EnableSchemaCaching 이 false 이므로 워밍업을 건너뜁니다.");
+            return;
+        }
+
         if (_options.ConnectionStringNames is not { Count: > 0 })
         {
             _logger.LogFastInfo($"[SchemaWarmup] ConnectionStringNames 가 비어 있어 워밍업을 건너뜁니다.");
@@ -128,12 +134,15 @@ public sealed class SchemaWarmupService(
     /// <param name="requested">옵션에 설정된 PrewarmMaxConcurrency 값 (0이면 자동)</param>
     /// <param name="workItemCount">전체 워밍업 작업 수</param>
     private static int GetEffectiveConcurrency(int requested, int workItemCount)
+        => GetEffectiveConcurrency(requested, workItemCount, Environment.ProcessorCount);
+
+    internal static int GetEffectiveConcurrency(int requested, int workItemCount, int processorCount)
     {
         if (workItemCount <= 0)
             return 0;
 
         // 요청값이 0이면 CPU 코어 수 기반으로 자동 결정
-        int baseValue = requested > 0 ? requested : Environment.ProcessorCount;
+        int baseValue = requested > 0 ? requested : processorCount;
 
         if (baseValue <= 0)
             baseValue = 1;
@@ -156,8 +165,7 @@ public sealed class SchemaWarmupService(
         int maxConcurrency,
         CancellationToken cancellationToken)
     {
-        if (maxConcurrency <= 0)
-            maxConcurrency = 1;
+        maxConcurrency = NormalizeWarmupConcurrency(maxConcurrency);
 
         using SemaphoreSlim gate = new SemaphoreSlim(maxConcurrency);
         List<Task> tasks = new List<Task>(workItems.Count);
@@ -171,6 +179,9 @@ public sealed class SchemaWarmupService(
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
     }
+
+    internal static int NormalizeWarmupConcurrency(int maxConcurrency)
+        => maxConcurrency <= 0 ? 1 : maxConcurrency;
 
     /// <summary>
     /// 단일 인스턴스/스키마 목록 조합에 대해 스키마 워밍업을 수행하고, Warmup 전용 메트릭을 기록합니다.

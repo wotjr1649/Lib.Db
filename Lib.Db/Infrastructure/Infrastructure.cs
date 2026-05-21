@@ -3,7 +3,7 @@
 // Role : 인프라스트럭처 구현체 모음(연결 팩토리 + 스키마 리포지토리)
 // Env  : .NET 10 / C# 14 (예정) + SqlClient
 // Notes:
-//   - DbConnectionFactory : 3-Tier 연결 문자열 해결(Ad-hoc > Raw: > Options)
+//   - DbConnectionFactory : 2-Tier 연결 문자열 해결(Ad-hoc > Options)
 //   - SqlSchemaRepository : sys.* 뷰 기반 메타데이터 조회(버전/파라미터/TVP/일괄)
 // ============================================================================
 
@@ -29,7 +29,7 @@ namespace Lib.Db.Repository;
 ///   <item><description><b>안전성</b>: 연결 오픈 실패 시 즉시 Dispose하여 리소스 누수를 차단합니다.</description></item>
 /// </list>
 ///
-/// <para><b>연결 문자열 해결(3-Tier) 우선순위</b></para>
+/// <para><b>연결 문자열 해결(2-Tier) 우선순위</b></para>
 /// <list type="number">
 ///   <item>
 ///     <description>
@@ -37,19 +37,7 @@ namespace Lib.Db.Repository;
 ///     <see cref="RegisterAdHocInstance(string, string)"/>로 등록된 연결 문자열을 최우선으로 사용합니다.
 ///     </description>
 ///   </item>
-///   <item>
-///     <description>
-///     <b>Raw 접두사</b>:
-    ///     <c>instanceHash</c>가 <c>"Raw:"</c>로 시작하면 뒤의 문자열을 연결 문자열로 간주합니다.
-///     (레거시/테스트/임시 연결 호환)
-///     </description>
-///   </item>
-///   <item>
-///     <description>
-///     <b>설정 기반</b>:
-///     <see cref="LibDbOptions.ConnectionStrings"/>에서 키로 조회합니다.
-///     </description>
-///   </item>
+///   <item><description><b>설정 기반</b>: <see cref="LibDbOptions.ConnectionStrings"/>에서 키로 조회합니다.</description></item>
 /// </list>
 ///
 /// <para><b>예외 정책</b></para>
@@ -99,14 +87,13 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
     /// 연결 문자열을 찾기 위한 키입니다.
     /// <para>
     /// - Ad-hoc에 등록된 키일 수 있습니다.<br/>
-    /// - 또는 <c>"Raw:"</c> 접두사로 시작하여 연결 문자열이 직접 포함될 수 있습니다.<br/>
     /// - 또는 <see cref="LibDbOptions.ConnectionStrings"/>의 키일 수 있습니다.
     /// </para>
     /// </param>
     /// <param name="ct">취소 토큰입니다.</param>
     /// <returns>Open된 <see cref="SqlConnection"/>을 반환합니다.</returns>
     /// <exception cref="ArgumentException">
-    /// <paramref name="instanceHash"/>에 해당하는 연결 문자열을 Ad-hoc/Raw/Options 어디에서도 찾지 못한 경우 발생합니다.
+    /// <paramref name="instanceHash"/>에 해당하는 연결 문자열을 Ad-hoc/Options 어디에서도 찾지 못한 경우 발생합니다.
     /// </exception>
     /// <remarks>
     /// <para><b>중요</b></para>
@@ -121,27 +108,32 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
     /// </remarks>
     public async Task<SqlConnection> CreateConnectionAsync(string instanceHash, CancellationToken ct)
     {
-        #region [1] 연결 문자열 결정(3-Tier)
+        #region [1] 연결 문자열 결정(2-Tier)
 
         string connStr;
 
+        // 직접 연결 문자열은 UseConnectionString의 보안 검증을 우회하므로 허용하지 않습니다.
+        if (DbDiagnosticRedactor.IsSensitiveInstanceId(instanceHash))
+        {
+            string safeInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash)
+                ?? "ConnectionString:[redacted]";
+            throw new ArgumentException(
+                $"{safeInstance} 연결 문자열은 직접 실행 경로에서 사용할 수 없습니다. " +
+                "Ad-hoc 연결은 DbSession.UseConnectionString()으로 등록해야 합니다.",
+                nameof(instanceHash));
+        }
         // [1순위] Ad-hoc 연결(동적 등록)
-        if (_adhocConnections.TryGetValue(instanceHash, out connStr!))
+        else if (_adhocConnections.TryGetValue(instanceHash, out connStr!))
         {
             // Ad-hoc 등록된 연결 문자열을 그대로 사용합니다.
         }
-        // [2순위] Raw: 접두사(레거시/테스트 호환)
-        else if (instanceHash.StartsWith("Raw:", StringComparison.Ordinal))
-        {
-            connStr = instanceHash[4..]; // "Raw:" 제거 후 나머지를 연결 문자열로 간주
-        }
-        // [3순위] 옵션 기반(설정)
+        // [2순위] 옵션 기반(설정)
         else
         {
             // [Smart Pointer Fallback]
             // 요청한 키가 "Default"인데 설정에 없고, ConnectionStringNames에 항목이 있다면 첫 번째를 대체 사용
             string targetKey = instanceHash;
-            if (instanceHash == "Default"
+            if (string.Equals(instanceHash, "Default", StringComparison.OrdinalIgnoreCase)
                 && !options.ConnectionStrings.ContainsKey("Default")
                 && options.ConnectionStringNames.Count > 0)
             {
@@ -150,9 +142,14 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
 
             if (!options.ConnectionStrings.TryGetValue(targetKey, out connStr!))
             {
+                string safeInstance = DbDiagnosticRedactor.RedactInstanceId(instanceHash) ?? instanceHash;
+                string registeredInstances = string.Join(
+                    ", ",
+                    options.ConnectionStringNames.Select(name => DbDiagnosticRedactor.RedactInstanceId(name) ?? name));
+
                 throw new ArgumentException(
-                    $"인스턴스 '{instanceHash}'에 대한 연결 문자열을 찾을 수 없습니다. " +
-                    $"등록된 인스턴스: [{string.Join(", ", options.ConnectionStringNames)}]");
+                    $"인스턴스 '{safeInstance}'에 대한 연결 문자열을 찾을 수 없습니다. " +
+                    $"등록된 인스턴스: [{registeredInstances}]");
             }
         }
 
@@ -169,30 +166,36 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
             await conn.OpenAsync(ct).ConfigureAwait(false);
             sw.Stop();
 
-            // [메트릭] 연결 획득 소요 시간 기록
-            LibDbTelemetry.ConnectionAcquireDuration.Record(
-                sw.Elapsed.TotalMilliseconds,
-                new KeyValuePair<string, object?>("instance", diagnosticInstance));
-
-            // [메트릭] PoolWaitThresholdMs 이상이면 풀 대기로 간주
-            if (sw.ElapsedMilliseconds > PoolWaitThresholdMs)
+            if (DbMetrics.IsEnabled)
             {
-                LibDbTelemetry.ConnectionPoolWaits.Add(1,
+                // [메트릭] 연결 획득 소요 시간 기록
+                LibDbTelemetry.ConnectionAcquireDuration.Record(
+                    sw.Elapsed.TotalMilliseconds,
                     new KeyValuePair<string, object?>("instance", diagnosticInstance));
+
+                // [메트릭] PoolWaitThresholdMs 이상이면 풀 대기로 간주
+                if (sw.ElapsedMilliseconds > PoolWaitThresholdMs)
+                {
+                    LibDbTelemetry.ConnectionPoolWaits.Add(1,
+                        new KeyValuePair<string, object?>("instance", diagnosticInstance));
+                }
             }
         }
         catch (Exception ex)
         {
             sw.Stop();
 
-            // [메트릭] 예외 유형에 따라 분류(reason 태그)하여 기록
-            string reason = ex is Microsoft.Data.SqlClient.SqlException sqlEx
-                ? (sqlEx.Number == -2 ? "timeout" : "sql_error")
-                : "other";
+            if (DbMetrics.IsEnabled)
+            {
+                // [메트릭] 예외 유형에 따라 분류(reason 태그)하여 기록
+                string reason = ex is Microsoft.Data.SqlClient.SqlException sqlEx
+                    ? (sqlEx.Number == -2 ? "timeout" : "sql_error")
+                    : "other";
 
-            LibDbTelemetry.ConnectionPoolTimeouts.Add(1,
-                new KeyValuePair<string, object?>("instance", diagnosticInstance),
-                new KeyValuePair<string, object?>("reason", reason));
+                LibDbTelemetry.ConnectionPoolTimeouts.Add(1,
+                    new KeyValuePair<string, object?>("instance", diagnosticInstance),
+                    new KeyValuePair<string, object?>("reason", reason));
+            }
 
             // Open 실패 시 커넥션 핸들/소켓 등 리소스 누수를 막기 위해 즉시 해제합니다.
             await conn.DisposeAsync().ConfigureAwait(false);
@@ -223,6 +226,18 @@ internal sealed class DbConnectionFactory(LibDbOptions options) : IDbConnectionF
     /// </remarks>
     public void RegisterAdHocInstance(string instanceName, string connectionString)
     {
+        if (string.IsNullOrWhiteSpace(instanceName))
+            throw new ArgumentException("Ad-hoc 인스턴스 이름은 비어 있을 수 없습니다.", nameof(instanceName));
+
+        if (DbDiagnosticRedactor.IsSensitiveInstanceId(instanceName))
+        {
+            string safeInstance = DbDiagnosticRedactor.RedactInstanceId(instanceName)
+                ?? "ConnectionString:[redacted]";
+            throw new ArgumentException(
+                $"{safeInstance} 연결 문자열은 Ad-hoc 인스턴스 이름으로 등록할 수 없습니다.",
+                nameof(instanceName));
+        }
+
         _adhocConnections[instanceName] = connectionString;
     }
 

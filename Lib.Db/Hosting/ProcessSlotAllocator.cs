@@ -155,19 +155,36 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
     public ProcessSlotAllocator(
         string isolationKey,
         ILogger<ProcessSlotAllocator> logger)
+        : this(
+            isolationKey,
+            logger,
+            static (name, log) => MutexHelper.CreateProcessMutex(name, log),
+            MAX_SLOTS)
+    {
+    }
+
+    internal ProcessSlotAllocator(
+        string isolationKey,
+        ILogger<ProcessSlotAllocator> logger,
+        Func<string, ILogger<ProcessSlotAllocator>, Mutex> mutexFactory,
+        int maxSlots = MAX_SLOTS)
     {
         ArgumentNullException.ThrowIfNull(isolationKey);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(mutexFactory);
+
+        if (maxSlots <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxSlots), maxSlots, "Max slots must be greater than zero.");
 
         _logger = logger;
 
         // ====================================================================
         // 슬롯 획득 루프 (0번부터 31번까지 순차 탐색)
         // ====================================================================
-        for (int i = 0; i < MAX_SLOTS; i++)
+        for (int i = 0; i < maxSlots; i++)
         {
             string mutexName = $"Lib.Db.{isolationKey}.Slot.{i}";
-            Mutex mutex = MutexHelper.CreateProcessMutex(mutexName, logger);
+            Mutex mutex = mutexFactory(mutexName, logger);
 
             try
             {
@@ -224,7 +241,7 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
         logger.LogWarning(
             "[ProcessSlot] ⚠️ 모든 슬롯({MaxSlots})이 사용 중입니다. " +
             "Passive Mode로 전환합니다. (SlotId=-1, IsLeader=false, IsolationKey={Key})",
-            MAX_SLOTS, isolationKey);
+            maxSlots, isolationKey);
     }
 
     #endregion

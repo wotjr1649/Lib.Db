@@ -13,6 +13,7 @@ using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
 using Lib.Db.Execution;
+using Lib.Db.Execution.Binding;
 using Lib.Db.Execution.Executors;
 using Lib.Db.Hosting;
 using Lib.Db.Infrastructure;
@@ -79,14 +80,23 @@ internal static class ServiceRegistrationHelpers
     /// </summary>
     internal static void RegisterAotSerializers(IServiceCollection services)
     {
-        services.AddHybridCache();
+        if (RuntimeFeatureSwitch.IsRuntimeDynamicCodeSupported &&
+            RuntimeFeatureSwitch.DynamicCodeSupportedOverride is not false)
+        {
+            IHybridCacheBuilder builder = services.AddHybridCache();
 
-        // SpSchema Serializer
+            builder
+                .AddSerializer<SpSchema>(new AotHybridCacheSerializer<SpSchema>(
+                    LibDbJsonContext.Default.SpSchema))
+                .AddSerializer<TvpSchema>(new AotHybridCacheSerializer<TvpSchema>(
+                    LibDbJsonContext.Default.TvpSchema));
+            return;
+        }
+
+        services.TryAddSingleton<HybridCache, LibDbAotHybridCache>();
         services.TryAddSingleton<IHybridCacheSerializer<SpSchema>>(
             _ => new AotHybridCacheSerializer<SpSchema>(
                 LibDbJsonContext.Default.SpSchema));
-
-        // TvpSchema Serializer
         services.TryAddSingleton<IHybridCacheSerializer<TvpSchema>>(
             _ => new AotHybridCacheSerializer<TvpSchema>(
                 LibDbJsonContext.Default.TvpSchema));
@@ -240,7 +250,8 @@ internal static class ServiceRegistrationHelpers
             SharedMemoryCacheOptions cacheOptions = new SharedMemoryCacheOptions
             {
                 BasePath = basePath,
-                IsolationKey = isolationKey ?? "Shared"
+                IsolationKey = isolationKey ?? "Shared",
+                EnableObservability = options.EnableObservability
             };
 
             return new SharedMemoryCache(Microsoft.Extensions.Options.Options.Create(cacheOptions), logger);

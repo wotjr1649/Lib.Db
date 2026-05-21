@@ -35,26 +35,21 @@ namespace Lib.Db.Configuration;
 /// <strong>주의:</strong> 사용하기 전에 해당 타입 <typeparamref name="T"/>가 소스 생성기(Source Generator) 컨텍스트에 등록되어 있어야 합니다.
 /// </para>
 /// </remarks>
-internal sealed class AotHybridCacheSerializer<T> : IHybridCacheSerializer<T>
+/// <remarks>
+/// <see cref="AotHybridCacheSerializer{T}"/> 클래스의 새 인스턴스를 초기화합니다.
+/// </remarks>
+/// <param name="typeInfo">
+/// System.Text.Json 소스 생성기를 통해 제공된 <typeparamref name="T"/>의 메타데이터입니다.
+/// <br/>
+/// 예: <c>MyJsonContext.Default.MyType</c>
+/// </param>
+/// <exception cref="ArgumentNullException"><paramref name="typeInfo"/>가 null인 경우 발생합니다.</exception>
+internal sealed class AotHybridCacheSerializer<T>(JsonTypeInfo<T> typeInfo) : IHybridCacheSerializer<T>
 {
     /// <summary>
     /// 컴파일 타임에 생성된 타입 메타데이터입니다.
     /// </summary>
-    private readonly JsonTypeInfo<T> _typeInfo;
-
-    /// <summary>
-    /// <see cref="AotHybridCacheSerializer{T}"/> 클래스의 새 인스턴스를 초기화합니다.
-    /// </summary>
-    /// <param name="typeInfo">
-    /// System.Text.Json 소스 생성기를 통해 제공된 <typeparamref name="T"/>의 메타데이터입니다.
-    /// <br/>
-    /// 예: <c>MyJsonContext.Default.MyType</c>
-    /// </param>
-    /// <exception cref="ArgumentNullException"><paramref name="typeInfo"/>가 null인 경우 발생합니다.</exception>
-    public AotHybridCacheSerializer(JsonTypeInfo<T> typeInfo)
-    {
-        _typeInfo = typeInfo ?? throw new ArgumentNullException(nameof(typeInfo));
-    }
+    private readonly JsonTypeInfo<T> _typeInfo = typeInfo ?? throw new ArgumentNullException(nameof(typeInfo));
 
     /// <summary>
     /// 바이트 시퀀스에서 객체를 역직렬화합니다.
@@ -70,7 +65,7 @@ internal sealed class AotHybridCacheSerializer<T> : IHybridCacheSerializer<T>
     {
         // Utf8JsonReader는 ReadOnlySequence를 생성자에서 직접 지원하므로,
         // 별도의 Span 변환이나 배열 복사 없이 고성능 파싱이 가능합니다.
-        Utf8JsonReader reader = new Utf8JsonReader(source);
+        Utf8JsonReader reader = new(source);
 
         // ! 연산자 사용: JSON이 "null" 토큰일 경우 null이 반환될 수 있으나,
         // 일반적인 캐시 히트 시나리오에서는 유효한 객체를 가정합니다.
@@ -91,7 +86,7 @@ internal sealed class AotHybridCacheSerializer<T> : IHybridCacheSerializer<T>
     {
         // IBufferWriter<byte>를 직접 사용하는 Utf8JsonWriter를 생성하여
         // 파이프라인(PipeWriter) 등에 직접 쓰기를 수행합니다.
-        using Utf8JsonWriter writer = new Utf8JsonWriter(target);
+        using Utf8JsonWriter writer = new(target);
 
         JsonSerializer.Serialize(writer, value, _typeInfo);
 

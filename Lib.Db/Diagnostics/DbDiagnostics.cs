@@ -7,6 +7,7 @@
 #nullable enable
 
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
 
@@ -422,12 +423,12 @@ public static class DbMetrics
     /// <see cref="Meter"/> 자체는 그대로 유지됩니다.
     /// </para>
     /// </summary>
-    private static volatile bool s_enabled = true;
+    private static volatile bool s_enabled;
 
     /// <summary>
     /// 메트릭 수집 전역 활성/비활성 상태입니다.
     /// <para>
-    /// - 기본값: <c>true</c><br/>
+    /// - 기본값: <c>false</c><br/>
     /// - <c>false</c> 로 설정하면 모든 Track* 호출이 무시됩니다.
     /// </para>
     /// </summary>
@@ -450,7 +451,7 @@ public static class DbMetrics
     {
         // 현재는 On/Off 플래그만 관리하지만,
         // 추후 샘플링/Threshold 등의 전역 설정이 추가되면 이곳에서 함께 초기화합니다.
-        s_enabled = true;
+        s_enabled = false;
     }
 
     // =========================================================================
@@ -811,20 +812,38 @@ public static class DbMetrics
     /// 컨텍스트 태그 없이 스키마 캐시 적중 카운터를 증가시킵니다.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void IncrementCacheHit() => s_cacheHits.Add(1);
+    public static void IncrementCacheHit()
+    {
+        if (!s_enabled)
+            return;
+
+        s_cacheHits.Add(1);
+    }
 
     /// <summary>
     /// 컨텍스트 태그 없이 스키마 캐시 미스 카운터를 증가시킵니다.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void IncrementCacheMiss() => s_cacheMisses.Add(1);
+    public static void IncrementCacheMiss()
+    {
+        if (!s_enabled)
+            return;
+
+        s_cacheMisses.Add(1);
+    }
 
     /// <summary>
     /// 캐시 정리로 반환된 바이트 수를 기록합니다.
     /// </summary>
     /// <param name="bytes">반환된 바이트 수입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void TrackCacheBytesFreed(long bytes) => s_cacheBytesFreed.Add(bytes);
+    public static void TrackCacheBytesFreed(long bytes)
+    {
+        if (!s_enabled)
+            return;
+
+        s_cacheBytesFreed.Add(bytes);
+    }
 }
 
 #endregion
@@ -919,6 +938,10 @@ internal sealed class MonitoredSqlDataReader : DbDataReader
     public override DateTime GetDateTime(int ordinal) => _inner.GetDateTime(ordinal);
     public override decimal GetDecimal(int ordinal) => _inner.GetDecimal(ordinal);
     public override double GetDouble(int ordinal) => _inner.GetDouble(ordinal);
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2093",
+        Justification = "Monitored reader forwards schema Type values only; Lib.Db does not reflect over returned members here.")]
     public override Type GetFieldType(int ordinal) => _inner.GetFieldType(ordinal);
     public override float GetFloat(int ordinal) => _inner.GetFloat(ordinal);
     public override Guid GetGuid(int ordinal) => _inner.GetGuid(ordinal);

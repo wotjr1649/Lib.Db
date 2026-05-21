@@ -1,0 +1,114 @@
+# Operations Integration
+
+Use this file for health checks, hosted services, schema flush coordination, interceptors, and host-level integration.
+
+## Health Checks
+
+```csharp
+builder.Services
+    .AddHealthChecks()
+    .AddLibDbHealthCheck("sql_db", "db", "ready");
+```
+
+Options:
+
+- `HealthCheckThrottleSeconds`: minimum interval between actual DB checks.
+- `HealthCheckTimeoutSeconds`: timeout for the health query.
+
+The health check performs a lightweight DB check against the configured default instance.
+
+## Hosted Services
+
+```csharp
+builder.Services.AddLibDbHostedServices();
+```
+
+This registers Lib.Db hosted services such as schema warmup. `AddHighPerformanceDb(...)` already calls it.
+
+## Schema Warmup
+
+Enable schema caching, list the schemas to warm, and optionally narrow the object set with include
+and exclude patterns. `PrewarmMaxConcurrency = 0` lets Lib.Db choose the default concurrency.
+
+```csharp
+builder.Services.AddLibDb(options =>
+{
+    options.ConnectionStringNames = new[] { "Default" };
+    options.ConnectionStrings["Default"] =
+        builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string key 'Default' is missing.");
+
+    options.EnableSchemaCaching = true;
+    options.PrewarmSchemas = new() { "dbo", "sales" };
+    options.PrewarmIncludePatterns = new() { "usp_*", "*Tvp" };
+    options.PrewarmExcludePatterns = new() { "usp_Archive*" };
+    options.PrewarmMaxConcurrency = 0;
+});
+
+builder.Services.AddLibDbHostedServices();
+```
+
+Use warmup for startup-time metadata preparation. Keep schema flush and warmup operations behind
+maintainer or platform controls, not ordinary user-facing endpoints.
+
+## Schema Flush Coordination
+
+```csharp
+builder.Services.AddSchemaFlushCoordination();
+```
+
+Optional base path:
+
+```csharp
+builder.Services.AddSchemaFlushCoordination(epochBasePath: configuredEpochPath);
+```
+
+Use this when multiple app processes need coordinated schema cache invalidation.
+
+## Interceptors
+
+Register:
+
+```csharp
+builder.Services.AddLibDbInterceptor<AuditInterceptor>();
+```
+
+Implement:
+
+```csharp
+public sealed class AuditInterceptor : IDbInterceptor
+{
+    public ValueTask<DbInterceptionResult> OnExecutingAsync(
+        DbInterceptionContext context,
+        CancellationToken ct)
+    {
+        return ValueTask.FromResult(DbInterceptionResult.Continue);
+    }
+
+    public ValueTask OnExecutedAsync(DbInterceptionContext context, CancellationToken ct)
+        => ValueTask.CompletedTask;
+
+    public ValueTask OnErrorAsync(DbInterceptionContext context, CancellationToken ct)
+        => ValueTask.CompletedTask;
+}
+```
+
+Use `DiagnosticCommandText` for logging. Avoid `CommandText` when it may contain raw SQL.
+
+`DbInterceptionResult.Suppress` skips DB execution; use only for deliberate infrastructure behavior.
+
+## Advanced Extensibility Contracts
+
+These public contracts are infrastructure-level extension points, not normal application APIs: `IIsolationKeyGenerator`, `IQueryAnalyzer`, `IDbCommandInterceptor`, `IResiliencePipelineProvider`, `ITransientSqlErrorDetector`, `ISchemaService`, `ITvpSchemaValidator`, `ITvpStaticValidator`, and `ISchemaFlushCoordinator`.
+
+Use them only when extending Lib.Db internals or building platform infrastructure. Prefer consumer-facing APIs such as `IDbInterceptor`, `AddLibDbInterceptor<T>`, `db.Schema`, `AddSchemaFlushCoordination(...)`, and normal options registration for application code.
+
+## Host Hook
+
+```csharp
+IHost host = builder.Build();
+host.UseHighPerformanceDb();
+await host.RunAsync();
+```
+
+`UseHighPerformanceDb()` bridges legacy generated TVP accessor validation into DI. It uses reflection and is not Native AOT friendly. New AOT-sensitive TVP paths should prefer static runtime TVP shapes. Read `aot-trimming.md`.

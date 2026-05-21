@@ -7,6 +7,7 @@
 #nullable enable
 
 using System.Text.Json;
+using System.Diagnostics.CodeAnalysis;
 using Lib.Db.Contracts.Core;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Hybrid;
@@ -38,6 +39,12 @@ namespace Lib.Db.Extensions;
 /// </summary>
 public static class QueryCacheExtensions
 {
+    private const string JsonCacheRequiresUnreferencedCodeMessage =
+        "JSON cache convenience overloads use JsonSerializerOptions-based serialization. Use source-generated JsonTypeInfo overloads for Native AOT.";
+
+    private const string JsonCacheRequiresDynamicCodeMessage =
+        "JSON cache convenience overloads can require runtime code generation. Use source-generated JsonTypeInfo overloads for Native AOT.";
+
     #region IDistributedCache 기반 캐싱
 
     /// <summary>
@@ -60,6 +67,8 @@ public static class QueryCacheExtensions
     /// <b>[주의]</b> 이 메서드는 Task가 이미 시작된 후 호출되므로, 캐시 히트 시에도 DB 쿼리가 실행될 수 있습니다.
     /// 캐시 히트 시 DB 호출을 완전히 건너뛰려면 <see cref="GetOrQueryAsync{T}"/> 팩토리 패턴을 사용하세요.
     /// </remarks>
+    [RequiresUnreferencedCode(JsonCacheRequiresUnreferencedCodeMessage)]
+    [RequiresDynamicCode(JsonCacheRequiresDynamicCodeMessage)]
     public static async Task<DbResult<T?>> WithCacheAsync<T>(
         this Task<DbResult<T?>> resultTask,
         IDistributedCache cache,
@@ -108,6 +117,8 @@ public static class QueryCacheExtensions
     /// <param name="jsonOptions">JSON 직렬화 옵션</param>
     /// <param name="ct">취소 토큰</param>
     /// <returns>캐시된 또는 새로 조회된 결과 리스트</returns>
+    [RequiresUnreferencedCode(JsonCacheRequiresUnreferencedCodeMessage)]
+    [RequiresDynamicCode(JsonCacheRequiresDynamicCodeMessage)]
     public static async Task<DbResult<List<T>>> WithCacheListAsync<T>(
         this Task<DbResult<IAsyncEnumerable<T>>> resultTask,
         IDistributedCache cache,
@@ -168,6 +179,8 @@ public static class QueryCacheExtensions
     /// <param name="jsonOptions">JSON 직렬화 옵션 (null 시 기본값 사용)</param>
     /// <param name="ct">취소 토큰</param>
     /// <returns>캐시된 또는 새로 조회된 결과</returns>
+    [RequiresUnreferencedCode(JsonCacheRequiresUnreferencedCodeMessage)]
+    [RequiresDynamicCode(JsonCacheRequiresDynamicCodeMessage)]
     public static async Task<DbResult<T?>> GetOrQueryAsync<T>(
         IDistributedCache cache,
         string cacheKey,

@@ -113,6 +113,10 @@ internal sealed class ObjectDataReader<T>(IEnumerator<T> enumerator, PropertyInf
     public void Close() => Dispose();
 
     /// <summary>지정된 인덱스의 필드 타입을 반환합니다.</summary>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2093",
+        Justification = "IDataReader exposes schema Type values only; Lib.Db does not reflect over returned members here.")]
     public Type GetFieldType(int i) => properties[i].PropertyType;
 
     /// <summary>지정된 인덱스의 데이터 타입 이름을 반환합니다.</summary>

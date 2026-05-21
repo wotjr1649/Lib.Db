@@ -49,6 +49,18 @@ public interface IDbSession : IAsyncDisposable
     /// </summary>
     IProcedureStage Default { get; }
 
+    /// <summary>
+    /// 기본 인스턴스의 스키마 유지보수 API를 시작합니다.
+    /// </summary>
+    ISchemaMaintenanceStage Schema { get; }
+
+    /// <summary>
+    /// 지정된 DB 인스턴스의 스키마 유지보수 API를 시작합니다.
+    /// </summary>
+    /// <param name="instanceName">등록된 DB 인스턴스 이름</param>
+    /// <returns>스키마 유지보수 단계 인터페이스</returns>
+    ISchemaMaintenanceStage UseSchema(string instanceName);
+
     #endregion
 
     #region 벌크 연산

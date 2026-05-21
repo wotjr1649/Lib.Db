@@ -15,8 +15,10 @@ using Lib.Db.Contracts.Core;
 using Lib.Db.Contracts.Entry;
 using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
+using Lib.Db.Contracts.Schema;
 using Lib.Db.Diagnostics;
 using Lib.Db.Execution.Bulk;
+using Lib.Db.Execution.Tvp;
 using Lib.Db.Fluent;
 
 namespace Lib.Db.Core;
@@ -37,7 +39,9 @@ namespace Lib.Db.Core;
 internal sealed class DbSession(
     IDbExecutorFactory executorFactory,
     IDbConnectionFactory connectionFactory,
-    LibDbOptions options) : IDbSession, IDisposable
+    LibDbOptions options,
+    ITvpSchemaProvider? tvpSchemaProvider = null,
+    ISchemaFlushCoordinator? schemaFlushCoordinator = null) : IDbSession, IDisposable
 {
     #region 필드 선언 (C# 14)
 
@@ -66,6 +70,7 @@ internal sealed class DbSession(
     public IProcedureStage Use(string instanceName)
     {
         CheckDisposed();
+        EnsureRegisteredInstanceName(instanceName, nameof(instanceName));
 
         DbInstanceState state = GetOrCreateInstanceState(instanceName);
         IDbExecutor executor = GetOrCreateExecutor(state);
@@ -84,6 +89,7 @@ internal sealed class DbSession(
     public IProcedureStage UseConnectionString(string connectionString)
     {
         CheckDisposed();
+        LibDbOptionsValidator.ValidateAdHocConnectionStringOrThrow(options, connectionString);
 
         // [결정적 인스턴스명 생성] SHA256 해시 기반으로 동일 연결 문자열은 동일 인스턴스를 재사용
         string hash = ComputeConnectionStringHash(connectionString);
@@ -116,6 +122,26 @@ internal sealed class DbSession(
     public IProcedureStage Default => Use(options.ConnectionStringNames[0]);
 
     /// <summary>
+    /// 기본 인스턴스의 스키마 유지보수 API를 시작합니다.
+    /// </summary>
+    public ISchemaMaintenanceStage Schema => UseSchema(options.ConnectionStringNames[0]);
+
+    /// <summary>
+    /// 지정된 DB 인스턴스의 스키마 유지보수 API를 시작합니다.
+    /// </summary>
+    public ISchemaMaintenanceStage UseSchema(string instanceName)
+    {
+        CheckDisposed();
+        EnsureRegisteredInstanceName(instanceName, nameof(instanceName));
+
+        ISchemaFlushCoordinator coordinator = schemaFlushCoordinator
+            ?? throw new InvalidOperationException(
+                "Schema flush coordinator가 등록되지 않았습니다. AddSchemaFlushCoordination을 등록해야 합니다.");
+
+        return new SchemaMaintenanceStage(tvpSchemaProvider, coordinator, instanceName);
+    }
+
+    /// <summary>
     /// 인스턴스별 독립 트랜잭션 스코프를 시작합니다. (기본 격리 수준: ReadCommitted)
     /// </summary>
     /// <param name="instanceName">대상 인스턴스 이름</param>
@@ -139,6 +165,7 @@ internal sealed class DbSession(
         CancellationToken ct = default)
     {
         CheckDisposed();
+        EnsureRegisteredInstanceName(instanceName, nameof(instanceName));
 
         DbInstanceState state = GetOrCreateInstanceState(instanceName);
 
@@ -185,6 +212,7 @@ internal sealed class DbSession(
         CancellationToken ct) where T : class
     {
         CheckDisposed();
+        EnsureRegisteredInstanceName(instanceName, nameof(instanceName));
 
         try
         {
@@ -260,6 +288,22 @@ internal sealed class DbSession(
             ConnectionHash = key,
             IsAdHoc = false
         }, (object?)null);
+    }
+
+    private static void EnsureRegisteredInstanceName(string instanceName, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(instanceName))
+            throw new ArgumentException("DB 인스턴스 이름은 비어 있을 수 없습니다.", paramName);
+
+        if (DbDiagnosticRedactor.IsSensitiveInstanceId(instanceName))
+        {
+            string safeInstanceName = DbDiagnosticRedactor.RedactInstanceId(instanceName)
+                ?? "ConnectionString:[redacted]";
+            throw new ArgumentException(
+                $"{safeInstanceName} 연결 문자열은 등록 인스턴스 이름으로 사용할 수 없습니다. " +
+                "Ad-hoc 연결이 필요하면 UseConnectionString()을 사용하세요.",
+                paramName);
+        }
     }
 
     /// <summary>

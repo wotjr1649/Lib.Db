@@ -1,7 +1,10 @@
 <Solution>
-  <Folder Name="/Tests/">
-    <Project Path="Tests/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj" />
+  <Folder Name="/Verification/">
+    <Project Path="Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj" />
+    <Project Path="Verification/projects/Lib.Db.AotVerification/Lib.Db.AotVerification.csproj" />
+    <Project Path="Verification/projects/Lib.Db.Benchmarks/Lib.Db.Benchmarks.csproj" />
+    <Project Path="Verification/projects/Lib.Db.AotSmoke/Lib.Db.AotSmoke.csproj" />
+    <Project Path="Verification/projects/Lib.Db.ChaosHarness/Lib.Db.ChaosHarness.csproj" />
   </Folder>
-  <Project Path="Lib.Db.TvpGen/Lib.Db.TvpGen.csproj" Id="940b60eb-bc50-4628-b270-ce7968ba0082" />
   <Project Path="Lib.Db/Lib.Db.csproj" />
 </Solution>

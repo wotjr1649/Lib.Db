@@ -4,6 +4,7 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Lib.Db.Configuration;
@@ -21,6 +22,7 @@ namespace Lib.Db.Configuration
         IgnoreReadOnlyProperties = false,
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+    [ExcludeFromCodeCoverage(Justification = "System.Text.Json source generation metadata is exercised through serialization tests, not line coverage.")]
     internal partial class LibDbJsonContext : JsonSerializerContext
     {
     }

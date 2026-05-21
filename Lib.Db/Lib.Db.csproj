@@ -4,15 +4,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-	<LangVersion>preview</LangVersion>
 	<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+	<!-- <LangVersion>14.0</LangVersion> -->
+	<!-- Library compatibility analyzers. NativeAOT publishing is validated by executable smoke projects. -->
+	<IsAotCompatible>true</IsAotCompatible>
 
-	  <!-- AOT 및 Trimming 호환성 -->
-	  <IsAotCompatible>true</IsAotCompatible>
-	  <IsPublishTrimmed>true</IsPublishTrimmed>
-	  <PublishAot>true</PublishAot>
-
-	  <!-- 분석기/제너레이터가 모든 빌드에서 항상 동작하도록 -->
+	<!-- 분석기/제너레이터가 모든 빌드에서 항상 동작하도록 -->
 	<EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
 	
 	<!-- AOT/레거시 호환 경고 억제 (일반 JIT 컴파일 사용 시 영향 없음) -->
@@ -30,19 +27,21 @@
 </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Caching.Hybrid" Version="10.5.0" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.6" />
-    <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="10.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Resilience" Version="10.5.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Hybrid" Version="10.6.0" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Resilience" Version="10.6.0" />
     <PackageReference Include="Polly" Version="8.6.6" />
-    <PackageReference Include="System.IO.Hashing" Version="10.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.6" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.8" />
   </ItemGroup>
 
   <PropertyGroup>
-    <Version>2.2.1</Version>
+    <Version>2.3.0</Version>
     <Authors>KIM JAE SEOK</Authors>
     <Description>High-Performance Data Access Library for .NET 10</Description>
     <PackageTags>sql-server;performance;aot;resilience</PackageTags>
@@ -65,6 +64,24 @@
     <!-- <None Include="icon.png" Pack="true" PackagePath="\" /> -->
   </ItemGroup>
 
+  <Target Name="GenerateLibDbBuildInfo" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <LibDbBuildInfoFile>$(IntermediateOutputPath)LibDbBuildInfo.g.cs</LibDbBuildInfoFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <Compile Include="$(LibDbBuildInfoFile)" Visible="false" />
+      <LibDbBuildInfoLine Include="// &lt;auto-generated /&gt;" />
+      <LibDbBuildInfoLine Include="namespace Lib.Db.Diagnostics%3B" />
+      <LibDbBuildInfoLine Include="internal static class LibDbBuildInfo" />
+      <LibDbBuildInfoLine Include="{" />
+      <LibDbBuildInfoLine Include="    public const string Version = &quot;$(Version)&quot;%3B" />
+      <LibDbBuildInfoLine Include="}" />
+    </ItemGroup>
+
+    <WriteLinesToFile File="$(LibDbBuildInfoFile)" Lines="@(LibDbBuildInfoLine)" Overwrite="true" Encoding="UTF-8" />
+  </Target>
+
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
     <DebugType>portable</DebugType>
   </PropertyGroup>
@@ -73,22 +90,15 @@
     <DebugType>portable</DebugType>
   </PropertyGroup>
 
-  <ItemGroup>
-	  <!-- Explicitly pack the generator DLL -->
-	  <None Include="..\Lib.Db.TvpGen\bin\$(Configuration)\net10.0\Lib.Db.TvpGen.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- Keep ProjectReference for build dependency but do not reference assembly -->
-    <ProjectReference Include="..\Lib.Db.TvpGen\Lib.Db.TvpGen.csproj" ReferenceOutputAssembly="false" />
-  </ItemGroup>
-
 	<ItemGroup>
 		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
 			<_Parameter1>DynamicProxyGenAssembly2</_Parameter1>
 		</AssemblyAttribute>
 		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
 			<_Parameter1>Lib.Db.IntegrationTests</_Parameter1>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+			<_Parameter1>Lib.Db.AotVerification</_Parameter1>
 		</AssemblyAttribute>
 	</ItemGroup>
 

@@ -6,6 +6,12 @@
 
 #nullable enable
 
+using Lib.Db.Caching;
+using Lib.Db.Execution.Binding;
+using Microsoft.Extensions.Caching.Hybrid;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
+
 namespace Lib.Db.Extensions;
 
 #region [확장 메서드] HybridCache 서비스 등록
@@ -32,22 +38,34 @@ public static class HybridCacheExtensions
         this IServiceCollection services,
         Action<HybridCacheOptions>? configure = null)
     {
-        // .NET 9+ HybridCache 등록
-        // 참고: 이미 IDistributedCache가 등록되어 있어야 L2로 작동합니다.
-        // Lib.Db.Caching.SharedMemoryCache가 그 역할을 수행할 수 있습니다.
-
-        services.AddHybridCache(options =>
+        if (RuntimeFeatureSwitch.IsRuntimeDynamicCodeSupported &&
+            RuntimeFeatureSwitch.DynamicCodeSupportedOverride is not false)
         {
-            // 기본값: 5분 만료
-            options.DefaultEntryOptions = new HybridCacheEntryOptions
+            // .NET 9+ HybridCache 등록
+            // 참고: 이미 IDistributedCache가 등록되어 있어야 L2로 작동합니다.
+            // Lib.Db.Caching.SharedMemoryCache가 그 역할을 수행할 수 있습니다.
+
+            services.AddHybridCache(options =>
             {
-                Expiration = TimeSpan.FromMinutes(5),
-                LocalCacheExpiration = TimeSpan.FromMinutes(1) // L1은 짧게
-            };
+                // 기본값: 5분 만료
+                options.DefaultEntryOptions = new HybridCacheEntryOptions
+                {
+                    Expiration = TimeSpan.FromMinutes(5),
+                    LocalCacheExpiration = TimeSpan.FromMinutes(1) // L1은 짧게
+                };
 
-            configure?.Invoke(options);
-        });
+                configure?.Invoke(options);
+            });
 
+            return services;
+        }
+
+        if (configure is not null)
+        {
+            services.Configure(configure);
+        }
+
+        services.TryAddSingleton<HybridCache, LibDbAotHybridCache>();
         return services;
     }
 }

@@ -26,6 +26,8 @@ using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
 using Lib.Db.Diagnostics;
+using Lib.Db.Execution.Binding;
+using Lib.Db.Execution.Tvp;
 
 namespace Lib.Db.Schema;
 
@@ -150,7 +152,9 @@ internal sealed class SchemaService(
     /// </remarks>
     public async Task<SpSchema> GetSpSchemaAsync(string spName, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("GetSpSchema");
+        using Activity? activity = options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("GetSpSchema")
+            : null;
         string normalized = Normalize(spName);
 
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
@@ -200,7 +204,9 @@ internal sealed class SchemaService(
     /// </remarks>
     public async Task<TvpSchema> GetTvpSchemaAsync(string tvpName, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("GetTvpSchema");
+        using Activity? activity = options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("GetTvpSchema")
+            : null;
         string normalized = Normalize(tvpName);
 
         // [Negative Cache] 첫 번째 확인 - 존재하지 않음이 캐시되었다면 즉시 예외 throw
@@ -322,7 +328,9 @@ internal sealed class SchemaService(
     /// <inheritdoc />
     public async Task<PreloadResult> PreloadSchemaAsync(IEnumerable<string> schemaNames, string instanceHash, CancellationToken ct)
     {
-        using Activity? activity = LibDbTelemetry.ActivitySource.StartActivity("PreloadSchema");
+        using Activity? activity = options.EnableObservability
+            ? LibDbTelemetry.ActivitySource.StartActivity("PreloadSchema")
+            : null;
 
         // [Smart Deduplication]
         // 1. 중복 제거: "dbo", "dbo" -> "dbo" (Distinct)
@@ -472,6 +480,27 @@ internal sealed class SchemaService(
     }
 
     /// <inheritdoc />
+    public async Task FlushTvpAsync(string tvpName, string instanceHash, CancellationToken ct)
+    {
+        string normalized = Normalize(tvpName);
+        string key = KeyHelper.BuildStringKey(instanceHash, "TVP", normalized);
+
+        logger.LogInformation(
+            "[스키마 초기화] TVP '{TvpName}', 인스턴스 '{Instance}' 캐시 및 스냅샷 삭제",
+            normalized,
+            DbDiagnosticRedactor.RedactInstanceId(instanceHash));
+
+        await cache.RemoveAsync(key, ct).ConfigureAwait(false);
+
+        _snapshot.RemoveTvp(instanceHash, normalized);
+        NegativeCache.RemoveMissing(instanceHash, normalized, "TvpType");
+        DbBinder.ClearTvpCaches(TvpTypeName.Parse(normalized));
+
+        DbRequestInfo info = BuildSchemaInfo(instanceHash, "schema.tvp.flush", normalized);
+        DbMetrics.TrackSchemaRefresh(success: true, kind: "TVP.Flush", info);
+    }
+
+    /// <inheritdoc />
     public void InvalidateSpSchema(string spName, string instanceHash)
     {
         string normalized = Normalize(spName);
@@ -481,6 +510,21 @@ internal sealed class SchemaService(
         _snapshot.RemoveSp(instanceHash, normalized);
 
         logger.LogWarning("[스키마 강제 무효화] SP: {SpName}, 인스턴스: {Instance}",
+            normalized, DbDiagnosticRedactor.RedactInstanceId(instanceHash));
+    }
+
+    /// <inheritdoc />
+    public void InvalidateTvpSchema(string tvpName, string instanceHash)
+    {
+        string normalized = Normalize(tvpName);
+        string key = KeyHelper.BuildStringKey(instanceHash, "TVP", normalized);
+
+        _ = cache.RemoveAsync(key, CancellationToken.None);
+        _snapshot.RemoveTvp(instanceHash, normalized);
+        NegativeCache.RemoveMissing(instanceHash, normalized, "TvpType");
+        DbBinder.ClearTvpCaches(TvpTypeName.Parse(normalized));
+
+        logger.LogWarning("[스키마 강제 무효화] TVP: {TvpName}, 인스턴스: {Instance}",
             normalized, DbDiagnosticRedactor.RedactInstanceId(instanceHash));
     }
 
@@ -867,6 +911,20 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     }
 
     /// <summary>
+    /// TVP 스키마를 제거합니다. L1에 있다면 즉시 병합하여 제거 상태를 반영합니다.
+    /// </summary>
+    public void RemoveTvp(string instanceHash, string tvpName)
+    {
+        string key = KeyHelper.BuildSnapshotKey(instanceHash, tvpName);
+        _l2Tvp.TryRemove(key, out _);
+
+        if (_l1Tvp.ContainsKey(key))
+        {
+            MergeSnapshots(clearTvpKey: key);
+        }
+    }
+
+    /// <summary>
     /// 특정 인스턴스의 모든 스키마를 제거합니다.
     /// </summary>
     public void Clear(string instanceHash)
@@ -981,14 +1039,23 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
     /// </para>
     /// </summary>
     /// <param name="clearPrefix">특정 prefix의 항목을 제거할 경우 지정</param>
-    private void MergeSnapshots(string? clearPrefix = null)
+    /// <param name="clearSpKey">특정 SP cache key만 제거할 경우 지정</param>
+    /// <param name="clearTvpKey">특정 TVP cache key만 제거할 경우 지정</param>
+    private void MergeSnapshots(
+        string? clearPrefix = null,
+        string? clearSpKey = null,
+        string? clearTvpKey = null)
     {
         using (_mergeLock.EnterScope())
         {
             try
             {
                 // 병합할 것이 없으면 조기 종료
-                if (_l2Sp.IsEmpty && _l2Tvp.IsEmpty && clearPrefix is null)
+                if (_l2Sp.IsEmpty
+                    && _l2Tvp.IsEmpty
+                    && clearPrefix is null
+                    && clearSpKey is null
+                    && clearTvpKey is null)
                     return;
 
                 // ===== SP 스키마 병합 =====
@@ -1003,6 +1070,9 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
                             newSp.Remove(key);
                     }
                 }
+
+                if (clearSpKey is not null)
+                    newSp.Remove(clearSpKey);
 
                 // L2의 모든 항목을 병합 (덮어쓰기)
                 foreach (KeyValuePair<string, SpSchema> kvp in _l2Sp)
@@ -1025,6 +1095,9 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
                             newTvp.Remove(key);
                     }
                 }
+
+                if (clearTvpKey is not null)
+                    newTvp.Remove(clearTvpKey);
 
                 foreach (KeyValuePair<string, TvpSchema> kvp in _l2Tvp)
                 {
@@ -1520,12 +1593,16 @@ internal static class SchemaCacheIdentity
 {
     public static string ForCache(string instanceHash)
     {
-        if (!instanceHash.StartsWith("Raw:", StringComparison.Ordinal))
+        if (!DbDiagnosticRedactor.IsSensitiveInstanceId(instanceHash))
             return instanceHash;
 
         byte[] digest = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(instanceHash));
 
-        return "raw-sha256-" + Convert.ToHexString(digest);
+        string prefix = instanceHash.StartsWith("Raw:", StringComparison.OrdinalIgnoreCase)
+            ? "raw-sha256-"
+            : "connection-sha256-";
+
+        return prefix + Convert.ToHexString(digest);
     }
 }
