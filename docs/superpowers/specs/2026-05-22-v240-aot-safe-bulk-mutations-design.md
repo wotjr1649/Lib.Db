@@ -4,6 +4,15 @@ Date: 2026-05-22
 Status: Approved for planning; implementation not started
 Scope: AOT-safe bulk insert, update, delete, upsert, and merge APIs for SQL Server
 
+## Parent Integration
+
+This is the authoritative sub-spec for AOT-safe bulk mutations. The v2.4.0 integrated scope and release orchestration remain in:
+
+- `docs/superpowers/specs/2026-05-22-v240-integrated-additional-scope-design.md`
+- `docs/superpowers/plans/2026-05-22-v240-integrated-additional-scope-implementation.md`
+
+If this sub-spec and the integrated documents appear to overlap, use this document for bulk internals and the integrated documents for cross-feature release gates, public docs, and security review sequencing.
+
 ## Context
 
 Lib.Db v2.4.0 is not tagged or published to NuGet yet. The current branch can still accept one final feature if the release risk is controlled through conservative API design and heavier verification than a normal feature would require.
@@ -21,12 +30,19 @@ Official references checked on 2026-05-22:
 
 - `SqlBulkCopy` supports efficient SQL Server bulk loading from `IDataReader`: <https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlbulkcopy>
 - `SqlBulkCopy(SqlConnection, SqlBulkCopyOptions, SqlTransaction)` can participate in an existing transaction; `UseInternalTransaction` conflicts with an external transaction: <https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlbulkcopy.-ctor>
+- `SqlBulkCopyOptions.CheckConstraints` explicitly controls whether destination constraints are checked during bulk copy: <https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlbulkcopyoptions>
 - Microsoft bulk copy transaction guidance says non-transactional bulk copy cannot be rolled back and recommends an existing transaction when the bulk copy must participate in a larger operation: <https://learn.microsoft.com/en-us/sql/connect/ado-net/sql/transaction-bulk-copy-operations>
 - `SqlBulkCopyColumnMapping` maps source reader columns to destination columns when names or ordinals differ: <https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlbulkcopycolumnmapping>
 - SQL Server `MERGE` exists, but its semantics are large and should not become the default engine for a release-candidate feature: <https://learn.microsoft.com/en-us/sql/t-sql/statements/merge-transact-sql>
 - SQL Server supports joined `UPDATE` through `UPDATE ... FROM`: <https://learn.microsoft.com/en-us/sql/t-sql/queries/update-transact-sql>
 - SQL Server supports joined `DELETE` through the Transact-SQL `FROM` extension: <https://learn.microsoft.com/en-us/sql/t-sql/statements/delete-transact-sql>
+- SQL Server unique indexes enforce duplicate-key rejection and can be created on temporary tables; this is the v2.4.0 duplicate-source-key guard: <https://learn.microsoft.com/en-us/sql/relational-databases/indexes/create-unique-indexes> and <https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql>
+- SQL Server `QUOTENAME` documents bracket-delimited identifier escaping behavior and the `sysname` 128-character input limit; Lib.Db mirrors the escaping behavior for already validated identifiers and must reject malformed multipart names instead of normalizing them: <https://learn.microsoft.com/en-us/sql/t-sql/functions/quotename-transact-sql>
+- SQL Server `MERGE` documentation states that the same matched row cannot be updated and deleted in one statement; Lib.Db's API-level merge must avoid equivalent contradictory action combinations even though it uses staged DML rather than SQL Server `MERGE` by default: <https://learn.microsoft.com/en-us/sql/t-sql/statements/merge-transact-sql>
+- Microsoft.Data.SqlClient 5.1+ supports `DateOnly` and `TimeOnly` for parameter values and `GetFieldValue`; Lib.Db still normalizes bulk reader values to the SQL-facing provider types used by its existing TVP path: <https://learn.microsoft.com/en-us/sql/connect/ado-net/introduction-microsoft-data-sqlclient-namespace>
 - Native AOT requires avoiding runtime code generation and reflection paths that produce AOT or trim warnings: <https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/fixing-warnings>
+- Native AOT warning IL3050 is produced for APIs annotated with `RequiresDynamicCodeAttribute`; the new bulk path must avoid runtime dynamic-code APIs such as `MakeGenericType`, `Expression.Compile`, `DynamicMethod`, and `Reflection.Emit`: <https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/warnings/il3050>
+- `DbTransaction.CommitAsync` and `RollbackAsync` both accept cancellation tokens and can surface cancellation or provider exceptions through the returned task; Lib.Db's bulk transaction policy must preserve the primary failure and avoid caller-cancellation ambiguity at final commit: <https://learn.microsoft.com/en-us/dotnet/api/system.data.common.dbtransaction.commitasync> and <https://learn.microsoft.com/en-us/dotnet/api/system.data.common.dbtransaction.rollbackasync>
 
 ## Problem
 
@@ -176,7 +192,10 @@ Each `BulkColumn<T>` contains:
 - optional size,
 - optional precision,
 - optional scale,
-- static getter delegate.
+- static getter delegate,
+- shape-build-time value converter selected from the static `TValue` and `SqlDbType`.
+
+Value conversion is shape metadata, not row-time type discovery. `DateOnly`, `TimeOnly`, and enum conversion rules must be fixed when the shape is built so the reader does not call `value.GetType()` or `Enum.GetUnderlyingType(...)` for every row.
 
 Shape validation:
 
@@ -186,8 +205,15 @@ Shape validation:
 - no duplicate destination column names under ordinal-insensitive comparison,
 - no empty or invalid destination column names,
 - key columns must also be included in the staging table,
+- mutation key columns are treated as non-null operational keys; null key values are rejected before DML,
 - delete operations stage key columns only unless merge options require action-specific data,
 - nullable `false` columns reject null values before SQL Server sees them.
+
+Key uniqueness contract:
+
+- Source rows for update/delete/upsert/merge must contain no duplicate key tuples. The implementation enforces this by creating a unique index on the local staging table key columns after `SqlBulkCopy` loads the stage and before any target DML executes.
+- Target key columns must be backed by a database-enforced `PRIMARY KEY` or `UNIQUE` constraint/index owned by the application schema. v2.4.0 documents this as a caller/database contract and does not run default metadata probes against `sys.indexes` before each bulk mutation.
+- The staging unique index must not use `IGNORE_DUP_KEY`; duplicate source keys fail the operation and roll back the whole transaction.
 
 ## Identifier Safety
 
@@ -206,11 +232,16 @@ It rejects:
 - whitespace-only names,
 - bracket imbalance,
 - empty schema or table,
+- leading, trailing, or repeated separators that would create empty name parts,
+- identifier parts longer than 128 characters,
+- embedded bracket syntax in public table-name input except for the simple `[schema].[table]` wrapper form,
 - raw SQL fragments.
 
 All emitted identifiers are bracket-quoted, and `]` is escaped as `]]`.
 
 This is deliberately stricter than generic SQL Server identifier grammar. Bulk mutation writes data, so a narrow accepted form is the right default.
+
+Destination column names in `BulkShape<T>` follow the same defensive posture: they are destination identifiers, not SQL fragments. They must be non-empty, at most 128 characters, and free of whitespace, comments, semicolons, and bracket syntax. The renderer quotes them after validation.
 
 ## Transaction Model
 
@@ -220,6 +251,7 @@ For insert:
 
 - `SqlBulkCopy` can receive the local `SqlTransaction`.
 - All inserted rows roll back on failure when `UseTransaction = true`.
+- `CheckConstraints` defaults to `true` for the new AOT-safe options. Callers may opt out explicitly for controlled performance scenarios, but the safe release default is to keep destination constraints checked.
 
 For update/delete/upsert/merge:
 
@@ -229,7 +261,14 @@ For update/delete/upsert/merge:
 - drop temp table,
 - commit transaction.
 
-If any step fails, roll back.
+If any step fails before final commit begins, including cancellation, explicitly attempt rollback before returning or rethrowing. Do not rely on connection/transaction disposal as the only rollback mechanism in the documented implementation path. Rollback failure is a secondary diagnostic event: it must not replace the original SQL/general/cancellation failure in public `DbResult<T>` errors.
+
+The final commit boundary uses `CancellationToken.None` after all cancellable staging and DML work has completed. This avoids reporting caller cancellation after the database may already be committing. The public contract is:
+
+- cancellation before commit begins attempts rollback and rethrows `OperationCanceledException`;
+- after commit begins, caller cancellation is no longer observed by the commit call;
+- provider failures at commit are mapped through the existing redacted error path, with best-effort rollback only if the provider still considers the transaction pending;
+- commit-outcome ambiguity caused by connection loss remains a provider/database reality and must be documented as such rather than hidden behind a false cancellation result.
 
 `UseInternalTransaction` is not part of the new default path because Microsoft documents that `SqlBulkCopyOptions.UseInternalTransaction` cannot be combined with an external transaction and each batch is independent. The new API should prefer one explicit transaction for release safety.
 
@@ -249,7 +288,27 @@ CREATE TABLE #LibDbBulk_0123456789abcdef (
 
 The temp table exists only on the current connection. It is not visible cross-session, and it disappears when the connection closes. The implementation still attempts an explicit `DROP TABLE` on the success and failure paths for clean resource usage.
 
-SQL type rendering is generated from `SqlDbType`, size, precision, scale, and nullability. Unsupported types fail during shape validation instead of producing partially valid SQL.
+SQL type rendering is generated from `SqlDbType`, size, precision, scale, and nullability. Unsupported types fail during shape construction or shape validation before any connection is opened, instead of producing partially valid SQL or failing after `SqlBulkCopy` starts.
+
+For mutation operations, the engine creates a unique index on the stage key columns after stage loading:
+
+```sql
+CREATE UNIQUE INDEX [IX_LibDbBulk_Key]
+ON #LibDbBulk_0123456789abcdef ([ProductId]);
+```
+
+This converts duplicate source keys into a deterministic validation failure before target data is changed. For delete operations, the stage table and reader use a key-only projected column set so the temp-table shape, `SqlBulkCopy` mappings, and joined delete SQL stay aligned.
+
+Bulk reader value normalization follows the existing TVP path:
+
+- `SqlDbType.Date` values from `DateOnly` are exposed as `DateTime` at midnight.
+- `SqlDbType.Time` values from `TimeOnly` are exposed as `TimeSpan`.
+- enums are exposed as their underlying numeric values.
+- other supported values are passed through unchanged.
+
+The normalization is performed by the shape metadata converter before the reader returns values. The reader also owns the row enumerator lifetime. It must expose `IsClosed` from an internal closed flag, make `Close()` and `Dispose(bool)` idempotent, dispose the underlying enumerator exactly once, clear the current row state when `Read()` reaches EOF, throw `IndexOutOfRangeException` for missing column names in `GetOrdinal`, and implement `HasRows` as "this result set contains at least one row" without consuming or skipping the first row.
+
+`BulkShapeDataReader<T>` is an internal implementation type, not a public API. Tests and the AOT verification project can reach it through the repo's existing `InternalsVisibleTo` setup, but consumers should only see `BulkShape<T>` and the `IDbSession` bulk overloads.
 
 ## DML Semantics
 
@@ -298,8 +357,12 @@ WHERE NOT EXISTS (
 
 - `BulkMergeActions.UpdateMatched` runs the update step.
 - `BulkMergeActions.InsertMissing` runs the insert-missing step.
-- `BulkMergeActions.DeleteMatched` runs the joined delete step.
+- `BulkMergeActions.DeleteMatched` runs the joined delete step only when it is the sole selected action in v2.4.0.
 - `BulkMergeActions.DeleteNotMatchedBySource` is not supported in v2.4.0.
+
+`BulkMergeOptions.Validate()` must be polymorphic. A `BulkMergeOptions` instance referenced through `BulkWriteOptions` must still reject `DeleteNotMatchedBySource`; method hiding is not acceptable for this security boundary.
+
+`DeleteMatched` is exclusive in v2.4.0. Combining it with `UpdateMatched` or `InsertMissing` can update or insert rows and then delete the same staged keys in the same operation. That is surprising for callers, risky for data integrity, and close to the matched update/delete ambiguity called out in SQL Server `MERGE` documentation. If a caller needs mixed delete and upsert semantics, they should run two explicit operations with their own reviewable predicates.
 
 Rejecting `DeleteNotMatchedBySource` in v2.4.0 is intentional. It is easy for a caller to delete too much data if the source is incomplete. That operation needs a separate bounded target predicate design and more review.
 
@@ -331,7 +394,7 @@ Bulk mutation methods follow the existing `DbResult<T>` pattern:
 - failure returns existing error result behavior without leaking connection strings or row values,
 - validation errors fail before opening a connection where possible,
 - SQL errors are redacted through existing diagnostic/error infrastructure,
-- cancellation propagates as cancellation, not a successful zero-row operation.
+- cancellation attempts rollback before propagating as cancellation, not a successful zero-row operation.
 
 Validation errors should be explicit and actionable:
 
@@ -342,6 +405,13 @@ Validation errors should be explicit and actionable:
 - unsupported SQL type rendering,
 - non-nullable column produced a null value,
 - invalid option values.
+
+The public bulk methods return `DbResult<T>` for SQL and validation failures. Implementation samples must not leave a `catch { rollback; throw; }` path for non-cancellation errors. The correct pattern is:
+
+- roll back the transaction on SQL/general/cancellation failure before returning or rethrowing,
+- let `OperationCanceledException` propagate after the rollback attempt,
+- map SQL exceptions through the existing `DbErrorMapper` and redaction path,
+- map general exceptions to `DbErrorKind.Unknown` with a generic public message and without including raw `Exception.Message`, row values, connection strings, or raw payloads.
 
 ## Performance Expectations
 
@@ -382,8 +452,17 @@ Required unit tests:
 - SQL type rendering covers supported types,
 - nullable false column rejects null,
 - reader streams rows in order,
-- reader handles `DateOnly`, `TimeOnly`, `Guid`, `decimal`, `byte[]`, enums, and nullable values,
+- reader tracks `IsClosed`, implements idempotent close/dispose, clears current row state at EOF, throws on missing `GetOrdinal` names, reports `HasRows` as result-set presence without skipping the first row, and disposes the underlying enumerator exactly once,
+- reader normalizes `DateOnly`, `TimeOnly`, enums, `Guid`, `decimal`, `byte[]`, and nullable values to provider-compatible values,
+- enum conversion is metadata-driven from the static shape, not per-row runtime type inspection,
+- destination column names reject unsafe SQL identifier syntax and parts longer than 128 characters,
+- table identifiers reject unsafe bracket syntax, whitespace around multipart separators, and parts longer than 128 characters,
 - options reject invalid batch size and timeout.
+- options expose `CheckConstraints = true` as the default.
+- `BulkMergeOptions` rejects `DeleteNotMatchedBySource` even when referenced as `BulkWriteOptions`.
+- `BulkMergeOptions` rejects `DeleteMatched` combined with `UpdateMatched` or `InsertMissing`.
+- source duplicate key tuples are rejected through the stage unique index before target DML.
+- delete uses a key-only staging shape and does not attempt to bulk-copy non-key columns into a key-only temp table.
 
 Required integration tests:
 
@@ -395,14 +474,19 @@ Required integration tests:
 - upsert updates matched and inserts missing rows,
 - merge update+insert path returns separated counts,
 - merge delete-matched path deletes only staged keys,
+- update/delete/upsert/merge failure and cancellation tests prove rollback after target DML has started,
+- success tests assert final target row values and missing rows, not only affected-row counts,
 - invalid destination table returns a failed `DbResult`,
-- cancellation token is passed to async DB calls.
+- cancellation token is passed to cancellable async DB calls before commit,
+- rollback failure preserves the original public failure and is only recorded through redacted diagnostics,
+- final commit uses `CancellationToken.None` so caller cancellation cannot produce an ambiguous canceled result after commit starts.
 
 Required AOT checks:
 
-- AOT verification project references the shape API.
-- AOT smoke creates a shape and reads values through the new reader.
+- AOT verification project references the shape API and the public AOT-safe bulk overloads.
+- AOT smoke creates a shape with at least one enum column, reads values through the new reader, verifies that the enum value is normalized through shape metadata without row-time type discovery, and roots the public bulk overload/executor path enough for publish-time AOT analysis to inspect it without requiring a live database.
 - Publish output has no new Lib.Db AOT or trim warnings beyond the existing baseline.
+- Static gates reject `RequiresDynamicCode`, `IL3050`, `MakeGenericType`, `Expression.Compile`, `DynamicMethod`, and `Reflection.Emit` in the new AOT-safe bulk path.
 
 Required release gates:
 
@@ -419,9 +503,15 @@ This feature is acceptable for v2.4.0 only if these constraints hold:
 - implementation stays additive,
 - SQL Server `MERGE` statement is not the default engine,
 - delete-not-matched-by-source is rejected for v2.4.0,
+- delete-matched is exclusive and cannot be combined with update/insert actions in v2.4.0,
 - no public API depends on reflection for the AOT-safe overloads,
+- `BulkShapeDataReader<T>` remains internal so v2.4.0 does not accidentally ship a reader implementation as stable public API,
+- static gates search for `value.GetType()`, `Enum.GetUnderlyingType`, `RequiresDynamicCode`, `IL3050`, `MakeGenericType`, `Expression.Compile`, `DynamicMethod`, and `Reflection.Emit` so row-time type discovery and runtime code generation cannot slip into the reader,
 - all write operations have key/identifier validation,
+- identifier validation enforces malformed-bracket rejection, separator-whitespace rejection, and 128-character table/column part limits,
 - all staged mutation operations run in one local transaction by default,
+- rollback failure cannot replace the primary public failure,
+- cancellation rollback is guaranteed only before final commit begins, and final commit is non-cancelable from the caller token,
 - release verification passes from a clean environment.
 
 If any of those constraints breaks during implementation, the feature should be reduced to AOT-safe insert/update/upsert or postponed to v2.5.0.

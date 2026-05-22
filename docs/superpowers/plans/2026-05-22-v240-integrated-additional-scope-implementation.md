@@ -85,7 +85,7 @@ Modify:
 
 Add a test that proves tags are passed to `HybridCache.GetOrCreateAsync`.
 
-Use the existing in-memory/AOT HybridCache test style in `QueryCacheExtensionsCoverageTests`. If direct tag inspection is easier through `LibDbAotHybridCache`, use it. The behavior to prove:
+Use the existing in-memory/AOT HybridCache test style in `QueryCacheExtensionsCoverageTests`. Add `using Lib.Db.Caching;` if the test file does not already import it. If direct tag inspection is easier through `LibDbAotHybridCache`, use it. The behavior to prove:
 
 ```csharp
 [Fact]
@@ -132,22 +132,83 @@ Add:
 
 ```csharp
 [Theory]
+[InlineData(null)]
 [InlineData("")]
 [InlineData(" ")]
+[InlineData(" tag")]
+[InlineData("tag ")]
 [InlineData("*")]
-public async Task WithHybridCacheAsync_ShouldRejectInvalidTags(string tag)
+public async Task WithHybridCacheAsync_ShouldRejectInvalidTags(string? tag)
 {
     var cache = new LibDbAotHybridCache();
+    string[] tags = tag is null ? [null!] : [tag];
 
     Func<Task> act = () => Task.FromResult(DbResult<string?>.Ok("value"))
         .WithHybridCacheAsync(
             cache,
             "hybrid:invalid-tag",
             TimeSpan.FromMinutes(1),
-            tags: [tag],
+            tags,
             TestContext.Current.CancellationToken);
 
     await act.Should().ThrowAsync<ArgumentException>();
+}
+
+[Fact]
+public async Task WithHybridCacheAsync_ShouldTreatNullTagsAsNoTags()
+{
+    var cache = new LibDbAotHybridCache();
+
+    DbResult<string?> result = await Task.FromResult(DbResult<string?>.Ok("value"))
+        .WithHybridCacheAsync(
+            cache,
+            "hybrid:null-tags",
+            TimeSpan.FromMinutes(1),
+            tags: null,
+            TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeTrue();
+    result.Value.Should().Be("value");
+}
+
+[Fact]
+public async Task WithHybridCacheAsync_ShouldRejectTooManyDistinctTags()
+{
+    var cache = new LibDbAotHybridCache();
+    string[] tags = Enumerable.Range(0, 33)
+        .Select(static index => $"tag:{index}")
+        .ToArray();
+
+    Func<Task> act = () => Task.FromResult(DbResult<string?>.Ok("value"))
+        .WithHybridCacheAsync(
+            cache,
+            "hybrid:too-many-tags",
+            TimeSpan.FromMinutes(1),
+            tags,
+            TestContext.Current.CancellationToken);
+
+    await act.Should().ThrowAsync<ArgumentException>()
+        .WithMessage("*32*tags*");
+}
+
+[Fact]
+public async Task WithHybridCacheAsync_ShouldCountDistinctTagsWhenEnforcingLimit()
+{
+    var cache = new LibDbAotHybridCache();
+    string[] tags = Enumerable.Range(0, 32)
+        .Select(static index => $"tag:{index}")
+        .Concat(["tag:0", "tag:0"])
+        .ToArray();
+
+    DbResult<string?> result = await Task.FromResult(DbResult<string?>.Ok("value"))
+        .WithHybridCacheAsync(
+            cache,
+            "hybrid:duplicate-tags",
+            TimeSpan.FromMinutes(1),
+            tags,
+            TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeTrue(result.Error?.Message);
 }
 ```
 
@@ -156,7 +217,7 @@ public async Task WithHybridCacheAsync_ShouldRejectInvalidTags(string tag)
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~QueryCacheExtensionsCoverageTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*QueryCacheExtensionsCoverageTests*"
 ```
 
 Expected: build or test failure because the tags overload does not exist.
@@ -171,7 +232,7 @@ public static Task<DbResult<T?>> WithHybridCacheAsync<T>(
     HybridCache hybridCache,
     string cacheKey,
     TimeSpan duration,
-    IEnumerable<string> tags,
+    IEnumerable<string>? tags,
     CancellationToken ct = default)
     => WithHybridCacheCoreAsync(resultTask, hybridCache, cacheKey, duration, NormalizeHybridCacheTags(tags), ct);
 ```
@@ -211,7 +272,7 @@ private static async Task<DbResult<T?>> WithHybridCacheCoreAsync<T>(
         {
             DbResult<T?> result = await resultTask.ConfigureAwait(false);
             if (!result.IsSuccess)
-                throw new InvalidOperationException(result.Error?.Message ?? "DB query failed.");
+                throw new InvalidOperationException("DB query failed.");
 
             return result.Value;
         },
@@ -223,40 +284,56 @@ private static async Task<DbResult<T?>> WithHybridCacheCoreAsync<T>(
 }
 ```
 
+Do not copy `DbError.Message`, SQL text, object names, provider details, row values, cache payloads, connection-string fragments, or tenant/user identifiers into cache factory exception messages. The cache wrapper's public failure path must use a generic message and rely on the existing redacted diagnostics path for details.
+
 Add normalization:
 
 ```csharp
+private const int MaxHybridCacheTagsPerEntry = 32;
+
 private static string[] NormalizeHybridCacheTags(IEnumerable<string>? tags)
 {
     if (tags is null)
         return [];
 
-    string[] normalized = tags
-        .Select(static tag => tag.Trim())
-        .Distinct(StringComparer.Ordinal)
-        .ToArray();
-
-    foreach (string tag in normalized)
+    HashSet<string> seen = new(StringComparer.Ordinal);
+    List<string> normalized = [];
+    foreach (string? rawTag in tags)
     {
-        if (tag.Length == 0)
+        if (rawTag is null)
+            throw new ArgumentException("HybridCache tags cannot contain null values.", nameof(tags));
+
+        string trimmed = rawTag.Trim();
+        if (trimmed.Length == 0)
             throw new ArgumentException("HybridCache tags cannot be empty or whitespace.", nameof(tags));
 
-        if (tag == "*")
+        if (!string.Equals(rawTag, trimmed, StringComparison.Ordinal))
+            throw new ArgumentException("HybridCache tags cannot have leading or trailing whitespace.", nameof(tags));
+
+        if (rawTag == "*")
             throw new ArgumentException("HybridCache tag '*' is reserved for wildcard invalidation and cannot be assigned to entries.", nameof(tags));
+
+        if (seen.Add(rawTag))
+        {
+            normalized.Add(rawTag);
+            if (normalized.Count > MaxHybridCacheTagsPerEntry)
+                throw new ArgumentException($"HybridCache entries cannot have more than {MaxHybridCacheTagsPerEntry} distinct tags.", nameof(tags));
+        }
     }
 
-    return normalized;
+    return [.. normalized];
 }
 ```
 
 Use `tags: normalized.Length == 0 ? null : normalized` if the compiler or analyzer prefers null for no tags.
+Do not silently truncate tags. A silently dropped tag creates an invalidation expectation that the cache entry will not actually honor.
 
 - [ ] **Step 5: Run targeted tests and confirm GREEN**
 
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~QueryCacheExtensionsCoverageTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*QueryCacheExtensionsCoverageTests*"
 ```
 
 Expected: PASS.
@@ -271,6 +348,23 @@ Expected: PASS.
 
 Create tests using a small fake `IMultipleResultReader`:
 
+The test file must include the extension namespace explicitly because `ReadMultipleAsync` is defined outside the test namespace:
+
+```csharp
+using FluentAssertions;
+using Lib.Db.Contracts.Core;
+using Lib.Db.Contracts.Execution;
+using Lib.Db.Extensions;
+using Xunit;
+
+namespace Lib.Db.IntegrationTests.Unit;
+
+public sealed class MultipleResultExtensionsTests
+{
+    // Place the tests below in this class with local row records and fake reader helpers.
+}
+```
+
 ```csharp
 [Fact]
 public async Task ReadMultipleAsync_Arity2_ShouldReadAndDisposeReader()
@@ -282,14 +376,60 @@ public async Task ReadMultipleAsync_Arity2_ShouldReadAndDisposeReader()
         .FromResult(DbResult<IMultipleResultReader>.Ok(reader))
         .ReadMultipleAsync<UserRow, OrderRow>(TestContext.Current.CancellationToken);
 
-    result.IsSuccess.Should().BeTrue(result.ErrorMessage);
+    result.IsSuccess.Should().BeTrue(result.Error?.Message);
     result.Value.First.Should().ContainSingle(row => row.Id == 1);
     result.Value.Second.Should().ContainSingle(row => row.Id == 7);
     reader.DisposeCount.Should().Be(1);
 }
+
+[Fact]
+public async Task ReadMultipleAsync_Arity3_ShouldReadInOrderAndDisposeReader()
+{
+    var reader = new FakeMultipleResultReader(
+        new object[]
+        {
+            new List<UserRow> { new(1) },
+            new List<OrderRow> { new(7) },
+            new List<SummaryRow> { new(2) }
+        });
+
+    DbResult<DbMultiple<UserRow, OrderRow, SummaryRow>> result = await Task
+        .FromResult(DbResult<IMultipleResultReader>.Ok(reader))
+        .ReadMultipleAsync<UserRow, OrderRow, SummaryRow>(TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeTrue(result.Error?.Message);
+    result.Value.First.Should().ContainSingle(row => row.Id == 1);
+    result.Value.Second.Should().ContainSingle(row => row.Id == 7);
+    result.Value.Third.Should().ContainSingle(row => row.Count == 2);
+    reader.DisposeCount.Should().Be(1);
+}
+
+[Fact]
+public async Task ReadMultipleAsync_Arity4_ShouldReadInOrderAndDisposeReader()
+{
+    var reader = new FakeMultipleResultReader(
+        new object[]
+        {
+            new List<UserRow> { new(1) },
+            new List<OrderRow> { new(7) },
+            new List<SummaryRow> { new(2) },
+            new List<AuditRow> { new(9) }
+        });
+
+    DbResult<DbMultiple<UserRow, OrderRow, SummaryRow, AuditRow>> result = await Task
+        .FromResult(DbResult<IMultipleResultReader>.Ok(reader))
+        .ReadMultipleAsync<UserRow, OrderRow, SummaryRow, AuditRow>(TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeTrue(result.Error?.Message);
+    result.Value.First.Should().ContainSingle(row => row.Id == 1);
+    result.Value.Second.Should().ContainSingle(row => row.Id == 7);
+    result.Value.Third.Should().ContainSingle(row => row.Count == 2);
+    result.Value.Fourth.Should().ContainSingle(row => row.Id == 9);
+    reader.DisposeCount.Should().Be(1);
+}
 ```
 
-The fake reader should implement `ReadAsync<T>`, `ReadSingleAsync<T>`, and `DisposeAsync`.
+The fake reader should implement `ReadAsync<T>`, `ReadSingleAsync<T>`, and `DisposeAsync`, plus explicit failure helpers such as `ThrowOnSecondRead(...)` and `ThrowOnFourthRead(...)`. Add small local records such as `UserRow(int Id)`, `OrderRow(int Id)`, `SummaryRow(int Count)`, and `AuditRow(int Id)` so the samples compile. The arity 3/4 tests are required because the public API exposes those overloads; a passing arity 2 test alone is not enough to prove ordering, disposal, missing-result handling, and redacted failure mapping for every shipped helper.
 
 - [ ] **Step 2: Write failing failure propagation test**
 
@@ -313,6 +453,72 @@ public async Task ReadMultipleAsync_ShouldPropagateFailedDbResult()
     result.IsSuccess.Should().BeFalse();
     result.Error.Should().Be(error);
 }
+
+[Fact]
+public async Task ReadMultipleAsync_ShouldReturnFailureWhenExpectedResultSetIsMissing()
+{
+    var reader = new FakeMultipleResultReader(
+        new object[] { new List<UserRow> { new(1) } });
+
+    DbResult<DbMultiple<UserRow, OrderRow>> result = await Task
+        .FromResult(DbResult<IMultipleResultReader>.Ok(reader))
+        .ReadMultipleAsync<UserRow, OrderRow>(TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeFalse();
+    result.Error!.Value.Message.Should().Be("Reading multiple result sets failed.");
+    reader.DisposeCount.Should().Be(1);
+}
+
+[Fact]
+public async Task ReadMultipleAsync_ShouldDisposeReaderWhenReadFails()
+{
+    var reader = FakeMultipleResultReader.ThrowOnSecondRead(new InvalidOperationException("mapper failed"));
+
+    DbResult<DbMultiple<UserRow, OrderRow>> result = await Task
+        .FromResult(DbResult<IMultipleResultReader>.Ok(reader))
+        .ReadMultipleAsync<UserRow, OrderRow>(TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeFalse();
+    result.Error!.Value.Message.Should().Be("Reading multiple result sets failed.");
+    result.Error.Value.Message.Should().NotContain("mapper failed");
+    reader.DisposeCount.Should().Be(1);
+}
+
+[Fact]
+public async Task ReadMultipleAsync_Arity3_ShouldReturnFailureWhenExpectedResultSetIsMissing()
+{
+    var reader = new FakeMultipleResultReader(
+        new object[]
+        {
+            new List<UserRow> { new(1) },
+            new List<OrderRow> { new(7) }
+        });
+
+    DbResult<DbMultiple<UserRow, OrderRow, SummaryRow>> result = await Task
+        .FromResult(DbResult<IMultipleResultReader>.Ok(reader))
+        .ReadMultipleAsync<UserRow, OrderRow, SummaryRow>(TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeFalse();
+    result.Error!.Value.Message.Should().Be("Reading multiple result sets failed.");
+    result.Error.Value.Message.Should().NotContain("Missing");
+    result.Error.Value.Message.Should().NotContain("missing");
+    reader.DisposeCount.Should().Be(1);
+}
+
+[Fact]
+public async Task ReadMultipleAsync_Arity4_ShouldDisposeReaderWhenReadFails()
+{
+    var reader = FakeMultipleResultReader.ThrowOnFourthRead(new InvalidOperationException("mapper failed"));
+
+    DbResult<DbMultiple<UserRow, OrderRow, SummaryRow, AuditRow>> result = await Task
+        .FromResult(DbResult<IMultipleResultReader>.Ok(reader))
+        .ReadMultipleAsync<UserRow, OrderRow, SummaryRow, AuditRow>(TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeFalse();
+    result.Error!.Value.Message.Should().Be("Reading multiple result sets failed.");
+    result.Error.Value.Message.Should().NotContain("mapper failed");
+    reader.DisposeCount.Should().Be(1);
+}
 ```
 
 - [ ] **Step 3: Run tests and confirm RED**
@@ -320,7 +526,7 @@ public async Task ReadMultipleAsync_ShouldPropagateFailedDbResult()
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~MultipleResultExtensionsTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*MultipleResultExtensionsTests*"
 ```
 
 Expected: build failure because `MultipleResultExtensions` and `DbMultiple<...>` do not exist.
@@ -351,57 +557,97 @@ public static class MultipleResultExtensions
         this Task<DbResult<IMultipleResultReader>> readerTask,
         CancellationToken ct = default)
     {
-        DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
-        if (!result.IsSuccess)
-            return DbResult<DbMultiple<T1, T2>>.Fail(result.Error!.Value);
+        try
+        {
+            DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
+            if (!result.IsSuccess)
+                return DbResult<DbMultiple<T1, T2>>.Fail(result.Error!.Value);
 
-        await using IMultipleResultReader reader = result.Value!;
-        List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
-        List<T2> second = await reader.ReadAsync<T2>(ct).ConfigureAwait(false);
-        return DbResult<DbMultiple<T1, T2>>.Ok(new DbMultiple<T1, T2>(first, second));
+            await using IMultipleResultReader reader = result.Value!;
+            List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
+            List<T2> second = await reader.ReadAsync<T2>(ct).ConfigureAwait(false);
+            return DbResult<DbMultiple<T1, T2>>.Ok(new DbMultiple<T1, T2>(first, second));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return ToReadFailure<DbMultiple<T1, T2>>(ex);
+        }
     }
 
     public static async Task<DbResult<DbMultiple<T1, T2, T3>>> ReadMultipleAsync<T1, T2, T3>(
         this Task<DbResult<IMultipleResultReader>> readerTask,
         CancellationToken ct = default)
     {
-        DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
-        if (!result.IsSuccess)
-            return DbResult<DbMultiple<T1, T2, T3>>.Fail(result.Error!.Value);
+        try
+        {
+            DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
+            if (!result.IsSuccess)
+                return DbResult<DbMultiple<T1, T2, T3>>.Fail(result.Error!.Value);
 
-        await using IMultipleResultReader reader = result.Value!;
-        List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
-        List<T2> second = await reader.ReadAsync<T2>(ct).ConfigureAwait(false);
-        List<T3> third = await reader.ReadAsync<T3>(ct).ConfigureAwait(false);
-        return DbResult<DbMultiple<T1, T2, T3>>.Ok(new DbMultiple<T1, T2, T3>(first, second, third));
+            await using IMultipleResultReader reader = result.Value!;
+            List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
+            List<T2> second = await reader.ReadAsync<T2>(ct).ConfigureAwait(false);
+            List<T3> third = await reader.ReadAsync<T3>(ct).ConfigureAwait(false);
+            return DbResult<DbMultiple<T1, T2, T3>>.Ok(new DbMultiple<T1, T2, T3>(first, second, third));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return ToReadFailure<DbMultiple<T1, T2, T3>>(ex);
+        }
     }
 
     public static async Task<DbResult<DbMultiple<T1, T2, T3, T4>>> ReadMultipleAsync<T1, T2, T3, T4>(
         this Task<DbResult<IMultipleResultReader>> readerTask,
         CancellationToken ct = default)
     {
-        DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
-        if (!result.IsSuccess)
-            return DbResult<DbMultiple<T1, T2, T3, T4>>.Fail(result.Error!.Value);
+        try
+        {
+            DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
+            if (!result.IsSuccess)
+                return DbResult<DbMultiple<T1, T2, T3, T4>>.Fail(result.Error!.Value);
 
-        await using IMultipleResultReader reader = result.Value!;
-        List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
-        List<T2> second = await reader.ReadAsync<T2>(ct).ConfigureAwait(false);
-        List<T3> third = await reader.ReadAsync<T3>(ct).ConfigureAwait(false);
-        List<T4> fourth = await reader.ReadAsync<T4>(ct).ConfigureAwait(false);
-        return DbResult<DbMultiple<T1, T2, T3, T4>>.Ok(new DbMultiple<T1, T2, T3, T4>(first, second, third, fourth));
+            await using IMultipleResultReader reader = result.Value!;
+            List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
+            List<T2> second = await reader.ReadAsync<T2>(ct).ConfigureAwait(false);
+            List<T3> third = await reader.ReadAsync<T3>(ct).ConfigureAwait(false);
+            List<T4> fourth = await reader.ReadAsync<T4>(ct).ConfigureAwait(false);
+            return DbResult<DbMultiple<T1, T2, T3, T4>>.Ok(new DbMultiple<T1, T2, T3, T4>(first, second, third, fourth));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return ToReadFailure<DbMultiple<T1, T2, T3, T4>>(ex);
+        }
     }
+
+    private static DbResult<T> ToReadFailure<T>(Exception ex)
+        => DbResult<T>.Fail(new DbError
+        {
+            Kind = DbErrorKind.Unknown,
+            Message = "Reading multiple result sets failed."
+        });
 }
 ```
 
-Use the exact local `DbResult<T>.Fail` and error property style.
+Use the exact local `DbResult<T>.Fail` and error property style. Cancellation must still propagate; mapper/result-set failures should return failed `DbResult<T>` so the helper behaves like the rest of the fluent execution surface. Do not copy raw exception messages or inner exceptions into public errors for this helper; if diagnostic details are needed, they must flow through the existing redacted diagnostics path.
 
 - [ ] **Step 5: Run targeted tests and confirm GREEN**
 
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~MultipleResultExtensionsTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*MultipleResultExtensionsTests*"
 ```
 
 Expected: PASS.
@@ -422,15 +668,33 @@ While executing the sub-plan, verify:
 - `BulkInsertAsync`, `BulkUpdateAsync`, `BulkDeleteAsync`, `BulkUpsertAsync`, and `BulkMergeAsync` shape APIs exist.
 - SQL Server `MERGE` is not used as the default implementation.
 - `DeleteNotMatchedBySource` is rejected.
+- `DeleteMatched` is rejected when combined with update or insert actions.
+- `BulkMergeOptions.Validate()` rejects `DeleteNotMatchedBySource` even through a `BulkWriteOptions` reference.
+- staged mutation operations create a unique stage index to reject duplicate source key tuples before target DML.
+- staged update/delete/upsert/merge failure and cancellation tests prove rollback after target DML has started.
+- target key uniqueness remains an explicit database schema contract, not a default per-call metadata probe.
+- delete uses key-only stage columns and matching reader/mapping shape.
+- table and column identifiers reject malformed bracket syntax and identifier parts longer than 128 characters.
+- destination-column mapping is tested with CLR member names that differ from SQL destination column names.
+- success tests assert final target row values and missing rows, not only affected-row counts.
+- `DateOnly`, `TimeOnly`, enum, `Guid`, `decimal`, `byte[]`, and nullable values are normalized or passed through before `SqlBulkCopy` consumes rows.
+- enum conversion is selected from shape metadata at shape-build time, not by row-time `value.GetType()` or `Enum.GetUnderlyingType(...)`.
+- AOT smoke includes an enum column, verifies the enum is normalized through shape metadata, and roots public bulk overload/executor setup for publish-time analysis without requiring a live database.
+- `BulkShapeDataReader<T>` tracks `IsClosed`, implements idempotent `Close()`/`Dispose(bool)`, clears current row state when `Read()` reaches EOF, throws on missing `GetOrdinal` names, reports `HasRows` as result-set presence without skipping the first row, and disposes the underlying row enumerator exactly once.
+- new AOT-safe bulk options default to `CheckConstraints = true`.
+- SQL/general failures return failed `DbResult<T>` after rollback and redaction; cancellation attempts rollback before rethrow.
 - New shape APIs have no `RequiresUnreferencedCode`.
-- AOT verification references the shape reader path.
+- AOT verification references the shape reader path and public bulk overload/executor reachability path.
 
 - [ ] **Step 3: Run bulk targeted gates**
 
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~BulkShapeTests|FullyQualifiedName~BulkShapeDataReaderTests|FullyQualifiedName~BulkSqlBuilderTests|FullyQualifiedName~BulkMutationTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*BulkShapeTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*BulkShapeDataReaderTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*BulkSqlBuilderTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*BulkMutationTests*"
 ```
 
 Expected: PASS.
@@ -536,6 +800,14 @@ Link to the bulk mutation docs and document:
 - staged DML,
 - AOT compatibility,
 - transaction behavior,
+- duplicate source key rejection through stage unique indexes,
+- target key uniqueness as a required application schema contract,
+- key-only delete staging,
+- `DateOnly`/`TimeOnly`/enum normalization,
+- shape-metadata enum converter,
+- reader enumerator disposal,
+- `CheckConstraints = true` default,
+- `DbResult<T>` failure behavior after rollback,
 - `DeleteNotMatchedBySource` exclusion.
 
 - [ ] **Step 4: Update skill guidance**
@@ -545,6 +817,7 @@ Update `.agents/skills/lib-db/SKILL.md` with compact consumer guidance for the n
 - use tags overload for grouped HybridCache invalidation,
 - use `ReadMultipleAsync<...>` for common multi-result SPs,
 - use `BulkShape<T>` for AOT-safe bulk writes,
+- treat bulk mutation keys as non-null unique database keys,
 - do not use roadmap features as if implemented.
 
 ### Task 6: Security and Release Verification
@@ -557,15 +830,28 @@ Update `.agents/skills/lib-db/SKILL.md` with compact consumer guidance for the n
 Run:
 
 ```powershell
-rg -n "ConnectionString|Password|Pwd|User Id|MERGE|DeleteNotMatchedBySource|GetProperties|RequiresUnreferencedCode|RemoveByTagAsync|WithHybridCacheAsync|ReadMultipleAsync|BulkShape" Lib.Db Verification docs .agents
+$secretKeys = 'ConnectionString|Password|Pwd|User Id'
+Get-ChildItem -Path Lib.Db,Verification,docs,.agents -Recurse -File |
+    Select-String -Pattern $secretKeys |
+    ForEach-Object {
+        [pscustomobject]@{
+            Path = $_.Path
+            Key = $_.Matches[0].Value
+        }
+    } |
+    Sort-Object Path,Key -Unique
+
+rg -n "MERGE|DeleteNotMatchedBySource|GetProperties|value\\.GetType\\(|RequiresUnreferencedCode|RequiresDynamicCode|IL3050|MakeGenericType|Expression\\.Compile|DynamicMethod|Reflection\\.Emit|RemoveByTagAsync|WithHybridCacheAsync|ReadMultipleAsync|BulkShape|CREATE UNIQUE INDEX|DateOnly|TimeOnly|DbResult<long>|BulkMergeOptions|CheckConstraints|Dispose\\(|Enum.GetUnderlyingType" Lib.Db Verification docs .agents
 ```
 
 Expected:
 
-- no secrets printed,
+- secret scan prints only file paths and key names, never values,
 - `MERGE` not used as default bulk engine,
 - `DeleteNotMatchedBySource` appears only as rejected/unsupported,
-- new AOT-safe bulk APIs do not carry `RequiresUnreferencedCode`,
+- new AOT-safe bulk APIs do not carry `RequiresUnreferencedCode` or `RequiresDynamicCode`,
+- new AOT-safe bulk path does not use `MakeGenericType`, `Expression.Compile`, `DynamicMethod`, or `Reflection.Emit`,
+- duplicate source-key rejection, value normalization, and polymorphic merge-option validation appear in tests/docs,
 - cache tag behavior appears in tests/docs.
 
 - [ ] **Step 2: Run targeted tests**
@@ -573,7 +859,12 @@ Expected:
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~QueryCacheExtensionsCoverageTests|FullyQualifiedName~MultipleResultExtensionsTests|FullyQualifiedName~BulkShapeTests|FullyQualifiedName~BulkShapeDataReaderTests|FullyQualifiedName~BulkSqlBuilderTests|FullyQualifiedName~BulkMutationTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*QueryCacheExtensionsCoverageTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*MultipleResultExtensionsTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*BulkShapeTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*BulkShapeDataReaderTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*BulkSqlBuilderTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterClass "*BulkMutationTests*"
 ```
 
 Expected: PASS.
@@ -603,9 +894,28 @@ Expected: release-grade verification completes successfully.
 Confirm:
 
 - cache keys and tags are documented as non-sensitive and app-owned,
+- cache tag collections cannot contain null elements,
 - cache tag wildcard `*` cannot be assigned to entries,
-- typed multi-result helper disposes readers,
+- more than 32 distinct cache tags are rejected rather than silently truncated,
+- duplicate cache tags are deduplicated using ordinal comparison before enforcing the 32-tag ceiling,
+- typed multi-result helper disposes readers and maps read failures to failed `DbResult<T>`,
+- typed multi-result helper has ordering and disposal tests for arity 2, 3, and 4,
+- typed multi-result helper has missing-result/read-failure redaction tests for arity 3 or 4, not only arity 2,
 - bulk writes validate identifiers and run staged mutation in a transaction,
+- malformed destination names with empty parts or whitespace around separators are rejected instead of normalized,
+- bulk staged mutation rejects duplicate source keys before target DML,
+- unsupported `SqlDbType` values are rejected before any database connection opens,
+- target key uniqueness is documented as an application-owned schema contract,
+- bulk delete uses key-only staging,
+- bulk reader value normalization matches the existing TVP path,
+- bulk enum conversion is shape-metadata based rather than row-time type inspection,
+- AOT smoke verifies an enum column and public bulk overload reachability through the static-shape path,
+- bulk readers track `IsClosed`, close/dispose idempotently, clear current row state at EOF, throw on missing `GetOrdinal` names, report `HasRows` as result-set presence while preserving first-row behavior, and dispose the underlying row enumerator exactly once,
+- AOT-safe bulk defaults to `CheckConstraints = true`,
+- non-cancellation bulk failures return redacted failed `DbResult<T>` after best-effort rollback,
+- rollback failure cannot replace the original public bulk failure,
+- cancellation attempts rollback before rethrow only before commit begins,
+- final bulk commit is non-cancelable from the caller token to avoid ambiguous canceled results after commit starts,
 - generated/future roadmap docs do not imply automatic production DDL/DML,
 - docs do not overpromise L2 invalidation across all servers.
 
@@ -616,6 +926,7 @@ The integrated additional scope is complete when:
 - HybridCache tags overload is implemented and tested.
 - Typed QueryMultiple helper is implemented and tested.
 - AOT-safe bulk mutation sub-plan is implemented and tested.
+- The document review findings from 2026-05-22 are closed: tag cap, duplicate tag dedupe, null tag rejection, leading/trailing tag whitespace rejection, cache factory generic error messages, QueryMultiple `Lib.Db.Extensions` using guidance, QueryMultiple redacted failure mapping, QueryMultiple arity 3/4 success and failure coverage, DateOnly/TimeOnly/Guid/decimal/byte-array/nullable normalization, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout option tests, polymorphic merge-option validation, invalid merge action combinations, malformed destination-name rejection, separator-whitespace rejection, 128-character identifier limit, duplicate source-key rejection, target key schema contract, key-only delete staging, DbResult failure mapping after rollback, rollback-failure primary-error preservation, final commit non-cancellation, staged-DML rollback/cancellation coverage, rollback-on-cancellation-before-commit, redacted bulk general-error mapping, `CheckConstraints = true` default, reader lifecycle/disposal/idempotency, internal reader API surface, EOF current clearing, missing ordinal failure, first-row-safe `HasRows`, AOT enum smoke, public bulk AOT reachability, `RequiresDynamicCode`/IL3050 static gates, secret-safe verification output, AOT sub-plan parent linkage, and shape-metadata enum conversion.
 - Roadmap document exists for generator/migration/change-tracking.
 - Public docs and Lib.Db skill guidance are updated.
 - Native AOT verification passes.
