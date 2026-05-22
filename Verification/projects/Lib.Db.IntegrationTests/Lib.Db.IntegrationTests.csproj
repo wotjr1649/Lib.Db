@@ -10,11 +10,6 @@
     <IsTestingPlatformApplication>false</IsTestingPlatformApplication>
     <TestingPlatformDotnetTestSupport>false</TestingPlatformDotnetTestSupport>
     <BuildInParallel>false</BuildInParallel>
-    <!-- xUnit1051 is tracked separately because this integration suite has many DB/fluent API
-         calls whose cancellation-token migration changes timeout and concurrency behavior. Keep
-         deadlock and parallelism warnings active, while preventing this broad advisory from hiding
-         compiler warnings in release-gate output. -->
-    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="10.0.1">

@@ -55,7 +55,7 @@ public sealed class PerformanceTests(MultiDbFixture fixture, ITestOutputHelper o
 
                 result.IsSuccess.Should().BeTrue($"TaskId={taskId} 쿼리가 성공해야 합니다.");
                 result.Value.Should().Be(taskId);
-            }));
+            }, TestContext.Current.CancellationToken));
         }
 
         await Task.WhenAll(tasks);

@@ -47,7 +47,7 @@ public sealed class TvpTests(MultiDbFixture fixture)
         DbResult<int> scalarResult = await _db
             .Procedure("perf.usp_Perf_Bulk_Insert")
             .With(new { Items = items })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert — 삽입 행 수 검증
         scalarResult.IsSuccess.Should().BeTrue();
@@ -57,10 +57,10 @@ public sealed class TvpTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<PerfBulkTest>> streamResult = await _db
             .Procedure("perf.usp_Perf_Query_With_Param")
             .With(new { BatchNumber = batchNumber })
-            .QueryAsync<PerfBulkTest>();
+            .QueryAsync<PerfBulkTest>(TestContext.Current.CancellationToken);
 
         streamResult.IsSuccess.Should().BeTrue();
-        List<PerfBulkTest> insertedRows = await streamResult.Value!.ToListAsync();
+        List<PerfBulkTest> insertedRows = await streamResult.Value!.ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert — 데이터 무결성 검증
         insertedRows.Should().HaveCount(rowCount);
@@ -69,7 +69,7 @@ public sealed class TvpTests(MultiDbFixture fixture)
         // Cleanup
         await _db
             .Sql($"DELETE FROM [perf].[BulkTest] WHERE BatchNumber = {batchNumber}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -100,7 +100,7 @@ public sealed class TvpTests(MultiDbFixture fixture)
         DbResult<int> scalarResult = await _db
             .Procedure("tvp.usp_Tvp_Bulk_Insert_AllTypes")
             .With(new { Items = items })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert — 삽입 성공 검증
         scalarResult.IsSuccess.Should().BeTrue(scalarResult.Error?.Message);
@@ -109,10 +109,10 @@ public sealed class TvpTests(MultiDbFixture fixture)
         // Act — 삽입된 데이터 조회로 타입 매핑 검증
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> queryResult = await _db
             .Procedure("tvp.usp_Tvp_Get_AllTypes")
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         queryResult.IsSuccess.Should().BeTrue();
-        List<Dictionary<string, object?>> rows = await queryResult.Value!.ToListAsync();
+        List<Dictionary<string, object?>> rows = await queryResult.Value!.ToListAsync(TestContext.Current.CancellationToken);
         rows.Should().NotBeEmpty();
 
         // 마지막 삽입 행에서 GuidValue 검증
@@ -134,7 +134,7 @@ public sealed class TvpTests(MultiDbFixture fixture)
         // Act — FormattableString SQL로 TVP 직접 호출
         DbResult<Dictionary<string, object?>?> result = await _db
             .Sql("DECLARE @t tvp.Tvp_Tvp_SchemaMismatch; INSERT INTO @t VALUES (N'A', 1, GETDATE()); INSERT INTO @t VALUES (N'B', 2, GETDATE()); EXEC tvp.usp_Tvp_Test_Schema_Mismatch @Items = @t;")
-            .QuerySingleAsync<Dictionary<string, object?>>();
+            .QuerySingleAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert — SP 호출 성공 (최소 1행 반환)
         result.IsSuccess.Should().BeTrue();

@@ -20,7 +20,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
         DbResult<Dictionary<string, object?>?> result = await _db
             .Procedure("core.usp_Core_Get_User")
             .With(new { UserId = 1 })
-            .QuerySingleAsync<Dictionary<string, object?>>();
+            .QuerySingleAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().NotBeNull();
     }
@@ -31,7 +31,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("core.usp_Core_Search_Users")
             .With(new { SearchTerm = "A" })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
         int count = 0;
         await foreach (Dictionary<string, object?> item in result.Value!)
@@ -45,7 +45,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("core.usp_Core_Insert_User")
             .With(new { UserName = "TestUser_V03", Email = $"v03_{Guid.NewGuid():N}@test.com", Age = 25 })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
     }
 
@@ -55,14 +55,14 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
         DbResult<IMultipleResultReader> result = await _db
             .Procedure("core.usp_Core_Get_Dashboard")
             .With(new { UserId = 1 })
-            .QueryMultipleAsync();
+            .QueryMultipleAsync(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue("release verification must provide MARS-capable QueryMultiple connections");
 
         await using (IMultipleResultReader reader = result.Value!)
         {
-            List<DashboardUserInfo> users = await reader.ReadAsync<DashboardUserInfo>();
-            List<DashboardOrder> orders = await reader.ReadAsync<DashboardOrder>();
+            List<DashboardUserInfo> users = await reader.ReadAsync<DashboardUserInfo>(TestContext.Current.CancellationToken);
+            List<DashboardOrder> orders = await reader.ReadAsync<DashboardOrder>(TestContext.Current.CancellationToken);
 
             users.Should().ContainSingle(user => user.UserId == 1);
             orders.Should().NotBeNull();
@@ -71,7 +71,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
         DbResult<int> ping = await _db
             .Sql("SELECT CAST(1 AS INT)")
             .With(new { })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         ping.IsSuccess.Should().BeTrue("unread stored procedure result sets must be discarded when the grid reader is disposed");
         ping.Value.Should().Be(1);
@@ -89,16 +89,16 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
                 SELECT CAST(5 AS INT) AS [Value];
                 """)
             .With(new { })
-            .QueryMultipleAsync();
+            .QueryMultipleAsync(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue("extra result sets must be ignored only after QueryMultiple succeeds");
 
         await using (IMultipleResultReader reader = result.Value!)
         {
-            ResultSetValue? first = await reader.ReadSingleAsync<ResultSetValue>();
-            ResultSetValue? second = await reader.ReadSingleAsync<ResultSetValue>();
-            ResultSetValue? third = await reader.ReadSingleAsync<ResultSetValue>();
-            ResultSetValue? fourth = await reader.ReadSingleAsync<ResultSetValue>();
+            ResultSetValue? first = await reader.ReadSingleAsync<ResultSetValue>(TestContext.Current.CancellationToken);
+            ResultSetValue? second = await reader.ReadSingleAsync<ResultSetValue>(TestContext.Current.CancellationToken);
+            ResultSetValue? third = await reader.ReadSingleAsync<ResultSetValue>(TestContext.Current.CancellationToken);
+            ResultSetValue? fourth = await reader.ReadSingleAsync<ResultSetValue>(TestContext.Current.CancellationToken);
 
             first.Should().BeEquivalentTo(new ResultSetValue(1));
             second.Should().BeEquivalentTo(new ResultSetValue(2));
@@ -109,7 +109,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
         DbResult<int> ping = await _db
             .Sql("SELECT CAST(9 AS INT)")
             .With(new { })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         ping.IsSuccess.Should().BeTrue("the fifth result set is intentionally not mapped by the C# layer");
         ping.Value.Should().Be(9);
@@ -122,7 +122,7 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("adv.usp_Adv_OutputParameters")
             .With(parameters)
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
     }
 

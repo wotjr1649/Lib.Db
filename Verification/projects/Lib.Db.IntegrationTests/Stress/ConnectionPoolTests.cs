@@ -37,7 +37,7 @@ public sealed class ConnectionPoolTests(MultiDbFixture fixture)
         List<Task<DbResult<int>>> tasks = [];
         for (int i = 0; i < 100; i++)
         {
-            tasks.Add(_db.Sql("SELECT 1 AS Val").ExecuteScalarAsync<int>());
+            tasks.Add(_db.Sql("SELECT 1 AS Val").ExecuteScalarAsync<int>(TestContext.Current.CancellationToken));
         }
 
         // Act
@@ -69,7 +69,7 @@ public sealed class ConnectionPoolTests(MultiDbFixture fixture)
             tasks.Add(_db
                 .Procedure("core.usp_Core_Insert_User")
                 .With(new { UserName = $"Pool_{idx}", Email = $"pool_{idx}_{Guid.NewGuid():N}@test.com" })
-                .ExecuteAsync());
+                .ExecuteAsync(TestContext.Current.CancellationToken));
         }
 
         // Act
@@ -96,7 +96,7 @@ public sealed class ConnectionPoolTests(MultiDbFixture fixture)
         {
             tasks.Add(_session.UseConnectionString(_limitedPoolConnectionString)
                 .Sql("WAITFOR DELAY '00:00:01'; SELECT 1 AS Val")
-                .ExecuteScalarAsync<int>());
+                .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken));
         }
 
         // Act

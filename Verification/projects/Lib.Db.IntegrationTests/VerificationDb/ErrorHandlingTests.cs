@@ -19,7 +19,7 @@ public sealed class ErrorHandlingTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("exception.usp_Exception_ForeignKeyViolation")
             .With(new { NonExistentParentId = 99999 })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().NotBeNull();
         result.Error!.Value.Kind.Should().Be(DbErrorKind.ConstraintViolation);
@@ -30,7 +30,7 @@ public sealed class ErrorHandlingTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _db
             .Procedure("exception.usp_Exception_DivideByZero")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeFalse();
         result.Error!.Value.Kind.Should().Be(DbErrorKind.DataConversion);
     }
@@ -40,7 +40,7 @@ public sealed class ErrorHandlingTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _db
             .Procedure("dbo.usp_NonExistent_QA_Test_12345")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().NotBeNull();
         // 스키마 캐시 경로에 따라 SchemaNotFound 또는 Unknown이 될 수 있음
@@ -54,7 +54,7 @@ public sealed class ErrorHandlingTests(MultiDbFixture fixture)
         // QueryAsync는 스트림을 즉시 반환하므로, 반복(iterate)해야 SQL 오류가 발생
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Sql("SELECT * FROM dbo.QA_NonExistent_Table_99999")
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         if (result.IsSuccess)
         {
@@ -81,12 +81,12 @@ public sealed class ErrorHandlingTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("exception.usp_Exception_UniqueViolation")
             .With(new { DuplicateValue = "DUPLICATE_TEST" })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         // First call might succeed, second should fail
         DbResult<int> result2 = await _db
             .Procedure("exception.usp_Exception_UniqueViolation")
             .With(new { DuplicateValue = "DUPLICATE_TEST" })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result2.IsSuccess.Should().BeFalse();
         result2.Error!.Value.Kind.Should().Be(DbErrorKind.ConstraintViolation);
     }
@@ -96,7 +96,7 @@ public sealed class ErrorHandlingTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _db
             .Procedure("exception.usp_Exception_InvalidObjectName")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeFalse();
         result.Error!.Value.Kind.Should().Be(DbErrorKind.SchemaNotFound);
     }

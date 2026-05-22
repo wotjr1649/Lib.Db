@@ -18,7 +18,7 @@ public sealed class ReadQueryTests(MultiDbFixture fixture)
     {
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Sql("SELECT TOP 10 * FROM IF_CHUTE_INFO")
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
 
         int count = 0;
@@ -32,7 +32,7 @@ public sealed class ReadQueryTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _db
             .Sql("SELECT COUNT(*) FROM IF_BRAND_MASTER")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(7);
     }
@@ -43,7 +43,7 @@ public sealed class ReadQueryTests(MultiDbFixture fixture)
         // Act — 날짜 필터 없이 전체 COUNT
         DbResult<int> result = await _db
             .Sql("SELECT COUNT(*) FROM IF_BOX_LIST")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert — 데이터 존재 여부와 무관하게 쿼리 성공 검증
         result.IsSuccess.Should().BeTrue();
@@ -56,7 +56,7 @@ public sealed class ReadQueryTests(MultiDbFixture fixture)
         string bizDay = "20260309";
         DbResult<int> result = await _db
             .Sql($"SELECT COUNT(*) FROM IF_BOX_LIST WHERE BIZ_DAY = {bizDay}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().BeGreaterThanOrEqualTo(0);
     }
@@ -66,7 +66,7 @@ public sealed class ReadQueryTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _db
             .Sql("SELECT COUNT(*) FROM USR_INFO")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(3);
     }
@@ -76,7 +76,7 @@ public sealed class ReadQueryTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _db
             .Sql("SELECT COUNT(*) FROM MENU_INFO")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(18);
     }

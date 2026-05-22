@@ -76,7 +76,7 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
 
         Assert.NotNull(cache.Get(key));
 
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         Assert.Null(cache.Get(key));
     }

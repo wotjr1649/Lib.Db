@@ -38,7 +38,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
         // Act
         DbResult<string?> result = await _session.Default
             .Sql("SELECT DB_NAME()")
-            .ExecuteScalarAsync<string>();
+            .ExecuteScalarAsync<string>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -58,7 +58,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
         // Act
         DbResult<int> result = await _session.Use("Verification")
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -78,7 +78,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
         // Act
         DbResult<string?> result = await _session.UseConnectionString(_verificationConnectionString)
             .Sql("SELECT DB_NAME()")
-            .ExecuteScalarAsync<string>();
+            .ExecuteScalarAsync<string>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -98,11 +98,11 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
         // Act — 두 DB 동시 SELECT 1
         Task<DbResult<int>> vTask = _verification
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         Task<DbResult<int>> sTask = _sorter
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         DbResult<int>[] results = await Task.WhenAll(vTask, sTask);
 
@@ -128,7 +128,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
         // Act — Verification DB
         DbResult<string?> vResult = await _session.Use("Verification")
             .Sql("SELECT DB_NAME()")
-            .ExecuteScalarAsync<string>();
+            .ExecuteScalarAsync<string>(TestContext.Current.CancellationToken);
 
         // Assert
         vResult.IsSuccess.Should().BeTrue();
@@ -137,7 +137,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
         // Act — Sorter DB
         DbResult<string?> sResult = await _session.Use("Sorter")
             .Sql("SELECT DB_NAME()")
-            .ExecuteScalarAsync<string>();
+            .ExecuteScalarAsync<string>(TestContext.Current.CancellationToken);
 
         // Assert
         sResult.IsSuccess.Should().BeTrue();
@@ -158,7 +158,7 @@ public sealed class MultiInstanceTests(MultiDbFixture fixture)
         DbResult<int> result = await _verification
             .Sql((FormattableString)$"WAITFOR DELAY '00:00:10'; SELECT 1")
             .WithTimeout(2)
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert — 타임아웃 에러
         result.IsSuccess.Should().BeFalse();

@@ -294,25 +294,25 @@ public sealed class CacheHostingCoverageTests
             "schema",
             "first",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
         string firstHit = await cache.GetOrCreateAsync(
             "schema",
             "unexpected",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
 
-        await cache.RemoveByTagAsync("instance");
+        await cache.RemoveByTagAsync("instance", TestContext.Current.CancellationToken);
 
         string second = await cache.GetOrCreateAsync(
             "schema",
             "second",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
         string secondHit = await cache.GetOrCreateAsync(
             "schema",
             "third",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
 
         first.Should().Be("first");
         firstHit.Should().Be("first");
@@ -333,19 +333,19 @@ public sealed class CacheHostingCoverageTests
             return ValueTask.FromResult(value);
         }
 
-        await cache.SetAsync("schema", "before", tags: ["instance"]);
-        await cache.RemoveByTagAsync("*");
+        await cache.SetAsync("schema", "before", tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
+        await cache.RemoveByTagAsync("*", TestContext.Current.CancellationToken);
 
         string after = await cache.GetOrCreateAsync(
             "schema",
             "after",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
         string afterHit = await cache.GetOrCreateAsync(
             "schema",
             "miss",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
 
         after.Should().Be("after");
         afterHit.Should().Be("after");
@@ -361,7 +361,7 @@ public sealed class CacheHostingCoverageTests
         ValueTask<string> Factory(string value, CancellationToken _)
         {
             factoryCalls++;
-            cache.RemoveByTagAsync("instance").GetAwaiter().GetResult();
+            cache.RemoveByTagAsync("instance", TestContext.Current.CancellationToken).GetAwaiter().GetResult();
             return ValueTask.FromResult(value);
         }
 
@@ -369,12 +369,12 @@ public sealed class CacheHostingCoverageTests
             "schema",
             "first",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
         string second = await cache.GetOrCreateAsync(
             "schema",
             "second",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
 
         first.Should().Be("first");
         second.Should().Be("second");
@@ -399,9 +399,9 @@ public sealed class CacheHostingCoverageTests
             return ValueTask.FromResult(value);
         }
 
-        string first = await cache.GetOrCreateAsync("schema", "first", Factory);
+        string first = await cache.GetOrCreateAsync("schema", "first", Factory, cancellationToken: TestContext.Current.CancellationToken);
         await Task.Delay(20, TestContext.Current.CancellationToken);
-        string second = await cache.GetOrCreateAsync("schema", "second", Factory);
+        string second = await cache.GetOrCreateAsync("schema", "second", Factory, cancellationToken: TestContext.Current.CancellationToken);
 
         first.Should().Be("first");
         second.Should().Be("second");
@@ -431,10 +431,10 @@ public sealed class CacheHostingCoverageTests
             return ValueTask.FromResult(value);
         }
 
-        string longKeyFirst = await cache.GetOrCreateAsync("schema", "first", LongKeyFactory);
-        string longKeySecond = await cache.GetOrCreateAsync("schema", "second", LongKeyFactory);
-        string payloadFirst = await cache.GetOrCreateAsync("key", "large", LargePayloadFactory);
-        string payloadSecond = await cache.GetOrCreateAsync("key", "tiny", LargePayloadFactory);
+        string longKeyFirst = await cache.GetOrCreateAsync("schema", "first", LongKeyFactory, cancellationToken: TestContext.Current.CancellationToken);
+        string longKeySecond = await cache.GetOrCreateAsync("schema", "second", LongKeyFactory, cancellationToken: TestContext.Current.CancellationToken);
+        string payloadFirst = await cache.GetOrCreateAsync("key", "large", LargePayloadFactory, cancellationToken: TestContext.Current.CancellationToken);
+        string payloadSecond = await cache.GetOrCreateAsync("key", "tiny", LargePayloadFactory, cancellationToken: TestContext.Current.CancellationToken);
 
         longKeyFirst.Should().Be("first");
         longKeySecond.Should().Be("second");
@@ -456,8 +456,8 @@ public sealed class CacheHostingCoverageTests
             return ValueTask.FromResult<object>(new object());
         }
 
-        object first = await cache.GetOrCreateAsync("schema", 1, Factory);
-        object second = await cache.GetOrCreateAsync("schema", 2, Factory);
+        object first = await cache.GetOrCreateAsync("schema", 1, Factory, cancellationToken: TestContext.Current.CancellationToken);
+        object second = await cache.GetOrCreateAsync("schema", 2, Factory, cancellationToken: TestContext.Current.CancellationToken);
 
         first.Should().NotBeSameAs(second);
         factoryCalls.Should().Be(2);
@@ -503,10 +503,10 @@ public sealed class CacheHostingCoverageTests
             });
         }
 
-        SpSchema spFirst = await cache.GetOrCreateAsync("sp", 0, SpFactory);
-        SpSchema spSecond = await cache.GetOrCreateAsync("sp", 0, SpFactory);
-        TvpSchema tvpFirst = await cache.GetOrCreateAsync("tvp", 0, TvpFactory);
-        TvpSchema tvpSecond = await cache.GetOrCreateAsync("tvp", 0, TvpFactory);
+        SpSchema spFirst = await cache.GetOrCreateAsync("sp", 0, SpFactory, cancellationToken: TestContext.Current.CancellationToken);
+        SpSchema spSecond = await cache.GetOrCreateAsync("sp", 0, SpFactory, cancellationToken: TestContext.Current.CancellationToken);
+        TvpSchema tvpFirst = await cache.GetOrCreateAsync("tvp", 0, TvpFactory, cancellationToken: TestContext.Current.CancellationToken);
+        TvpSchema tvpSecond = await cache.GetOrCreateAsync("tvp", 0, TvpFactory, cancellationToken: TestContext.Current.CancellationToken);
 
         spFirst.Should().NotBeSameAs(spSecond);
         tvpFirst.Should().NotBeSameAs(tvpSecond);

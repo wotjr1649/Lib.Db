@@ -39,7 +39,7 @@ public sealed class JsonMappingTests(MultiDbFixture fixture, ITestOutputHelper o
         DbResult<int> insertResult = await _db
             .Procedure("gap.usp_Json_Insert")
             .With(new { JsonPayload = jsonPayload })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         insertResult.IsSuccess.Should().BeTrue("JSON 삽입이 성공해야 합니다.");
         int newId = insertResult.Value;
@@ -49,10 +49,10 @@ public sealed class JsonMappingTests(MultiDbFixture fixture, ITestOutputHelper o
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> queryResult = await _db
             .Procedure("gap.usp_Json_Query")
             .With(new { Key = "name" })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         queryResult.IsSuccess.Should().BeTrue("JSON 쿼리가 성공해야 합니다.");
-        List<Dictionary<string, object?>> rows = await queryResult.Value!.ToListAsync();
+        List<Dictionary<string, object?>> rows = await queryResult.Value!.ToListAsync(TestContext.Current.CancellationToken);
 
         // 삽입한 행 찾기
         Dictionary<string, object?>? targetRow = rows.FirstOrDefault(r =>
@@ -76,7 +76,7 @@ public sealed class JsonMappingTests(MultiDbFixture fixture, ITestOutputHelper o
         // Cleanup
         await _db
             .Sql($"DELETE FROM [gap].[JsonData] WHERE Id = {newId}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion

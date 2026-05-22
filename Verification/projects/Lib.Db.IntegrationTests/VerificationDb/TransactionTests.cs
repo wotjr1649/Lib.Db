@@ -33,19 +33,19 @@ public sealed class TransactionTests(MultiDbFixture fixture)
     {
         string uniqueEmail = $"commit_{Guid.NewGuid():N}@test.com";
 
-        await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification");
+        await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification", TestContext.Current.CancellationToken);
         DbResult<int> insertResult = await tx
             .Sql((FormattableString)$"INSERT INTO core.Users (UserName, Email, Age) VALUES ('CommitTest', {uniqueEmail}, 30)")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue();
 
-        DbResult<bool> commitResult = await tx.CommitAsync();
+        DbResult<bool> commitResult = await tx.CommitAsync(TestContext.Current.CancellationToken);
         commitResult.IsSuccess.Should().BeTrue();
 
         // 커밋 후 데이터 존재 확인
         DbResult<int> countResult = await _db
             .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {uniqueEmail}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         countResult.IsSuccess.Should().BeTrue();
         countResult.Value.Should().BeGreaterThan(0);
     }
@@ -62,19 +62,19 @@ public sealed class TransactionTests(MultiDbFixture fixture)
     {
         string uniqueEmail = $"rollback_{Guid.NewGuid():N}@test.com";
 
-        await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification");
+        await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification", TestContext.Current.CancellationToken);
         DbResult<int> insertResult = await tx
             .Sql((FormattableString)$"INSERT INTO core.Users (UserName, Email, Age) VALUES ('RollbackTest', {uniqueEmail}, 30)")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue();
 
-        DbResult<bool> rollbackResult = await tx.RollbackAsync();
+        DbResult<bool> rollbackResult = await tx.RollbackAsync(TestContext.Current.CancellationToken);
         rollbackResult.IsSuccess.Should().BeTrue();
 
         // 롤백 후 데이터 미존재 확인
         DbResult<int> countResult = await _db
             .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {uniqueEmail}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         countResult.IsSuccess.Should().BeTrue();
         countResult.Value.Should().Be(0);
     }
@@ -95,17 +95,17 @@ public sealed class TransactionTests(MultiDbFixture fixture)
 
         // Arrange & Act — CommitAsync 호출 없이 블록 종료 → Dispose → 자동 롤백
         {
-            await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification");
+            await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification", TestContext.Current.CancellationToken);
             await tx
                 .Sql((FormattableString)$"INSERT INTO core.Users (UserName, Email) VALUES ('AutoRollbackTest', {uniqueEmail})")
-                .ExecuteAsync();
+                .ExecuteAsync(TestContext.Current.CancellationToken);
             // CommitAsync 호출 없이 블록 종료
         }
 
         // Assert — 데이터가 존재하면 안 됨
         DbResult<int> countResult = await _db
             .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {uniqueEmail}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         countResult.IsSuccess.Should().BeTrue();
         countResult.Value.Should().Be(0, "CommitAsync 없이 Dispose 시 자동 롤백되어야 합니다.");
     }
@@ -126,7 +126,7 @@ public sealed class TransactionTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("core.usp_Core_Transaction_Test")
             .With(new { UserName = "SavepointTest", Email = uniqueEmail, ShouldRollback = 1 })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert — SP 자체가 성공하고, 결과에 'ROLLED_BACK_TO_SAVEPOINT' 포함
         result.IsSuccess.Should().BeTrue();
@@ -142,7 +142,7 @@ public sealed class TransactionTests(MultiDbFixture fixture)
         // 세이브포인트 롤백으로 인해 데이터가 존재하지 않아야 함
         DbResult<int> countResult = await _db
             .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {uniqueEmail}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         countResult.IsSuccess.Should().BeTrue();
         countResult.Value.Should().Be(0, "세이브포인트 롤백으로 INSERT가 취소되어야 합니다.");
     }
@@ -170,16 +170,16 @@ public sealed class TransactionTests(MultiDbFixture fixture)
         {
             string email = emails[i];
             string userName = $"SeqUser_{i}";
-            await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification");
+            await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification", TestContext.Current.CancellationToken);
             DbResult<int> insertResult = await tx
                 .Sql((FormattableString)$"INSERT INTO core.Users (UserName, Email) VALUES ({userName}, {email})")
-                .ExecuteAsync();
+                .ExecuteAsync(TestContext.Current.CancellationToken);
             insertResult.IsSuccess.Should().BeTrue();
 
             if (i % 2 == 0)
-                await tx.CommitAsync();
+                await tx.CommitAsync(TestContext.Current.CancellationToken);
             else
-                await tx.RollbackAsync();
+                await tx.RollbackAsync(TestContext.Current.CancellationToken);
         }
 
         // Assert — 커밋된 3개만 존재, 롤백된 2개는 미존재
@@ -187,7 +187,7 @@ public sealed class TransactionTests(MultiDbFixture fixture)
         {
             DbResult<int> countResult = await _db
                 .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {emails[i]}")
-                .ExecuteScalarAsync<int>();
+                .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
             countResult.IsSuccess.Should().BeTrue();
 
             if (i % 2 == 0)
@@ -216,21 +216,21 @@ public sealed class TransactionTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("test.usp_Savepoint_PartialCommit")
             .With(new { EmailA = emailA, EmailB = emailB })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
 
         // Assert — EmailA 존재 (유지됨)
         DbResult<int> countA = await _db
             .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {emailA}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         countA.IsSuccess.Should().BeTrue();
         countA.Value.Should().Be(1, "EmailA는 세이브포인트 이전에 삽입되어 유지되어야 합니다.");
 
         // Assert — EmailB 미존재 (롤백됨)
         DbResult<int> countB = await _db
             .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {emailB}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         countB.IsSuccess.Should().BeTrue();
         countB.Value.Should().Be(0, "EmailB는 세이브포인트 롤백으로 삭제되어야 합니다.");
     }

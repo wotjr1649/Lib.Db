@@ -36,7 +36,7 @@ public sealed class WithTimeoutTests(MultiDbFixture fixture)
             .Procedure("resilience.usp_Resilience_Simulate_Delay")
             .WithTimeout(2)
             .With(new { DelaySeconds = 10 })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -60,7 +60,7 @@ public sealed class WithTimeoutTests(MultiDbFixture fixture)
             .Procedure("resilience.usp_Resilience_Simulate_Delay")
             .WithTimeout(10)
             .With(new { DelaySeconds = 1 })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("1초 지연에 10초 타임아웃이면 충분히 완료되어야 합니다.");

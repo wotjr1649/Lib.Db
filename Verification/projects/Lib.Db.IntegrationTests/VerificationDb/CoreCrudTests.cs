@@ -37,7 +37,7 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
         DbResult<int> scalarResult = await _db
             .Procedure("core.usp_Core_Insert_User")
             .With(new { UserName = "CrudInsertTest", Email = uniqueEmail, Age = (int?)25 })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert
         scalarResult.IsSuccess.Should().BeTrue();
@@ -46,7 +46,7 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
         // Cleanup
         await _db
             .Sql($"DELETE FROM [core].[Users] WHERE Email = '{uniqueEmail}'")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -63,7 +63,7 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
         DbResult<CoreUser?> result = await _db
             .Procedure("core.usp_Core_Get_User")
             .With(new { UserId = 1 })
-            .QuerySingleAsync<CoreUser>();
+            .QuerySingleAsync<CoreUser>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -86,11 +86,11 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<CoreUser>> streamResult = await _db
             .Procedure("core.usp_Core_Search_Users")
             .With(new { SearchTerm = "Alice" })
-            .QueryAsync<CoreUser>();
+            .QueryAsync<CoreUser>(TestContext.Current.CancellationToken);
 
         // Assert
         streamResult.IsSuccess.Should().BeTrue();
-        List<CoreUser> users = await streamResult.Value!.ToListAsync();
+        List<CoreUser> users = await streamResult.Value!.ToListAsync(TestContext.Current.CancellationToken);
         users.Should().NotBeEmpty();
         users.Should().Contain(u => u.UserName.Contains("Alice"));
     }
@@ -108,7 +108,7 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
         // Act
         DbResult<int> scalarResult = await _db
             .Sql("SELECT COUNT(*) FROM [core].[Users]")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert
         scalarResult.IsSuccess.Should().BeTrue(scalarResult.Error?.Message);
@@ -138,7 +138,7 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
         DbResult<int> scalarResult = await _db
             .Procedure("core.usp_Core_Bulk_Insert_Users")
             .With(new { Users = users })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert
         if (!scalarResult.IsSuccess)
@@ -149,7 +149,7 @@ public sealed class CoreCrudTests(MultiDbFixture fixture)
         // Cleanup
         await _db
             .Sql($"DELETE FROM [core].[Users] WHERE UserName LIKE 'Bulk%_{suffix}'")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion

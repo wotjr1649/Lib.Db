@@ -27,7 +27,7 @@ public sealed class TvpSchemaProviderTests
                     Sku NVARCHAR(64) NULL,
                     Amount DECIMAL(18, 2) NOT NULL
                 );
-            ").ExecuteAsync();
+            ").ExecuteAsync(TestContext.Current.CancellationToken);
 
             using IServiceScope scope = fixture.Services.CreateScope();
             ITvpSchemaProvider provider = scope.ServiceProvider.GetRequiredService<ITvpSchemaProvider>();
@@ -48,7 +48,7 @@ public sealed class TvpSchemaProviderTests
         {
             if (initialized)
             {
-                await fixture.Verification.Sql($"DROP TYPE IF EXISTS {typeName}").ExecuteAsync();
+                await fixture.Verification.Sql($"DROP TYPE IF EXISTS {typeName}").ExecuteAsync(TestContext.Current.CancellationToken);
                 await fixture.DisposeAsync();
             }
         }

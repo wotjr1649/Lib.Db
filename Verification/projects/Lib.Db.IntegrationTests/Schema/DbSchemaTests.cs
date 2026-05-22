@@ -239,7 +239,7 @@ public sealed class DbSchemaTests
         TvpSchema schema1 = await service.GetTvpSchemaAsync(tvpName, hash, CancellationToken.None);
         Assert.Equal(100, schema1.VersionToken);
 
-        await Task.Delay(1500);
+        await Task.Delay(1500, TestContext.Current.CancellationToken);
 
         TvpSchema schema2 = await service.GetTvpSchemaAsync(tvpName, hash, CancellationToken.None);
 

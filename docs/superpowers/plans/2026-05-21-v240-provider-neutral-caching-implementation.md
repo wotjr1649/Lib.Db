@@ -1480,6 +1480,83 @@ git commit -m "chore: remove stale cache topology wording"
 - Fail fast when `EnableSharedMemoryCache = true` or `EnableEpochCoordination = true` would create partial shared-memory behavior without explicit shared-memory registration.
 - Keep `WithCacheAsync` and `WithCacheListAsync` as opt-in caller-owned query result cache helpers.
 
+## PR Sequencing Update
+
+Use this PR chain instead of combining analyzer cleanup and runner migration in one release PR.
+
+### Current PR
+
+Title:
+
+```text
+v2.4.0: provider-neutral caching and xUnit1051 cleanup
+```
+
+Body:
+
+```markdown
+## Summary
+- Make Lib.Db provider-neutral by default for cache registration.
+- Preserve host-owned `IDistributedCache` providers and keep shared memory as explicit opt-in.
+- Remove the `xUnit1051` suppression by passing `TestContext.Current.CancellationToken` through integration tests.
+
+## Release Gate
+- Keep the current VSTest-based release scripts and CI path unchanged in this PR.
+- Verify the integration test project builds with 0 warnings and 0 errors.
+- Run the official release verification script before release approval.
+
+## Follow-ups
+- Next PR: run an MTP migration spike only.
+- Following PR: convert release scripts and CI to MTP after the spike result is reviewed.
+```
+
+### Next PR: MTP Spike Only
+
+Title:
+
+```text
+test: spike xUnit v3 on Microsoft.Testing.Platform
+```
+
+Body:
+
+```markdown
+## Summary
+- Spike xUnit v3 execution on Microsoft.Testing.Platform without changing release gates.
+- Validate SDK 10 `global.json` runner behavior, xUnit v3 runner settings, and local developer commands.
+- Translate representative VSTest filters to xUnit v3/MTP filter syntax.
+
+## Non-goals
+- Do not update release scripts or CI gates in this spike PR.
+- Do not remove VSTest packages until TRX, coverage, filters, and settings are proven.
+
+## Exit Criteria
+- Document command compatibility, unsupported options, and required package/property changes.
+- Decide whether the formal migration PR should proceed.
+```
+
+### Following PR: Formal MTP Migration
+
+Title:
+
+```text
+ci: migrate Lib.Db release verification to Microsoft.Testing.Platform
+```
+
+Body:
+
+```markdown
+## Summary
+- Switch test execution, release scripts, and CI from VSTest to Microsoft.Testing.Platform.
+- Replace VSTest-specific filter/logger/coverage arguments with supported MTP equivalents.
+- Update script self-tests and release verification documentation.
+
+## Release Gate
+- Full official release verification must pass under MTP.
+- TRX and coverage artifacts must remain available or have documented replacements.
+- CI and local scripts must use the same runner contract.
+```
+
 ## Handoff
 
 Plan complete and saved to `docs/superpowers/plans/2026-05-21-v240-provider-neutral-caching-implementation.md`.

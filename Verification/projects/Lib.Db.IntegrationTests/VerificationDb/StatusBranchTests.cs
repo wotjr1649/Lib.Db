@@ -36,7 +36,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         DbResult<int> insertResult = await _db
             .Procedure("core.usp_Core_Insert_User")
             .With(new { UserName = "SB01_NewUser", Email = uniqueEmail, Age = 25 })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue();
         int newUserId = insertResult.Value;
 
@@ -44,7 +44,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("test.usp_Status_Branch_Logic")
             .With(new { UserId = newUserId, Status = "" })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -75,7 +75,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         DbResult<int> insertResult = await _db
             .Procedure("core.usp_Core_Insert_User")
             .With(new { UserName = "SB02_ActiveUser", Email = uniqueEmail, Age = 30 })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue();
         int newUserId = insertResult.Value;
 
@@ -83,7 +83,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         {
             DbResult<int> orderResult = await _db
                 .Sql((FormattableString)$"INSERT INTO [core].[Orders] (UserId, ProductId, Quantity, TotalPrice) VALUES ({newUserId}, 1, 1, 100.00)")
-                .ExecuteAsync();
+                .ExecuteAsync(TestContext.Current.CancellationToken);
             orderResult.IsSuccess.Should().BeTrue();
         }
 
@@ -91,7 +91,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("test.usp_Status_Branch_Logic")
             .With(new { UserId = newUserId, Status = "" })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -122,7 +122,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         DbResult<int> insertResult = await _db
             .Procedure("core.usp_Core_Insert_User")
             .With(new { UserName = "SB03_VipUser", Email = uniqueEmail, Age = 35 })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue();
         int newUserId = insertResult.Value;
 
@@ -130,7 +130,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         {
             DbResult<int> orderResult = await _db
                 .Sql((FormattableString)$"INSERT INTO [core].[Orders] (UserId, ProductId, Quantity, TotalPrice) VALUES ({newUserId}, 1, 1, 100.00)")
-                .ExecuteAsync();
+                .ExecuteAsync(TestContext.Current.CancellationToken);
             orderResult.IsSuccess.Should().BeTrue();
         }
 
@@ -138,7 +138,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("test.usp_Status_Branch_Logic")
             .With(new { UserId = newUserId, Status = "" })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();

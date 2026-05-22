@@ -40,7 +40,7 @@ public sealed class FormattableSqlTests(MultiDbFixture fixture)
         // Act — FormattableString 오버로드 명시적 호출
         DbResult<CoreUser?> result = await _db
             .Sql((FormattableString)$"SELECT UserId, UserName, Email, Age, CreatedAt FROM [core].[Users] WHERE UserId = {userId}")
-            .QuerySingleAsync<CoreUser>();
+            .QuerySingleAsync<CoreUser>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -66,7 +66,7 @@ public sealed class FormattableSqlTests(MultiDbFixture fixture)
         // Act — 복수 보간 인수 + FormattableString 명시적 캐스트
         DbResult<int> scalarResult = await _db
             .Sql((FormattableString)$"SELECT COUNT(*) FROM [core].[Users] WHERE UserName = {userName} AND Age >= {minAge}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert
         scalarResult.IsSuccess.Should().BeTrue();

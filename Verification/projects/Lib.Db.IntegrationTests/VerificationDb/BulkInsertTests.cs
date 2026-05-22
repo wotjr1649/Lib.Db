@@ -49,7 +49,7 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<long> result = await _session.BulkInsertAsync(
             "Verification",
             "[gap].[BulkTarget]",
-            records);
+            records, ct: TestContext.Current.CancellationToken);
         sw.Stop();
 
         // Assert
@@ -63,7 +63,7 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
         // Cleanup
         await _db
             .Sql($"DELETE FROM [gap].[BulkTarget] WHERE BatchId = {batchId}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -95,7 +95,7 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
             "Verification",
             "[gap].[BulkTarget]",
             records,
-            options);
+            options, ct: TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("커스텀 배치 사이즈 벌크 삽입이 성공해야 합니다.");
@@ -104,7 +104,7 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
         // Cleanup
         await _db
             .Sql($"DELETE FROM [gap].[BulkTarget] WHERE BatchId = {batchId}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -124,7 +124,7 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<long> result = await _session.BulkInsertAsync(
             "Verification",
             "[gap].[BulkTarget]",
-            records);
+            records, ct: TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("빈 컬렉션은 성공으로 처리되어야 합니다.");
@@ -151,7 +151,7 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<long> result = await _session.BulkInsertAsync(
             "Verification",
             "[gap].[NonExistentTable_BI04]",
-            records);
+            records, ct: TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse("존재하지 않는 테이블에 대한 벌크 삽입은 실패해야 합니다.");
@@ -190,7 +190,7 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<long> bulkResult = await _session.BulkInsertAsync(
             "Verification",
             "[gap].[BulkTarget]",
-            bulkRecords);
+            bulkRecords, ct: TestContext.Current.CancellationToken);
         swBulk.Stop();
 
         // --- TVP (perf 스키마 사용 — 검증 완료된 SP) ---
@@ -206,7 +206,7 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<int> tvpResult = await _db
             .Procedure("perf.usp_Perf_Bulk_Insert")
             .With(new { Items = tvpRecords })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         swTvp.Stop();
 
         // Assert
@@ -221,10 +221,10 @@ public sealed class BulkInsertTests(MultiDbFixture fixture, ITestOutputHelper ou
         // Cleanup
         await _db
             .Sql($"DELETE FROM [gap].[BulkTarget] WHERE BatchId = {batchIdBulk}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         await _db
             .Sql($"DELETE FROM [perf].[BulkTest] WHERE BatchNumber = {batchIdTvp}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion

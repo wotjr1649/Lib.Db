@@ -19,7 +19,7 @@ public sealed class QueryCacheExtensionsCoverageTests
     public async Task WithCacheAsync_ShouldReturnCachedValueWithoutAwaitingResult()
     {
         var cache = new InMemoryDistributedCache();
-        await cache.SetAsync("user:1", JsonSerializer.SerializeToUtf8Bytes(new CachedUser(1, "cached")));
+        await cache.SetAsync("user:1", JsonSerializer.SerializeToUtf8Bytes(new CachedUser(1, "cached")), TestContext.Current.CancellationToken);
 
         DbResult<CachedUser?> result = await Task
             .FromResult(DbResult<CachedUser?>.Fail(CreateError("should not be observed")))
@@ -67,7 +67,7 @@ public sealed class QueryCacheExtensionsCoverageTests
         await cache.SetAsync("users", JsonSerializer.SerializeToUtf8Bytes(new List<CachedUser>
         {
             new(1, "cached")
-        }));
+        }), TestContext.Current.CancellationToken);
 
         DbResult<List<CachedUser>> result = await Task
             .FromResult(DbResult<IAsyncEnumerable<CachedUser>>.Fail(CreateError("should not be observed")))
@@ -81,7 +81,7 @@ public sealed class QueryCacheExtensionsCoverageTests
     public async Task WithCacheListAsync_ShouldReturnEmptyListWhenCachedPayloadIsNull()
     {
         var cache = new InMemoryDistributedCache();
-        await cache.SetAsync("users:null", JsonSerializer.SerializeToUtf8Bytes<List<CachedUser>?>(null));
+        await cache.SetAsync("users:null", JsonSerializer.SerializeToUtf8Bytes<List<CachedUser>?>(null), TestContext.Current.CancellationToken);
 
         DbResult<List<CachedUser>> result = await Task
             .FromResult(DbResult<IAsyncEnumerable<CachedUser>>.Fail(CreateError("should not be observed")))
@@ -122,7 +122,7 @@ public sealed class QueryCacheExtensionsCoverageTests
     public async Task GetOrQueryAsync_ShouldReturnCachedValueWithoutInvokingFactory()
     {
         var cache = new InMemoryDistributedCache();
-        await cache.SetAsync("factory:hit", JsonSerializer.SerializeToUtf8Bytes(new CachedUser(7, "hit")));
+        await cache.SetAsync("factory:hit", JsonSerializer.SerializeToUtf8Bytes(new CachedUser(7, "hit")), TestContext.Current.CancellationToken);
         int factoryCalls = 0;
 
         DbResult<CachedUser?> result = await QueryCacheExtensions.GetOrQueryAsync(
@@ -184,7 +184,7 @@ public sealed class QueryCacheExtensionsCoverageTests
     public async Task InvalidateCacheAsync_ShouldRemoveKey()
     {
         var cache = new InMemoryDistributedCache();
-        await cache.SetAsync("remove-me", [1, 2, 3]);
+        await cache.SetAsync("remove-me", [1, 2, 3], TestContext.Current.CancellationToken);
 
         await cache.InvalidateCacheAsync("remove-me", TestContext.Current.CancellationToken);
 
