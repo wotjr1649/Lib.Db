@@ -25,10 +25,10 @@ jobs:
       LIBDB_BENCHMARK_CONNECTION: Server=127.0.0.1;Database=LIBDB_BENCH_TEST;User ID=SA;Password=${{ secrets.LIBDB_TEST_SQL_PASSWORD }};Encrypt=False;TrustServerCertificate=True;MultipleActiveResultSets=True;
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '10.0.x'
 
@@ -77,7 +77,7 @@ jobs:
 
     - name: Upload verification artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: verification-artifacts-${{ github.run_id }}
         path: Verification/artifacts/**
