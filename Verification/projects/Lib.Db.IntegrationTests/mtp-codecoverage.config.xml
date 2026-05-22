@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+  <Format>cobertura</Format>
+  <IncludeTestAssembly>False</IncludeTestAssembly>
+  <DeterministicReport>True</DeterministicReport>
+  <CodeCoverage>
+    <ModulePaths>
+      <Include>
+        <ModulePath>.*Lib\.Db\.dll$</ModulePath>
+      </Include>
+      <Exclude>
+        <ModulePath>.*Lib\.Db\.IntegrationTests\.dll$</ModulePath>
+        <ModulePath>.*Lib\.Db\.Benchmarks\.dll$</ModulePath>
+        <ModulePath>.*Lib\.Db\.AotVerification\.dll$</ModulePath>
+      </Exclude>
+    </ModulePaths>
+    <Attributes>
+      <Exclude>
+        <Attribute>^System\.ObsoleteAttribute$</Attribute>
+        <Attribute>^System\.CodeDom\.Compiler\.GeneratedCodeAttribute$</Attribute>
+        <Attribute>^System\.Runtime\.CompilerServices\.CompilerGeneratedAttribute$</Attribute>
+        <Attribute>^System\.Diagnostics\.CodeAnalysis\.ExcludeFromCodeCoverageAttribute$</Attribute>
+      </Exclude>
+    </Attributes>
+    <SkipAutoProperties>True</SkipAutoProperties>
+  </CodeCoverage>
+</Configuration>
