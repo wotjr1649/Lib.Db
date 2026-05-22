@@ -74,13 +74,23 @@ if (-not $SkipMatrixDbTests) {
 
     Invoke-Checked 'dotnet' @(
         'test',
-        $integrationProject,
+        '--project', $integrationProject,
         '--no-build',
-        '--filter', 'FullyQualifiedName~Lib.Db.IntegrationTests.V230Matrix.V230TvpMatrixTests',
-        '--logger', 'trx;LogFileName=v230-matrix.trx',
+        '--filter-class', '*V230TvpMatrixTests*',
+        '--minimum-expected-tests', '1',
+        '--report-trx',
+        '--report-trx-filename', 'v230-matrix.trx',
         '--results-directory', $matrixResultsDirectory,
         '-v:minimal'
     )
+
+    $matrixTrx = Get-ChildItem -LiteralPath $matrixResultsDirectory -Recurse -Filter 'v230-matrix.trx' -File |
+        Select-Object -First 1
+    if ($null -eq $matrixTrx) {
+        throw 'MTP matrix test gate did not produce v230-matrix.trx.'
+    }
+
+    Write-Host "MatrixTrx=$($matrixTrx.FullName)"
 }
 else {
     $skippedGates.Add('matrix-db-tests')

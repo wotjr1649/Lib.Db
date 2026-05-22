@@ -49,6 +49,19 @@ function Assert-AtLeast {
     }
 }
 
+function Convert-CoverageClassName {
+    param([Parameter(Mandatory = $true)] [string] $Name)
+
+    return [System.Text.RegularExpressions.Regex]::Replace(
+        $Name,
+        '<[^>]+>',
+        {
+            param($Match)
+            $genericArguments = $Match.Value.Trim('<', '>').Split(',').Count
+            return "$([char] 0x60)$genericArguments"
+        })
+}
+
 function Assert-TargetCoverage {
     param(
         [Parameter(Mandatory = $true)] [object[]] $Classes,
@@ -58,7 +71,15 @@ function Assert-TargetCoverage {
 
     $targetClasses = @($Classes | Where-Object {
         $name = $_.GetAttribute('name')
-        $name -eq $Prefix -or $name.StartsWith("$Prefix/") -or $name.StartsWith("$Prefix+")
+        $normalizedName = Convert-CoverageClassName -Name $name
+        $name -eq $Prefix -or
+            $name.StartsWith("$Prefix/") -or
+            $name.StartsWith("$Prefix+") -or
+            $name.StartsWith("$Prefix.") -or
+            $normalizedName -eq $Prefix -or
+            $normalizedName.StartsWith("$Prefix/") -or
+            $normalizedName.StartsWith("$Prefix+") -or
+            $normalizedName.StartsWith("$Prefix.")
     })
 
     if ($targetClasses.Count -eq 0) {

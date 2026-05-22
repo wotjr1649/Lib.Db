@@ -385,6 +385,18 @@ public sealed class TvpCoreCoverageTests
     }
 
     [Fact]
+    public void RuntimeTvpDataReader_NormalizeValue_ShouldPreserveSpecialTypesWhenFieldTypeDoesNotMatch()
+    {
+        object half = (Half)1.5f;
+        object dateOnly = new DateOnly(2026, 5, 18);
+        object timeOnly = new TimeOnly(10, 11, 12);
+
+        RuntimeTvpDataReader.NormalizeValue(half, typeof(double)).Should().Be(half);
+        RuntimeTvpDataReader.NormalizeValue(dateOnly, typeof(DateOnly)).Should().Be(dateOnly);
+        RuntimeTvpDataReader.NormalizeValue(timeOnly, typeof(TimeOnly)).Should().Be(timeOnly);
+    }
+
+    [Fact]
     public void RuntimeTvpDataReader_DisposeFalse_ShouldNotCloseOrDisposeEnumerator()
     {
         var rows = new DisposableEnumerable<RuntimeRow>(
@@ -648,6 +660,27 @@ public sealed class TvpCoreCoverageTests
     }
 
     [Fact]
+    public void TvpRowAccessorCache_ShouldResolveEverySqlDbTypeFromDescriptor()
+    {
+        TvpRowAccessorCache.Clear();
+
+        foreach (SqlDbType dbType in Enum.GetValues<SqlDbType>())
+        {
+            TvpSchemaDescriptor descriptor = Descriptor(
+                $"dbo.T_RowAccessor_{dbType}",
+                Column("Value", ordinal: 0, dbType));
+
+            RuntimeTvpRowShape shape = TvpRowAccessorCache.GetOrAdd(
+                typeof(RowAccessorAllSqlTypesRow),
+                descriptor,
+                TvpBindingPolicy.Strict);
+
+            shape.Columns.Should().ContainSingle();
+            shape.Columns[0].DbType.Should().Be(dbType);
+        }
+    }
+
+    [Fact]
     public void TvpColumnShape_ShouldNormalizeSqlTypesNamesAndNullability()
     {
         TvpColumnShape.Required(" Id ", typeof(int)).Should().Match<TvpColumnShape>(c =>
@@ -657,11 +690,25 @@ public sealed class TvpCoreCoverageTests
 
         AssertSqlShape<long>(SqlDbType.BigInt, typeof(long));
         AssertSqlShape<byte[]>(SqlDbType.Binary, typeof(byte[]));
+        AssertSqlShape<byte[]>(SqlDbType.Image, typeof(byte[]));
+        AssertSqlShape<byte[]>(SqlDbType.Timestamp, typeof(byte[]));
+        AssertSqlShape<byte[]>(SqlDbType.VarBinary, typeof(byte[]));
         AssertSqlShape<bool>(SqlDbType.Bit, typeof(bool));
+        AssertSqlShape<string>(SqlDbType.Char, typeof(string));
+        AssertSqlShape<string>(SqlDbType.NChar, typeof(string));
+        AssertSqlShape<string>(SqlDbType.NText, typeof(string));
         AssertSqlShape<string>(SqlDbType.NVarChar, typeof(string));
+        AssertSqlShape<string>(SqlDbType.Text, typeof(string));
+        AssertSqlShape<string>(SqlDbType.VarChar, typeof(string));
+        AssertSqlShape<string>(SqlDbType.Xml, typeof(string));
         AssertSqlShape<DateOnly>(SqlDbType.Date, typeof(DateTime));
+        AssertSqlShape<DateTime>(SqlDbType.DateTime, typeof(DateTime));
+        AssertSqlShape<DateTime>(SqlDbType.DateTime2, typeof(DateTime));
+        AssertSqlShape<DateTime>(SqlDbType.SmallDateTime, typeof(DateTime));
         AssertSqlShape<DateTimeOffset>(SqlDbType.DateTimeOffset, typeof(DateTimeOffset));
         AssertSqlShape<decimal>(SqlDbType.Decimal, typeof(decimal));
+        AssertSqlShape<decimal>(SqlDbType.Money, typeof(decimal));
+        AssertSqlShape<decimal>(SqlDbType.SmallMoney, typeof(decimal));
         AssertSqlShape<double>(SqlDbType.Float, typeof(double));
         AssertSqlShape<int>(SqlDbType.Int, typeof(int));
         AssertSqlShape<float>(SqlDbType.Real, typeof(float));
@@ -711,6 +758,20 @@ public sealed class TvpCoreCoverageTests
             .FieldType
             .Should()
             .Be(typeof(Uri));
+
+        foreach (SqlDbType dbType in Enum.GetValues<SqlDbType>())
+        {
+            TvpColumnShape.FromSql<object>(
+                    $"All{dbType}Value",
+                    dbType,
+                    allowNull: false,
+                    size: 0,
+                    precision: 0,
+                    scale: 0)
+                .DbType
+                .Should()
+                .Be(dbType);
+        }
 
         Action nullName = () => TvpColumnShape.Required(null!, typeof(int));
         nullName.Should().Throw<ArgumentException>();
@@ -1555,6 +1616,8 @@ public sealed class TvpCoreCoverageTests
     private sealed record RegistryOrderRow(int Id, string Name);
 
     private sealed record RegistryMismatchRow(int Id);
+
+    private sealed record RowAccessorAllSqlTypesRow(object? Value);
 
     private sealed record StaticShapeRow(int Id);
 

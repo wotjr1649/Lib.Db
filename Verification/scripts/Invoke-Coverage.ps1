@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $testProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj'
-$runSettings = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\coverlet.runsettings'
+$coverageSettings = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\mtp-codecoverage.config.xml'
 $assertScript = Join-Path $PSScriptRoot 'Assert-LibDbCoverage.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
 
@@ -76,6 +76,7 @@ function Get-LatestCoverageFile {
 
 $resultsPath = Resolve-RepoChildPath -PathValue $ResultsDirectory -Name 'ResultsDirectory'
 $reportPath = Resolve-RepoChildPath -PathValue $ReportDirectory -Name 'ReportDirectory'
+$coverageOutput = Join-Path $resultsPath 'coverage.cobertura.xml'
 
 Write-Host 'Lib.Db v2.4.0 coverage run started.'
 Write-Host "ResultsDirectory=$ResultsDirectory"
@@ -84,14 +85,17 @@ Write-Host "ReportDirectory=$ReportDirectory"
 if (Test-Path -LiteralPath $resultsPath) {
     Remove-Item -LiteralPath $resultsPath -Recurse -Force
 }
+New-Item -ItemType Directory -Path $resultsPath -Force | Out-Null
 
 Invoke-Checked 'dotnet' @(
     'test',
-    $testProject,
+    '--project', $testProject,
     '-c', $Configuration,
     '--no-restore',
-    '--settings', $runSettings,
-    '--collect', 'XPlat Code Coverage',
+    '--coverage',
+    '--coverage-output-format', 'cobertura',
+    '--coverage-output', $coverageOutput,
+    '--coverage-settings', $coverageSettings,
     '--results-directory', $resultsPath,
     '-v:minimal'
 )

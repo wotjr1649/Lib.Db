@@ -102,6 +102,15 @@ jobs:
       shell: pwsh
       run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
 
+    - name: Upload verification artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: verification-artifacts-${{ github.run_id }}
+        path: Verification/artifacts/**
+        if-no-files-found: warn
+        retention-days: 7
+
     # 2) Pack 시 태그 버전을 강제 주입
     - name: Pack (tag version)
       run: |
