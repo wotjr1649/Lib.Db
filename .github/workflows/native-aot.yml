@@ -2,16 +2,6 @@ name: Native AOT Verification
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - v2.4.0
-      - 'v2.4.0-*'
-    paths:
-      - '.github/workflows/native-aot.yml'
-      - 'Lib.Db/**'
-      - 'Verification/baselines/aot-warnings.json'
-      - 'Verification/projects/Lib.Db.AotVerification/**'
-      - 'Verification/scripts/Invoke-Aot.ps1'
   pull_request:
     branches:
       - main

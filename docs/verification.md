@@ -43,7 +43,7 @@ The bootstrap reads the local SQL password from `LIBDB_TEST_SQL_PASSWORD` and al
 
 ## GitHub Actions AOT
 
-Native AOT publish is verified through `.github/workflows/native-aot.yml` on a matrix of `win-x64`, `linux-x64`, and `osx-x64`. The workflow runs on PRs to `main`, manual dispatches from non-main refs, and pushes to v2.4.0 release branches. It must not run directly on `main`; this keeps the release-branch approval model intact and prevents post-merge AOT work from becoming a surprise main-branch gate.
+Native AOT publish is verified through `.github/workflows/native-aot.yml` on a matrix of `win-x64`, `linux-x64`, and `osx-x64`. The workflow runs on PRs to `main` and manual dispatches from non-main refs. It must not run directly on `main`; this keeps the release-branch approval model intact, avoids duplicate push plus PR runs, and prevents post-merge AOT work from becoming a surprise main-branch gate.
 
 Each OS verifies its own native toolchain before running `Verification/scripts/Invoke-Aot.ps1`:
 
