@@ -1,20 +1,22 @@
-name: Windows Native AOT Verification
+name: Native AOT Verification
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - main
-      - v2.4.0-provider-neutral-caching
+      - v2.4.0
+      - 'v2.4.0-*'
     paths:
-      - '.github/workflows/windows-aot.yml'
+      - '.github/workflows/native-aot.yml'
       - 'Lib.Db/**'
       - 'Verification/baselines/aot-warnings.json'
       - 'Verification/projects/Lib.Db.AotVerification/**'
       - 'Verification/scripts/Invoke-Aot.ps1'
   pull_request:
+    branches:
+      - main
     paths:
-      - '.github/workflows/windows-aot.yml'
+      - '.github/workflows/native-aot.yml'
       - 'Lib.Db/**'
       - 'Verification/baselines/aot-warnings.json'
       - 'Verification/projects/Lib.Db.AotVerification/**'
@@ -24,8 +26,20 @@ permissions:
   contents: read
 
 jobs:
-  native-aot-windows:
-    runs-on: windows-2022
+  native-aot:
+    if: github.ref != 'refs/heads/main'
+    name: native-aot-${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            rid: win-x64
+          - os: ubuntu-24.04
+            rid: linux-x64
+          - os: macos-15-intel
+            rid: osx-x64
     env:
       DOTNET_NOLOGO: true
 
@@ -37,7 +51,8 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
-    - name: Verify Visual Studio C++ workload
+    - name: Verify Windows Native AOT prerequisites
+      if: runner.os == 'Windows'
       shell: pwsh
       run: |
         $ErrorActionPreference = 'Stop'
@@ -59,9 +74,35 @@ jobs:
 
         cmd /c "`"$vcvars`" >nul && where cl.exe && where link.exe"
 
+    - name: Install Linux Native AOT prerequisites
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y clang zlib1g-dev
+        clang --version
+
+    - name: Verify macOS Native AOT prerequisites
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        xcode-select -p
+        clang --version
+
     - name: Restore dependencies
       run: dotnet restore Lib.Db.slnx
 
-    - name: Run Windows Native AOT gate
+    - name: Run Native AOT gate
       shell: pwsh
-      run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Aot.ps1 -ArtifactsDirectory Verification/artifacts/aot-windows
+      run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Aot.ps1 -ArtifactsDirectory "Verification/artifacts/aot-${{ matrix.rid }}"
+
+    - name: Upload Native AOT artifacts
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: native-aot-${{ matrix.rid }}-${{ github.run_id }}
+        path: Verification/artifacts/aot-${{ matrix.rid }}/**
+        if-no-files-found: warn
+        retention-days: 7

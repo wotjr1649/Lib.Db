@@ -15,6 +15,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 
 - The release gate includes provider-neutral caching checks: existing host-owned `IDistributedCache` providers are preserved, shared-memory opt-in rejects pre-existing providers, and providers added after shared-memory opt-in fail Generic Host startup.
 - Verification assets, script banners, package metadata, and CI gate labels were updated for v2.4.0.
+- Native AOT GitHub Actions verification now runs as a Windows/Linux/macOS x64 matrix from the v2.4.0 release branch and PRs, while direct `main` branch execution is blocked.
 - Repository-local consumer guidance moved from `.agent/skills/lib-db` to `.agents/skills/lib-db`.
 
 ### Security
