@@ -279,6 +279,22 @@ public sealed class CacheHostingCoverageTests
     }
 
     [Fact]
+    public void AddLibDbTrustedDistributedCacheProvider_ShouldMarkCustomProviderAsVerifiedL2()
+    {
+        var cache = new RecordingDistributedCache();
+        using ServiceProvider provider = new ServiceCollection()
+            .AddSingleton<IDistributedCache>(cache)
+            .AddLibDbTrustedDistributedCacheProvider<RecordingDistributedCache>()
+            .BuildServiceProvider();
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(provider);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.VerifiedProviderBackedL2);
+        state.HasVerifiedProviderBackedL2.Should().BeTrue();
+        state.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
+    }
+
+    [Fact]
     public async Task LibDbAotHybridCache_ShouldInvalidateOnlyExistingTaggedEntries()
     {
         var cache = new LibDbAotHybridCache();
@@ -319,6 +335,154 @@ public sealed class CacheHostingCoverageTests
         second.Should().Be("second");
         secondHit.Should().Be("second");
         factoryCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task LibDbAotHybridCache_ShouldCoalesceConcurrentMissesForSameKey()
+    {
+        var cache = new LibDbAotHybridCache();
+        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        TaskCompletionSource firstFactoryStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFactory = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int factoryCalls = 0;
+
+        async ValueTask<string> Factory(string value, CancellationToken token)
+        {
+            int call = Interlocked.Increment(ref factoryCalls);
+            if (call == 1)
+            {
+                firstFactoryStarted.SetResult();
+            }
+
+            await releaseFactory.Task.WaitAsync(token);
+            return value;
+        }
+
+        Task<string>[] requests = Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(async () => await cache.GetOrCreateAsync(
+                "schema",
+                "value",
+                Factory,
+                tags: ["instance"],
+                cancellationToken: cts.Token), cts.Token))
+            .ToArray();
+
+        await firstFactoryStarted.Task.WaitAsync(cts.Token);
+        await Task.Delay(50, cts.Token);
+        releaseFactory.SetResult();
+        string[] results = await Task.WhenAll(requests);
+
+        results.Should().OnlyContain(result => result == "value");
+        factoryCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task LibDbAotHybridCache_ShouldNotCancelSharedProducerWhenOriginalCallerCancels()
+    {
+        var cache = new LibDbAotHybridCache();
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        using CancellationTokenSource firstCaller = new();
+        TaskCompletionSource factoryStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFactory = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int factoryCalls = 0;
+
+        async ValueTask<string> Factory(string value, CancellationToken token)
+        {
+            Interlocked.Increment(ref factoryCalls);
+            factoryStarted.SetResult();
+            await releaseFactory.Task.WaitAsync(token);
+            return value;
+        }
+
+        Task<string> first = cache.GetOrCreateAsync(
+            "schema",
+            "value",
+            Factory,
+            tags: ["instance"],
+            cancellationToken: firstCaller.Token).AsTask();
+
+        await factoryStarted.Task.WaitAsync(timeout.Token);
+
+        Task<string> second = cache.GetOrCreateAsync(
+            "schema",
+            "value",
+            Factory,
+            tags: ["instance"],
+            cancellationToken: timeout.Token).AsTask();
+
+        await firstCaller.CancelAsync();
+        releaseFactory.SetResult();
+
+        await first.Awaiting(task => task)
+            .Should()
+            .ThrowAsync<OperationCanceledException>();
+        string result = await second;
+
+        result.Should().Be("value");
+        factoryCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task LibDbAotHybridCache_ShouldCancelSharedProducerWhenAllCallersCancel()
+    {
+        var cache = new LibDbAotHybridCache();
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        using CancellationTokenSource firstCaller = new();
+        using CancellationTokenSource secondCaller = new();
+        TaskCompletionSource factoryStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource producerCancelled = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async ValueTask<string> Factory(string value, CancellationToken token)
+        {
+            factoryStarted.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return value;
+            }
+            catch (OperationCanceledException)
+            {
+                producerCancelled.SetResult();
+                throw;
+            }
+        }
+
+        Task<string> first = cache.GetOrCreateAsync(
+            "schema",
+            "value",
+            Factory,
+            tags: ["instance"],
+            cancellationToken: firstCaller.Token).AsTask();
+
+        await factoryStarted.Task.WaitAsync(timeout.Token);
+
+        Task<string> second = cache.GetOrCreateAsync(
+            "schema",
+            "value",
+            Factory,
+            tags: ["instance"],
+            cancellationToken: secondCaller.Token).AsTask();
+
+        await firstCaller.CancelAsync();
+        first.IsCanceled.Should().BeTrue();
+        producerCancelled.Task.IsCompleted.Should().BeFalse();
+
+        await secondCaller.CancelAsync();
+        await producerCancelled.Task.WaitAsync(timeout.Token);
+
+        second.IsCanceled.Should().BeTrue();
     }
 
     [Fact]

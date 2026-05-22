@@ -110,6 +110,20 @@ function Invoke-WithClearedVerificationEnvironment {
     }
 }
 
+function Invoke-WithSkippedTestEnvironmentGuard {
+    param([Parameter(Mandatory = $true)] [scriptblock] $Script)
+
+    $saved = [Environment]::GetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD')
+    [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')
+
+    try {
+        & $Script
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', $saved)
+    }
+}
+
 function Get-Scenarios {
     if ($Scenario -contains 'All') {
         return @('Guard', 'Runner', 'Filter', 'Matrix', 'Trx', 'Coverage', 'ArtifactScan')
@@ -185,13 +199,14 @@ function Invoke-FilterScenario {
         '--project', $testProject,
         '-c', $Configuration,
         '--no-restore',
-        '-p:LIBDB_SKIP_TEST_ENV_GUARD=true',
         '--filter-class', '*CacheHostingCoverageTests*',
         '--minimum-expected-tests', '1',
         '-v:minimal'
     )
 
-    Invoke-Checked 'dotnet' $arguments
+    Invoke-WithSkippedTestEnvironmentGuard {
+        Invoke-Checked 'dotnet' $arguments
+    }
     Write-Host 'MTP spike filter scenario passed.'
 }
 
@@ -248,7 +263,6 @@ function Invoke-CoverageScenario {
         '--project', $testProject,
         '-c', $Configuration,
         '--no-restore',
-        '-p:LIBDB_SKIP_TEST_ENV_GUARD=true',
         '--filter-class', '*CacheHostingCoverageTests*',
         '--minimum-expected-tests', '1',
         '--coverage',
@@ -259,7 +273,9 @@ function Invoke-CoverageScenario {
         '-v:minimal'
     )
 
-    Invoke-Checked 'dotnet' $arguments
+    Invoke-WithSkippedTestEnvironmentGuard {
+        Invoke-Checked 'dotnet' $arguments
+    }
 
     if (-not (Test-Path -LiteralPath $coverageOutput)) {
         throw 'MTP coverage scenario did not produce coverage.cobertura.xml.'

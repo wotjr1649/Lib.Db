@@ -11,8 +11,9 @@ public sealed class VerificationEnvironmentGuard
         "Use pwsh -NoProfile -File .\\Verification\\scripts\\Invoke-Tests.ps1 so " +
         "Set-LibDbVerificationEnvironment.local.ps1 is loaded first, or set " +
         "LIBDB_TEST_SQL_PASSWORD / all LIBDB_TEST_CONNECTION_* / all ConnectionStrings__* values " +
-        "in the current process. For non-database-only local runs, pass " +
-        "-p:LIBDB_SKIP_TEST_ENV_GUARD=true explicitly.";
+        "in the current process. For non-database-only local runs, set " +
+        "LIBDB_SKIP_TEST_ENV_GUARD=true in the current process or pass " +
+        "-SkipTestEnvGuard to Verification/scripts/Invoke-Tests.ps1.";
 
     public VerificationEnvironmentGuard()
     {

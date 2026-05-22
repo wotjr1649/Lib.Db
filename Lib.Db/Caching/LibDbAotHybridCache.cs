@@ -33,6 +33,7 @@ internal sealed class LibDbAotHybridCache : HybridCache
     private readonly int _maximumKeyLength;
     private readonly long _maximumPayloadBytes;
     private readonly ConcurrentDictionary<string, CacheEntry> _entries = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<InFlightKey, InFlightOperation> _inFlight = new();
     private readonly ConcurrentDictionary<string, long> _tagVersions = new(StringComparer.Ordinal);
     private long _globalVersion;
 
@@ -67,26 +68,43 @@ internal sealed class LibDbAotHybridCache : HybridCache
             return underlyingDataCallback(state, cancellationToken);
         }
 
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        if (_entries.TryGetValue(key, out CacheEntry? entry)
-            && entry.ExpiresAt > now
-            && entry.ValueType == typeof(T)
-            && !IsInvalidated(entry))
+        while (true)
         {
-            return new ValueTask<T>((T)entry.Value!);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            if (_entries.TryGetValue(key, out CacheEntry? entry)
+                && entry.ExpiresAt > now
+                && entry.ValueType == typeof(T)
+                && !IsInvalidated(entry))
+            {
+                return new ValueTask<T>((T)entry.Value!);
+            }
+
+            string[] normalizedTags = NormalizeTags(tags);
+            EntryVersion version = CaptureEntryVersion(normalizedTags);
+            InFlightKey inFlightKey = new(key, typeof(T));
+            InFlightOperation newOperation = CreateInFlightOperation(
+                inFlightKey,
+                key,
+                state,
+                underlyingDataCallback,
+                options,
+                normalizedTags,
+                version,
+                cancellationToken);
+            InFlightOperation operation = _inFlight.GetOrAdd(inFlightKey, newOperation);
+            if (!ReferenceEquals(operation, newOperation))
+            {
+                newOperation.Dispose();
+            }
+
+            if (!ReferenceEquals(operation, newOperation) && operation.IsCompleted)
+            {
+                RemoveInFlight(inFlightKey, operation);
+                continue;
+            }
+
+            return AwaitInFlightAsync<T>(operation, cancellationToken);
         }
-
-        string[] normalizedTags = NormalizeTags(tags);
-        EntryVersion version = CaptureEntryVersion(normalizedTags);
-
-        return CreateAndStoreAsync(
-            key,
-            state,
-            underlyingDataCallback,
-            options,
-            normalizedTags,
-            version,
-            cancellationToken);
     }
 
     public override ValueTask SetAsync<T>(
@@ -176,6 +194,64 @@ internal sealed class LibDbAotHybridCache : HybridCache
             version,
             tags);
         return value;
+    }
+
+    private InFlightOperation CreateInFlightOperation<TState, T>(
+        InFlightKey inFlightKey,
+        string key,
+        TState state,
+        Func<TState, CancellationToken, ValueTask<T>> underlyingDataCallback,
+        HybridCacheEntryOptions? options,
+        string[] tags,
+        EntryVersion version,
+        CancellationToken cancellationToken)
+    {
+        return new InFlightOperation(
+            this,
+            inFlightKey,
+            token => CreateAndStoreBoxedAsync(
+                    key,
+                    state,
+                    underlyingDataCallback,
+                    options,
+                    tags,
+                    version,
+                    token).AsTask());
+    }
+
+    private async ValueTask<object?> CreateAndStoreBoxedAsync<TState, T>(
+        string key,
+        TState state,
+        Func<TState, CancellationToken, ValueTask<T>> underlyingDataCallback,
+        HybridCacheEntryOptions? options,
+        string[] tags,
+        EntryVersion version,
+        CancellationToken cancellationToken)
+        => await CreateAndStoreAsync(
+            key,
+            state,
+            underlyingDataCallback,
+            options,
+            tags,
+            version,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async ValueTask<T> AwaitInFlightAsync<T>(
+        InFlightOperation operation,
+        CancellationToken cancellationToken)
+    {
+        using InFlightCallerLease _ = operation.AddCaller();
+        object? value = await operation.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return (T)value!;
+    }
+
+    private void RemoveInFlight(InFlightKey key, InFlightOperation operation)
+    {
+        ICollection<KeyValuePair<InFlightKey, InFlightOperation>> entries = _inFlight;
+        if (entries.Remove(new KeyValuePair<InFlightKey, InFlightOperation>(key, operation)))
+        {
+            operation.Dispose();
+        }
     }
 
     private bool IsInvalidated(CacheEntry entry)
@@ -313,4 +389,87 @@ internal sealed class LibDbAotHybridCache : HybridCache
     private sealed record EntryVersion(
         long GlobalVersion,
         IReadOnlyDictionary<string, long> TagVersions);
+
+    private readonly record struct InFlightKey(string Key, Type ValueType);
+
+    private sealed class InFlightOperation : IDisposable
+    {
+        private readonly CancellationTokenSource _sharedCancellation = new();
+        private readonly Lazy<Task<object?>> _task;
+        private int _callerCount;
+        private int _disposed;
+
+        public InFlightOperation(
+            LibDbAotHybridCache owner,
+            InFlightKey key,
+            Func<CancellationToken, Task<object?>> factory)
+        {
+            _task = new Lazy<Task<object?>>(
+                () =>
+                {
+                    Task<object?> task = factory(_sharedCancellation.Token);
+                    _ = task.ContinueWith(
+                        static (_, cleanupState) =>
+                        {
+                            var state = ((LibDbAotHybridCache Owner, InFlightKey Key, InFlightOperation Operation))cleanupState!;
+                            state.Owner.RemoveInFlight(state.Key, state.Operation);
+                        },
+                        (owner, key, this),
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+
+                    return task;
+                },
+                LazyThreadSafetyMode.ExecutionAndPublication);
+        }
+
+        public Task<object?> Task => _task.Value;
+
+        public bool IsCompleted => _task.IsValueCreated && _task.Value.IsCompleted;
+
+        public InFlightCallerLease AddCaller()
+        {
+            Interlocked.Increment(ref _callerCount);
+            return new InFlightCallerLease(this);
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _sharedCancellation.Dispose();
+            }
+        }
+
+        internal void ReleaseCaller()
+        {
+            if (Interlocked.Decrement(ref _callerCount) == 0 &&
+                Volatile.Read(ref _disposed) == 0 &&
+                _task.IsValueCreated &&
+                !_task.Value.IsCompleted)
+            {
+                try
+                {
+                    _sharedCancellation.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+    }
+
+    private readonly struct InFlightCallerLease : IDisposable
+    {
+        private readonly InFlightOperation _operation;
+
+        public InFlightCallerLease(InFlightOperation operation)
+        {
+            _operation = operation;
+        }
+
+        public void Dispose()
+            => _operation.ReleaseCaller();
+    }
 }

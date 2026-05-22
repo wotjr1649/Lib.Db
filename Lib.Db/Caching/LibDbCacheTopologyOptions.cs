@@ -12,3 +12,5 @@ internal sealed class LibDbCacheTopologyOptions
     public ISet<string> TrustedProviderTypeNames { get; } =
         new HashSet<string>(StringComparer.Ordinal);
 }
+
+internal sealed record LibDbTrustedDistributedCacheProvider(string ProviderTypeName);

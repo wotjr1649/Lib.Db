@@ -38,6 +38,8 @@ public sealed class VerificationEntryPointTests
         testScript.Should().Contain("'dotnet'");
         testScript.Should().Contain("'test'");
         testScript.Should().Contain("Write-SecretSafeEnvironmentSummary");
+        testScript.Should().Contain("SkipTestEnvGuard");
+        testScript.Should().Contain("[Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')");
     }
 
     [Fact]
@@ -464,6 +466,8 @@ public sealed class VerificationEntryPointTests
         project.Should().Contain("LIBDB_TEST_SQL_PASSWORD");
         project.Should().Contain("Invoke-Tests.ps1");
         project.Should().Contain("LIBDB_SKIP_TEST_ENV_GUARD");
+        project.Should().Contain("-SkipTestEnvGuard");
+        project.Should().NotContain("-p:LIBDB_SKIP_TEST_ENV_GUARD=true");
     }
 
     [Fact]
@@ -491,6 +495,12 @@ public sealed class VerificationEntryPointTests
         combined.Should().Contain("Invoke-Verification.ps1");
         combined.Should().Contain("LIBDB_TEST_SQL_PASSWORD");
         combined.Should().NotContain("dotnet test");
+        combined.Should().Contain("id-token: write");
+        combined.Should().Contain("NuGet/login@v1");
+        combined.Should().Contain("secrets.NUGET_USER");
+        combined.Should().Contain("--api-key \"$NUGET_API_KEY\"");
+        combined.Should().NotContain("--api-key ${{ secrets.NUGET_API_KEY }}");
+        combined.Should().NotContain("secrets.NUGET_API_KEY");
     }
 
     private static DirectoryInfo FindRepoRoot()

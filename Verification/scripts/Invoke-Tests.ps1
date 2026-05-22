@@ -13,6 +13,7 @@ param(
     [string] $ResultsDirectory,
     [switch] $NoRestore,
     [switch] $NoBuild,
+    [switch] $SkipTestEnvGuard,
     [ValidateSet('quiet', 'minimal', 'normal', 'detailed', 'diagnostic')]
     [string] $Verbosity = 'minimal',
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -208,6 +209,7 @@ foreach ($argument in $AdditionalArguments) {
 Write-Host 'Lib.Db test run started.'
 Write-Host "Target=$Target"
 Write-Host "Configuration=$Configuration"
+Write-Host "SkipTestEnvGuard=$($SkipTestEnvGuard.IsPresent)"
 if (-not [string]::IsNullOrWhiteSpace($Filter)) {
     Write-Host "Filter=$Filter"
 }
@@ -224,6 +226,18 @@ if (-not [string]::IsNullOrWhiteSpace($FilterQuery)) {
     Write-Host "FilterQuery=$FilterQuery"
 }
 
-Write-SecretSafeEnvironmentSummary
-Invoke-Checked 'dotnet' $dotnetArguments.ToArray()
+$savedSkipGuard = [Environment]::GetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD')
+if ($SkipTestEnvGuard) {
+    [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')
+}
+
+try {
+    Write-SecretSafeEnvironmentSummary
+    Invoke-Checked 'dotnet' $dotnetArguments.ToArray()
+}
+finally {
+    if ($SkipTestEnvGuard) {
+        [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', $savedSkipGuard)
+    }
+}
 Write-Host 'Lib.Db test run completed.'

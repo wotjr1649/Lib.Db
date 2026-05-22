@@ -19,6 +19,7 @@ using Lib.Db.Hosting;
 using Lib.Db.Schema;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -216,6 +217,31 @@ public static class LibDbServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Host-owned custom <see cref="IDistributedCache"/> provider를 Lib.Db L2 topology에서 검증된 provider로 표시합니다.
+    /// </summary>
+    /// <remarks>
+    /// 이 메서드는 provider를 등록하거나 생성하지 않습니다. 애플리케이션이 이미 등록한 외부 L2 provider를
+    /// 명시적으로 신뢰할 때만 호출하세요. 기본값은 unknown provider를 검증되지 않은 L2로 취급하는 fail-closed 동작입니다.
+    /// </remarks>
+    public static IServiceCollection AddLibDbTrustedDistributedCacheProvider<TProvider>(
+        this IServiceCollection services)
+        where TProvider : class, IDistributedCache
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        string providerTypeName = GetProviderTypeName(typeof(TProvider));
+        if (!services.Any(descriptor =>
+                descriptor.ServiceType == typeof(LibDbTrustedDistributedCacheProvider) &&
+                descriptor.ImplementationInstance is LibDbTrustedDistributedCacheProvider trustedProvider &&
+                string.Equals(trustedProvider.ProviderTypeName, providerTypeName, StringComparison.Ordinal)))
+        {
+            services.AddSingleton(new LibDbTrustedDistributedCacheProvider(providerTypeName));
+        }
+
+        return services;
+    }
+
+    /// <summary>
     /// Polly Resilience 파이프라인을 등록합니다.
     /// <para>
     /// CircuitBreaker + Retry + Timeout 조합으로 DB 연결 안정성을 확보합니다.
@@ -369,6 +395,13 @@ public static class LibDbServiceCollectionExtensions
             // 일부 제한된 환경에서는 설정 불가 (무시)
         }
     }
+
+    private static string GetProviderTypeName(Type providerType)
+        => string.IsNullOrWhiteSpace(providerType.AssemblyQualifiedName)
+            ? string.IsNullOrWhiteSpace(providerType.FullName)
+                ? providerType.Name
+                : providerType.FullName!
+            : providerType.AssemblyQualifiedName!;
 
     #endregion
 }

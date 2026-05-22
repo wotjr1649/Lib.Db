@@ -7,6 +7,7 @@
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.IntegrationTests.Infrastructure;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Lib.Db.IntegrationTests.Unit;
@@ -68,6 +69,35 @@ public sealed class HealthCheckRegistrationTests
         factory.LastInstanceName.Should().Be("Primary");
     }
 
+    [Fact]
+    public async Task AddLibDbHealthCheck_ShouldReportTrustedCustomDistributedCacheAsVerifiedL2()
+    {
+        ServiceCollection services = new();
+        services.AddLogging();
+        services.AddSingleton<IDbConnectionFactory, RecordingConnectionFactory>();
+        services.AddSingleton<IDistributedCache, RecordingDistributedCache>();
+        services.AddLibDbTrustedDistributedCacheProvider<RecordingDistributedCache>();
+        services.AddSingleton(new LibDbOptions
+        {
+            ConnectionStrings = new Dictionary<string, string>
+            {
+                ["Default"] = TestConnectionStrings.Placeholder("LIBDB_HEALTH_TRUSTED_CACHE_TEST")
+            },
+            ConnectionStringNames = ["Default"],
+            HealthCheckThrottleSeconds = 1
+        });
+        services.AddHealthChecks().AddLibDbHealthCheck();
+
+        using ServiceProvider provider = services.BuildServiceProvider();
+        HealthCheckService service = provider.GetRequiredService<HealthCheckService>();
+
+        HealthReport report = await service.CheckHealthAsync(TestContext.Current.CancellationToken);
+
+        HealthReportEntry entry = report.Entries["sql_db"];
+        entry.Data["libdb.cache.has_verified_provider_l2"].Should().Be(true);
+        entry.Data["libdb.cache.warnings"].Should().BeEquivalentTo(Array.Empty<string>());
+    }
+
     private sealed class RecordingConnectionFactory : IDbConnectionFactory
     {
         public string? LastInstanceName { get; private set; }
@@ -84,6 +114,46 @@ public sealed class HealthCheckRegistrationTests
 
         public void UnregisterAdHocInstance(string instanceName)
         {
+        }
+    }
+
+    private sealed class RecordingDistributedCache : IDistributedCache
+    {
+        private readonly Dictionary<string, byte[]> _values = new(StringComparer.Ordinal);
+
+        public byte[]? Get(string key)
+            => _values.TryGetValue(key, out byte[]? value) ? value : null;
+
+        public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
+            => Task.FromResult(Get(key));
+
+        public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
+            => _values[key] = value;
+
+        public Task SetAsync(
+            string key,
+            byte[] value,
+            DistributedCacheEntryOptions options,
+            CancellationToken token = default)
+        {
+            Set(key, value, options);
+            return Task.CompletedTask;
+        }
+
+        public void Refresh(string key)
+        {
+        }
+
+        public Task RefreshAsync(string key, CancellationToken token = default)
+            => Task.CompletedTask;
+
+        public void Remove(string key)
+            => _values.Remove(key);
+
+        public Task RemoveAsync(string key, CancellationToken token = default)
+        {
+            Remove(key);
+            return Task.CompletedTask;
         }
     }
 }

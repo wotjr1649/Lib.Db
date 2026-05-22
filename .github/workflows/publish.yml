@@ -64,15 +64,15 @@ jobs:
     - name: Verify required secrets
       shell: bash
       env:
-        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        NUGET_USER: ${{ secrets.NUGET_USER }}
       run: |
         set -euo pipefail
         if [[ -z "${LIBDB_TEST_SQL_PASSWORD}" ]]; then
           echo "ERROR: LIBDB_TEST_SQL_PASSWORD secret is required for release verification." >&2
           exit 1
         fi
-        if [[ -z "${NUGET_API_KEY}" ]]; then
-          echo "ERROR: NUGET_API_KEY secret is required for package publishing." >&2
+        if [[ -z "${NUGET_USER}" ]]; then
+          echo "ERROR: NUGET_USER secret is required for NuGet Trusted Publishing." >&2
           exit 1
         fi
 
@@ -148,5 +148,19 @@ jobs:
           -p:PackageVersion=${{ steps.version.outputs.version }} \
           -p:Version=${{ steps.version.outputs.version }}
 
+    - name: NuGet login
+      uses: NuGet/login@v1
+      id: nuget-login
+      with:
+        user: ${{ secrets.NUGET_USER }}
+
     - name: Push to NuGet
-      run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      shell: bash
+      env:
+        NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+      run: |
+        set -euo pipefail
+        dotnet nuget push ./nupkgs/*.nupkg \
+          --api-key "$NUGET_API_KEY" \
+          --source https://api.nuget.org/v3/index.json \
+          --skip-duplicate

@@ -63,8 +63,8 @@ public static class LibDbHealthCheckExtensions
 
         private readonly IDbConnectionFactory _connFactory;
         private readonly LibDbOptions _options;
+        private readonly IServiceProvider _services;
         private readonly IDistributedCache? _cache;
-        private readonly LibDbCacheTopologyOptions? _cacheTopologyOptions;
         private readonly SemaphoreSlim _checkGate = new(1, 1);
 
         public ThrottledDbHealthCheck(
@@ -74,8 +74,8 @@ public static class LibDbHealthCheckExtensions
         {
             _connFactory = connFactory;
             _options = options;
+            _services = services;
             _cache = services.GetService<IDistributedCache>();
-            _cacheTopologyOptions = services.GetService<LibDbCacheTopologyOptions>();
             // LibDbOptions.HealthCheckThrottleSeconds 설정값 반영 (기본 1초)
             _throttleTicks = TimeSpan.FromSeconds(options.HealthCheckThrottleSeconds).Ticks;
             _lastResult = HealthCheckResult.Healthy("Initial State", GetCacheDiagnosticData());
@@ -130,7 +130,7 @@ public static class LibDbHealthCheckExtensions
 
         private IReadOnlyDictionary<string, object> GetCacheDiagnosticData()
         {
-            LibDbCacheTopologyState topology = LibDbCacheTopologyDetector.Detect(_cache, _cacheTopologyOptions);
+            LibDbCacheTopologyState topology = LibDbCacheTopologyDetector.Detect(_services);
             LibDbCacheTopologySnapshot snapshot = LibDbCacheTopologyDiagnostics.CreateSnapshot(
                 topology,
                 sharedMemoryEnabled: _options.EnableSharedMemoryCache is true,

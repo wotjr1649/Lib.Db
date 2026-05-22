@@ -138,6 +138,7 @@ public sealed class ServiceRegistrationHelpersTests
     public async Task AddLibDbSharedMemoryCache_ShouldRejectProviderAddedAfterOptIn_WhenHostStarts()
     {
         HostApplicationBuilder builder = Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders();
         AddOptions(builder.Services, CreateOptions(enableSharedMemoryCache: true));
         builder.Services.AddLibDbSharedMemoryCache();
         builder.Services.AddSingleton<IDistributedCache>(new RecordingDistributedCache());

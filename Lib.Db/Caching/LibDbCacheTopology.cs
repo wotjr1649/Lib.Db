@@ -38,8 +38,22 @@ internal static class LibDbCacheTopologyDetector
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
 
-        LibDbCacheTopologyOptions options =
-            serviceProvider.GetService<LibDbCacheTopologyOptions>() ?? new LibDbCacheTopologyOptions();
+        LibDbCacheTopologyOptions options = new();
+        LibDbCacheTopologyOptions? registeredOptions =
+            serviceProvider.GetService<LibDbCacheTopologyOptions>();
+        if (registeredOptions is not null)
+        {
+            foreach (string trustedProviderTypeName in registeredOptions.TrustedProviderTypeNames)
+            {
+                options.TrustedProviderTypeNames.Add(trustedProviderTypeName);
+            }
+        }
+
+        foreach (LibDbTrustedDistributedCacheProvider trustedProvider in
+            serviceProvider.GetServices<LibDbTrustedDistributedCacheProvider>())
+        {
+            options.TrustedProviderTypeNames.Add(trustedProvider.ProviderTypeName);
+        }
 
         return Detect(serviceProvider.GetService<IDistributedCache>(), options);
     }
@@ -56,6 +70,7 @@ internal static class LibDbCacheTopologyDetector
         string providerTypeName = string.IsNullOrWhiteSpace(cacheType.FullName)
             ? cacheType.Name
             : cacheType.FullName!;
+        string? providerAssemblyQualifiedName = cacheType.AssemblyQualifiedName;
 
         return cache switch
         {
@@ -70,7 +85,9 @@ internal static class LibDbCacheTopologyDetector
                 HasVerifiedProviderBackedL2: false),
 
             _ when IsKnownProvider(providerTypeName) ||
-                options.TrustedProviderTypeNames.Contains(providerTypeName) => new(
+                options.TrustedProviderTypeNames.Contains(providerTypeName) ||
+                (providerAssemblyQualifiedName is not null &&
+                    options.TrustedProviderTypeNames.Contains(providerAssemblyQualifiedName)) => new(
                 LibDbCacheTopologyKind.VerifiedProviderBackedL2,
                 providerTypeName,
                 HasVerifiedProviderBackedL2: true),
