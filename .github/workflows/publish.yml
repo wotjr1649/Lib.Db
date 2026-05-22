@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   build-and-publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     services:
       sqlserver:
@@ -28,6 +29,32 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Enforce main tag release
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+          echo "ERROR: NuGet publish workflow must be triggered by a tag ref." >&2
+          exit 1
+        fi
+        if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "ERROR: NuGet publish tag '${GITHUB_REF_NAME}' is not a supported v-prefixed SemVer tag." >&2
+          exit 1
+        fi
+
+        git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+        tag_target="$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+        if ! git merge-base --is-ancestor "${tag_target}" origin/main; then
+          echo "ERROR: NuGet publish is allowed only for tags whose target commit is contained in origin/main." >&2
+          echo "Tag: ${GITHUB_REF_NAME}" >&2
+          echo "Tag target: ${tag_target}" >&2
+          exit 1
+        fi
+
+        echo "NuGet release tag ${GITHUB_REF_NAME} is on origin/main."
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4

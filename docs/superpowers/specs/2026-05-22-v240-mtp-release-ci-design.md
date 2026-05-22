@@ -28,8 +28,9 @@ PR #9는 xUnit v3 native Microsoft.Testing.Platform(MTP) 실행 가능성을 spi
 2. `Invoke-Tests.ps1`를 MTP 친화 CLI wrapper로 바꿔 VSTest-only 인자 사용을 줄인다.
 3. `Invoke-Coverage.ps1`를 MTP Code Coverage 경로로 전환하되 기존 Cobertura gate와 reportgenerator 흐름은 유지한다.
 4. Microsoft Code Coverage와 Coverlet의 Cobertura class naming/branch 해석 차이를 gate와 테스트로 흡수한다.
-5. GitHub Actions publish workflow가 MTP release gate 산출물을 업로드하고, secret/artifact guard를 유지한다.
-6. zero-test 성공, verification 환경 guard 우회, artifact secret 노출을 release blocker로 취급한다.
+5. GitHub Actions publish workflow는 tag push이면서 tag 대상 커밋이 `origin/main`에 포함될 때만 NuGet 배포를 진행한다.
+6. 별도 release verification workflow는 PR/수동 실행에서 같은 release gate를 실행하되 NuGet 배포를 절대 수행하지 않는다.
+7. zero-test 성공, verification 환경 guard 우회, artifact secret 노출을 release blocker로 취급한다.
 
 ## 비목표
 
@@ -74,10 +75,20 @@ PR #9는 xUnit v3 native Microsoft.Testing.Platform(MTP) 실행 가능성을 spi
 
 `.github/workflows/publish.yml`는 기존 publish 흐름을 유지하되 release verification 산출물을 보존한다.
 
+- workflow trigger는 `push.tags: v*`만 유지한다.
+- job-level `if`와 `Enforce main tag release` step으로 tag ref인지 재확인한다.
+- `actions/checkout`는 `fetch-depth: 0`으로 실행하고, `origin/main`을 fetch한 뒤 tag target commit이 `origin/main`의 ancestor인지 검사한다.
 - `Run v2.4.0 release gate`는 기존 `Invoke-Verification.ps1 -BenchmarkJob Short`를 유지하되 내부가 MTP로 동작한다.
 - verification 후 `actions/upload-artifact@v4`를 `if: always()`로 추가한다.
 - 업로드 경로는 `Verification/artifacts/**`로 제한한다.
 - `if-no-files-found: warn`, `retention-days: 7`을 사용한다.
+
+`.github/workflows/release-verification.yml`는 배포 없는 검증 workflow다.
+
+- trigger는 `pull_request`와 `workflow_dispatch`만 둔다.
+- `NUGET_API_KEY`를 요구하거나 참조하지 않는다.
+- SQL Server service와 verification secret만 사용해 `Invoke-Verification.ps1 -BenchmarkJob Short`를 실행한다.
+- 실패 시에도 `Verification/artifacts/**`만 업로드한다.
 
 ## 보안/릴리스 무결성 규칙
 

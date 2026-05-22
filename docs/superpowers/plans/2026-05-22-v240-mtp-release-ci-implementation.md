@@ -247,8 +247,39 @@ Expected: Cobertura file is produced, reportgenerator runs, coverage gate passes
 
 **Files:**
 - Modify: `.github/workflows/publish.yml`
+- Create: `.github/workflows/release-verification.yml`
 
-- [ ] **Step 1: Add verification artifact upload**
+- [ ] **Step 1: Add main-tag publish guard**
+
+Update `actions/checkout` and add a guard before setup:
+
+```yaml
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Enforce main tag release
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+          echo "ERROR: NuGet publish workflow must be triggered by a tag ref." >&2
+          exit 1
+        fi
+        if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "ERROR: NuGet publish tag '${GITHUB_REF_NAME}' is not a supported v-prefixed SemVer tag." >&2
+          exit 1
+        fi
+
+        git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+        tag_target="$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+        if ! git merge-base --is-ancestor "${tag_target}" origin/main; then
+          echo "ERROR: NuGet publish is allowed only for tags whose target commit is contained in origin/main." >&2
+          exit 1
+        fi
+```
+
+- [ ] **Step 2: Add verification artifact upload**
 
 After the release gate step, add:
 
@@ -263,7 +294,11 @@ After the release gate step, add:
         retention-days: 7
 ```
 
-- [ ] **Step 2: Keep publish credentials unchanged**
+- [ ] **Step 3: Add non-publishing release verification workflow**
+
+Create `.github/workflows/release-verification.yml` with `pull_request` and `workflow_dispatch` triggers. It must run restore, tool restore, `Invoke-Verification.ps1 -BenchmarkJob Short`, and artifact upload. It must not reference `NUGET_API_KEY` or call `dotnet nuget push`.
+
+- [ ] **Step 4: Keep publish credentials unchanged**
 
 Do not change `NUGET_API_KEY`, `LIBDB_TEST_SQL_PASSWORD`, SQL Server service configuration, or NuGet push command.
 
