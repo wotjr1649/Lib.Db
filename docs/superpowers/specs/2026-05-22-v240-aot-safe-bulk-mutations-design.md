@@ -196,6 +196,27 @@ Each `BulkColumn<T>` contains:
 - shape-build-time value converter selected from the static `TValue` and `SqlDbType`.
 
 Value conversion is shape metadata, not row-time type discovery. `DateOnly`, `TimeOnly`, and enum conversion rules must be fixed when the shape is built so the reader does not call `value.GetType()` or `Enum.GetUnderlyingType(...)` for every row.
+Shape construction also validates that the static CLR `TValue` is compatible
+with the declared `SqlDbType`. Examples: `DateOnly` maps to `SqlDbType.Date`
+only, `TimeOnly`/`TimeSpan` map to `SqlDbType.Time`, `Guid` maps to
+`SqlDbType.UniqueIdentifier`, strings map only to `NVarChar`/`VarChar`,
+`byte[]` maps only to `VarBinary`, and enums must map to the SQL integer type
+matching their underlying type. Incompatible CLR/SQL type pairs fail before
+`SqlBulkCopy` sees a reader row.
+
+`SqlDbType.Decimal` is the exception to the "optional" precision/scale wording:
+decimal bulk columns must declare both precision and scale explicitly, precision
+must be between 1 and 38, and scale must not exceed precision. The stage SQL
+renderer must never silently fall back to `decimal(18,0)`, because that can round
+or truncate data before the application sees a failure.
+
+Length and temporal metadata are also validated before any database connection
+opens. `nvarchar` accepts `null` size for `max` or an explicit size from 1 to
+4,000. `varchar` and `varbinary` accept `null` size for `max` or an explicit
+size from 1 to 8,000. `time`, `datetime2`, and `datetimeoffset` accept `null`
+scale for the SQL Server default or an explicit scale from 0 to 7. Invalid
+non-null size/scale metadata fails during shape construction rather than after
+stage DDL generation or `SqlBulkCopy` startup.
 
 Shape validation:
 
@@ -206,12 +227,14 @@ Shape validation:
 - no empty or invalid destination column names,
 - key columns must also be included in the staging table,
 - mutation key columns are treated as non-null operational keys; null key values are rejected before DML,
+- mutation key columns must be indexable by SQL Server's staging unique index: no `nvarchar(max)`, `varchar(max)`, or `varbinary(max)` key columns, no more than 32 key columns, and conservative declared key width no greater than 900 bytes. The 900-byte portability limit is intentional for v2.4.0 so Lib.Db does not depend on SQL Server version-specific expanded nonclustered index key limits before it has opened a connection.
 - delete operations stage key columns only unless merge options require action-specific data,
 - nullable `false` columns reject null values before SQL Server sees them.
 
 Key uniqueness contract:
 
 - Source rows for update/delete/upsert/merge must contain no duplicate key tuples. The implementation enforces this by creating a unique index on the local staging table key columns after `SqlBulkCopy` loads the stage and before any target DML executes.
+- Lib.Db validates the stage-key shape before staged operations so unsupported key metadata fails predictably instead of surfacing as a late SQL Server index-creation error. This deliberately rejects some wide string/binary key shapes that newer SQL Server versions might otherwise index; callers should use database-backed narrow keys or app-owned hashed/surrogate keys for bulk mutation joins.
 - Target key columns must be backed by a database-enforced `PRIMARY KEY` or `UNIQUE` constraint/index owned by the application schema. v2.4.0 documents this as a caller/database contract and does not run default metadata probes against `sys.indexes` before each bulk mutation.
 - The staging unique index must not use `IGNORE_DUP_KEY`; duplicate source keys fail the operation and roll back the whole transaction.
 
@@ -252,7 +275,7 @@ For insert:
 - `SqlBulkCopy` can receive the local `SqlTransaction`.
 - Insert failures roll back when `UseTransaction = true` and the failure occurs before final commit begins. Commit-outcome ambiguity after commit begins remains a provider/database reality and must not be reported as a guaranteed rollback.
 - `UseTransaction = false` is an explicit non-atomic performance opt-out for insert only. If the provider fails or cancellation arrives after rows have been sent, some rows can remain in the target table; Lib.Db must not document or test this mode as rollback-capable.
-- `CheckConstraints` defaults to `true` for the new AOT-safe options. Callers may opt out explicitly for controlled performance scenarios, but the safe release default is to keep destination constraints checked.
+- `CheckConstraints` defaults to `true` for the new AOT-safe options. Callers may opt out explicitly for controlled performance scenarios, but the safe release default is to keep destination constraints checked. Release tests must prove this with a real SQL Server `CHECK` constraint failure, not only with an options object assertion.
 
 For update/delete/upsert/merge:
 
@@ -285,6 +308,21 @@ table and then mutate target rows. Allowing them to run without one transaction
 would create partial-write states that are hard to reason about and easy to
 misdocument, so v2.4.0 rejects that mode instead of downgrading guarantees.
 
+`BulkWriteOptions` contains several `SqlBulkCopyOptions`-style flags. Their
+meaning depends on the operation phase:
+
+- For direct `BulkInsertAsync`, `FireTriggers`, `CheckConstraints`, and
+  `KeepIdentity` apply to the user destination table because `SqlBulkCopy` writes
+  directly into that table.
+- For staged update/delete/upsert/merge, `SqlBulkCopy` writes only into the
+  generated local temp table. The user target table is changed by ordinary
+  SQL Server DML, so target constraints and triggers follow normal SQL Server
+  DML semantics, and Lib.Db does not enable target `IDENTITY_INSERT`.
+- To prevent callers from misunderstanding those flags as target-DML controls,
+  staged update/delete/upsert/merge reject `FireTriggers = true`,
+  `KeepIdentity = true`, and `CheckConstraints = false` before opening a
+  connection.
+
 ## Staging Table Model
 
 For update/delete/upsert/merge, the engine creates a local temp table such as:
@@ -301,7 +339,7 @@ CREATE TABLE #LibDbBulk_0123456789abcdef (
 
 The temp table exists only on the current connection. It is not visible cross-session, and it disappears when the connection closes. The implementation still attempts an explicit `DROP TABLE` on the success and failure paths for clean resource usage.
 
-SQL type rendering is generated from `SqlDbType`, size, precision, scale, and nullability. Unsupported types fail during shape construction or shape validation before any connection is opened, instead of producing partially valid SQL or failing after `SqlBulkCopy` starts.
+SQL type rendering is generated from `SqlDbType`, size, precision, scale, and nullability. Unsupported types fail during shape construction or shape validation before any connection is opened, instead of producing partially valid SQL or failing after `SqlBulkCopy` starts. Decimal rendering must use the explicit shape metadata exactly, for example `decimal(19,4)`, after shape validation has guaranteed precision and scale are present.
 
 For mutation operations, the engine creates a unique index on the stage key columns after stage loading:
 
@@ -379,6 +417,11 @@ WHERE NOT EXISTS (
 
 Rejecting `DeleteNotMatchedBySource` in v2.4.0 is intentional. It is easy for a caller to delete too much data if the source is incomplete. That operation needs a separate bounded target predicate design and more review.
 
+The default merge path must have its own integration test. A passing
+`BulkUpsertAsync` update+insert test does not prove that the public
+`BulkMergeAsync` default actions, separated counts, and validation pipeline are
+wired correctly.
+
 ## Result Model
 
 Single-action APIs return `DbResult<long>`.
@@ -408,6 +451,21 @@ Bulk mutation methods follow the existing `DbResult<T>` pattern:
 - validation errors fail before opening a connection where possible,
 - SQL errors are redacted through existing diagnostic/error infrastructure,
 - cancellation attempts rollback before propagating as cancellation, not a successful zero-row operation.
+
+Bulk mutation public results must be redacted even when SQL Server raises a
+provider exception. The implementation may use the existing `DbErrorMapper` for
+classification, but the public `DbError` returned from AOT-safe bulk operations
+must:
+
+- use a generic bulk failure message,
+- contain only the sanitized destination object name,
+- preserve classification fields such as kind, SQL error code, severity, and transient flag where safe,
+- set `InnerException = null`,
+- send raw provider exception details only through the existing redacted diagnostics path.
+
+This is stricter than some existing non-bulk paths because bulk-copy/provider
+errors can contain object details, row payload context, or provider state in
+`Exception.ToString()`.
 
 Validation errors should be explicit and actionable:
 
@@ -472,7 +530,13 @@ Required unit tests:
 - table identifiers reject unsafe bracket syntax, whitespace around multipart separators, and parts longer than 128 characters,
 - options reject invalid batch size and timeout.
 - options expose `CheckConstraints = true` as the default.
+- decimal columns reject missing or invalid precision/scale, and stage SQL renders only explicit decimal precision/scale.
+- string/binary columns reject out-of-range non-null sizes, and temporal columns reject scale values outside SQL Server's 0..7 range before any connection opens.
+- CLR getter type and declared `SqlDbType` compatibility is validated during shape construction.
+- stage-key index metadata rejects max-length key columns, more than 32 key columns, and declared key widths over the 900-byte portability limit.
 - `BulkMergeOptions` rejects `DeleteNotMatchedBySource` even when referenced as `BulkWriteOptions`.
+- `BulkMergeOptions` rejects unknown flag bits instead of silently ignoring them.
+- public `BulkMergeAsync` calls `BulkMergeOptions.Validate()` before opening a connection so unknown flag bits cannot bypass direct option validation tests.
 - `BulkMergeOptions` rejects `DeleteMatched` combined with `UpdateMatched` or `InsertMissing`.
 - source duplicate key tuples are rejected through the stage unique index before target DML.
 - delete uses a key-only staging shape and does not attempt to bulk-copy non-key columns into a key-only temp table.
@@ -485,10 +549,13 @@ Required integration tests:
 - update changes only matching rows,
 - delete removes only matching keys,
 - upsert updates matched and inserts missing rows,
-- merge update+insert path returns separated counts,
+- merge default update+insert path returns separated counts,
 - merge delete-matched path deletes only staged keys,
+- default `CheckConstraints = true` rejects a row that violates a verification-table `CHECK` constraint and leaves target rows unchanged,
+- SQL Server bulk failures return a redacted failed `DbResult<T>` without public `InnerException`,
 - update/delete/upsert/merge failure and cancellation tests prove rollback after target DML has started,
 - update/delete/upsert/merge reject `UseTransaction = false` before opening a connection,
+- update/delete/upsert/merge reject staged-inapplicable direct-bulk-copy flags before opening a connection: `FireTriggers = true`, `KeepIdentity = true`, and `CheckConstraints = false`,
 - insert `UseTransaction = false` has a non-atomic opt-out test or doc assertion that does not promise rollback,
 - success tests assert final target row values and missing rows, not only affected-row counts,
 - invalid destination table returns a failed `DbResult`,
@@ -499,7 +566,7 @@ Required integration tests:
 Required AOT checks:
 
 - AOT verification project references the shape API and the public AOT-safe bulk overloads.
-- AOT smoke creates a shape with at least one enum column, reads values through the new reader, verifies that the enum value is normalized through shape metadata without row-time type discovery, and roots the public bulk overload/executor path enough for publish-time AOT analysis to inspect it without requiring a live database.
+- AOT smoke creates a shape with at least one enum column, reads values through the new reader, verifies that the enum value is normalized through shape metadata without row-time type discovery, and roots the concrete public bulk overload/executor path enough for publish-time AOT analysis to inspect it without requiring a live database. Interface delegate creation alone is not sufficient; the smoke must directly reach the final `DbSession`/bulk executor implementation or an internal no-DB executor probe selected during implementation.
 - Publish output has no new Lib.Db AOT or trim warnings beyond the existing baseline.
 - Static gates reject `RequiresDynamicCode`, `IL3050`, `MakeGenericType`, `Expression.Compile`, `DynamicMethod`, and `Reflection.Emit` in the new AOT-safe bulk path.
 
@@ -528,8 +595,13 @@ This feature is acceptable for v2.4.0 only if these constraints hold:
 - identifier validation enforces malformed-bracket rejection, separator-whitespace rejection, and 128-character table/column part limits,
 - all staged mutation operations run in one local transaction by default,
 - staged mutation operations reject `UseTransaction = false` in v2.4.0,
+- staged mutation operations reject direct-bulk-copy destination flags that do not control target DML semantics,
 - insert `UseTransaction = false` is explicitly documented as non-atomic and outside rollback guarantees,
 - rollback failure cannot replace the primary public failure,
+- public SQL/general bulk failures are redacted and do not retain raw provider exceptions as `DbError.InnerException`,
+- decimal precision/scale is explicit and cannot silently default to `decimal(18,0)`,
+- invalid string/binary size metadata and invalid temporal scale metadata are covered by shape tests,
+- incompatible CLR/SQL type pairs, stage-key index metadata limits, and unknown merge action bits are covered by tests, including a public `BulkMergeAsync` unknown-bit test that fails before connection open,
 - cancellation rollback is guaranteed only before final commit begins, and final commit is non-cancelable from the caller token,
 - release verification passes from a clean environment and leaves a durable, non-empty, post-scanned, ignored/untracked, secret-safe audit log.
 

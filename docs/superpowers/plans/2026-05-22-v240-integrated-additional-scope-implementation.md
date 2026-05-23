@@ -1,6 +1,6 @@
 # Lib.Db v2.4.0 Integrated Additional Scope Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED WORKFLOW: implement this plan task-by-task with `superpowers:subagent-driven-development` when work can be split safely, or `superpowers:executing-plans` for sequential inline execution. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Complete the five adopted v2.4.0 additional-scope items without expanding Lib.Db core into an ORM, migration engine, or change tracker.
 
@@ -30,6 +30,26 @@ Sub-plan:
 - Do not add SQL Server `MERGE` as the default bulk engine.
 - Do not add a core ORM or change tracker.
 - Do not print secrets, raw connection strings, raw cache payloads, or row values.
+
+## Integrated Agent Checkpoints
+
+Implementation agents must not run the integrated scope as one large batch. Use
+these review checkpoints regardless of whether the session is subagent-driven or
+inline/sequential:
+
+- after Task 0,
+- after Task 1,
+- after Task 2,
+- after Task 3, with the bulk sub-plan's own checkpoints completed,
+- after Task 4,
+- after Task 5,
+- after Task 6.
+
+At each checkpoint, run the targeted tests/static gate for the completed task,
+perform an inline security/code-review pass against this plan's checklist, fix
+blockers before continuing, and commit the task group or record why the
+checkpoint intentionally has no source diff. Task 3 must also preserve the bulk
+sub-plan's Task 5 handoff checkpoint before bulk Task 6 starts.
 
 ## File Structure
 
@@ -111,15 +131,15 @@ $ErrorActionPreference = 'Stop'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $log = "Verification/artifacts/logs/v240-preimplementation-release-verification-$stamp.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
-$verificationOutput = & pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *>&1
+& pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *> $log
 $exitCode = $LASTEXITCODE
-$verificationOutput | Tee-Object -FilePath $log
+Write-Output "Release verification output captured to $log. Raw output is not echoed before artifact scanning."
 $postLogExitCode = 0
 if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
     Write-Warning "Release verification log was not created or is empty: $log"
     $postLogExitCode = 1
 }
-pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths $log
+pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1
 if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
 pwsh -NoProfile -File Verification/scripts/Assert-GeneratedArtifactsUntracked.ps1
 if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
@@ -127,10 +147,13 @@ if ($exitCode -ne 0) { exit $exitCode }
 if ($postLogExitCode -ne 0) { exit $postLogExitCode }
 ```
 
-Expected: release verification passes, a non-empty log is created under
-`Verification/artifacts/logs/`, the log-specific artifact scan passes, and the
-generated-artifact tracking gate still passes. Record the log path without
-copying secret values into notes.
+Expected: release verification passes, raw verification output is captured to a
+non-empty log under `Verification/artifacts/logs/` without first echoing to the
+terminal/CI log, the repository artifact scan passes across logs/test/benchmark/
+package artifacts, and the generated-artifact tracking gate still passes. Record
+the log path without copying secret values into notes. If verification fails, do
+not print the raw log until artifact scanning has passed; record only the log
+path and sanitized failure summary.
 
 ### Task 1: HybridCache Tags Overload
 
@@ -181,7 +204,7 @@ public async Task WithHybridCacheAsync_ShouldStoreHybridCacheEntryWithTags()
 }
 ```
 
-Expected: without the tags overload this test does not compile. After implementation, the second call must return `"after"` because `RemoveByTagAsync("product")` invalidates the tagged cache entry. The `queryCalls` assertion documents that the current task-based API starts a caller-created task before cache lookup; do not change that behavior in this task.
+Expected: without the tags overload this test does not compile. After implementation, the second call must return `"after"` because `RemoveByTagAsync("product")` invalidates the tagged cache entry. The `queryCalls` assertion documents that the current task-based API starts a caller-created task before cache lookup; do not change that behavior in this task. Public docs must also state the cache-hit consequence explicitly: a cache hit can return cached data while the already-created DB task continues, faults later, or performs side effects that were triggered by task creation. v2.4.0 does not provide lazy factory semantics for this overload.
 
 - [ ] **Step 2: Write failing tag-validation tests**
 
@@ -422,6 +445,8 @@ private static InvalidOperationException CreateHybridCacheFactoryFailure()
 ```
 
 Do not copy `DbError.Message`, SQL text, object names, provider details, row values, cache payloads, connection-string fragments, raw faulted-task exception messages, inner exceptions, or tenant/user identifiers into cache factory exception messages. The cache wrapper's public failure path must use a generic message and rely on the existing redacted diagnostics path for details. The generic exception must not retain the raw provider exception as `InnerException`, because `Exception.ToString()` would expose it.
+
+Document the task-based limitation beside the new tags overload examples: callers pass an already-created `Task<DbResult<T?>>`, so Lib.Db cannot suppress task startup on cache hit and cannot reliably observe a later background fault if the cached value was returned. Callers that require true lazy data-source execution must wait for a future factory-style API instead of assuming this overload has `HybridCache.GetOrCreateAsync` factory semantics.
 
 Add normalization:
 
@@ -796,7 +821,10 @@ Expected: PASS.
 
 - [ ] **Step 1: Execute the existing AOT-safe bulk sub-plan**
 
-Run the sub-plan task-by-task. Keep commits scoped to the task groups in that plan.
+Run the sub-plan task-by-task. Keep commits scoped to the task groups in that
+plan. In integrated execution, the bulk sub-plan's Task 10 produces the
+bulk-specific documentation checklist only; this integrated plan's Task 5 owns
+the actual public docs/history/skill edits before release readiness is claimed.
 
 - [ ] **Step 2: Preserve integrated scope decisions**
 
@@ -810,6 +838,7 @@ While executing the sub-plan, verify:
 - staged mutation operations create a unique stage index to reject duplicate source key tuples before target DML.
 - staged update/delete/upsert/merge failure and cancellation tests prove rollback after target DML has started.
 - staged update/delete/upsert/merge reject `UseTransaction = false` before opening a connection.
+- staged update/delete/upsert/merge reject misleading direct-bulk-copy flags before opening a connection: `FireTriggers = true`, `KeepIdentity = true`, and `CheckConstraints = false`.
 - bulk insert `UseTransaction = false` is documented and tested as a non-atomic opt-out, not as a rollback-capable mode.
 - rollback failure preserves the original public failure and is diagnostic-only.
 - final bulk commit uses `CancellationToken.None` so caller cancellation cannot create a false canceled result after commit starts.
@@ -819,11 +848,14 @@ While executing the sub-plan, verify:
 - destination-column mapping is tested with CLR member names that differ from SQL destination column names.
 - success tests assert final target row values and missing rows, not only affected-row counts.
 - `DateOnly`, `TimeOnly`, enum, `Guid`, `decimal`, `byte[]`, and nullable values are normalized or passed through before `SqlBulkCopy` consumes rows.
+- decimal columns require explicit precision/scale and the stage renderer never silently falls back to `decimal(18,0)`.
 - enum conversion is selected from shape metadata at shape-build time, not by row-time `value.GetType()` or `Enum.GetUnderlyingType(...)`.
-- AOT smoke includes an enum column, verifies the enum is normalized through shape metadata, and roots public bulk overload/executor setup for publish-time analysis without requiring a live database.
+- AOT smoke includes an enum column, verifies the enum is normalized through shape metadata, and roots the concrete public bulk overload/executor setup for publish-time analysis without requiring a live database. Interface delegate creation alone is not accepted as reachability proof.
 - `BulkShapeDataReader<T>` tracks `IsClosed`, implements idempotent `Close()`/`Dispose(bool)`, clears current row state when `Read()` reaches EOF, throws on missing `GetOrdinal` names, reports `HasRows` as result-set presence without skipping the first row, and disposes the underlying row enumerator exactly once.
 - new AOT-safe bulk options default to `CheckConstraints = true`.
-- SQL/general failures return failed `DbResult<T>` after rollback and redaction; cancellation attempts rollback before rethrow.
+- `CheckConstraints = true` is proven with a real verification-table `CHECK` constraint failure.
+- default `BulkMergeAsync` update+insert behavior has its own separated-count integration test.
+- SQL/general failures return failed `DbResult<T>` after rollback and redaction; SQL/provider bulk failures do not expose raw exceptions through public `DbError.InnerException`; cancellation attempts rollback before rethrow.
 - New shape APIs have no `RequiresUnreferencedCode`.
 - AOT verification references the shape reader path and public bulk overload/executor reachability path.
 
@@ -923,6 +955,9 @@ Document:
 - invalid tag rejection,
 - logical invalidation,
 - local-only behavior without provider-backed L2,
+- provider-backed L2 behavior as current server plus secondary cache visibility, while clearly stating that other servers' in-memory L1 entries are not physically cleared by current-server invalidation alone,
+- Native AOT/trimming serializer caveats for HybridCache payloads; provider-backed distributed cache scenarios must use AOT-compatible serializers/source-generated metadata instead of assuming runtime reflection serialization,
+- task-based overload limitation: a caller-created DB task can start before cache lookup, and on cache hit it can still continue, fault later, or perform task-creation side effects that the cache-hit result does not observe,
 - app-owned cache key and tag dimensions.
 
 - [ ] **Step 2: Update QueryMultiple docs**
@@ -955,7 +990,12 @@ Link to the bulk mutation docs and document:
 - shape-metadata enum converter,
 - reader enumerator disposal,
 - `CheckConstraints = true` default,
+- real SQL Server `CHECK` constraint verification for the `CheckConstraints` default,
+- direct bulk-copy destination option boundaries: `FireTriggers`, `CheckConstraints`, and `KeepIdentity` apply to direct insert, while staged update/delete/upsert/merge reject misleading non-default values because target changes are ordinary SQL Server DML,
+- explicit decimal precision/scale requirements and no silent `decimal(18,0)` fallback,
 - `DbResult<T>` failure behavior after rollback,
+- SQL/provider bulk failure redaction without public `DbError.InnerException`,
+- default `BulkMergeAsync` update+insert separated-count behavior,
 - `DeleteNotMatchedBySource` exclusion.
 
 - [ ] **Step 4: Update skill guidance**
@@ -978,9 +1018,9 @@ Update `.agents/skills/lib-db/SKILL.md` with compact consumer guidance for the n
 Run:
 
 ```powershell
-$secretKeys = 'ConnectionString|Password|Pwd|User Id'
+$sensitiveMarkers = '(?i)(ConnectionString|ConnectionStrings|Password|Pwd|User Id|UID|AccessToken|ApiKey|ClientSecret|Client Secret|Bearer|SasToken|SharedAccessSignature|TokenValue|SqlParameterValue|ParameterValue|RowValue|CachePayload|PayloadValue|TenantId|UserId|EmailAddress)'
 Get-ChildItem -Path Lib.Db,Verification,docs,.agents -Recurse -File |
-    Select-String -Pattern $secretKeys |
+    Select-String -Pattern $sensitiveMarkers |
     ForEach-Object {
         [pscustomobject]@{
             Path = $_.Path
@@ -989,18 +1029,21 @@ Get-ChildItem -Path Lib.Db,Verification,docs,.agents -Recurse -File |
     } |
     Sort-Object Path,Key -Unique
 
-rg -n "MERGE|DeleteNotMatchedBySource|GetProperties|value\\.GetType\\(|RequiresUnreferencedCode|RequiresDynamicCode|IL3050|MakeGenericType|Expression\\.Compile|DynamicMethod|Reflection\\.Emit|RemoveByTagAsync|WithHybridCacheAsync|ReadMultipleAsync|BulkShape|CREATE UNIQUE INDEX|DateOnly|TimeOnly|DbResult<long>|BulkMergeOptions|CheckConstraints|Dispose\\(|Enum.GetUnderlyingType" Lib.Db Verification docs .agents
+rg -n "MERGE|DeleteNotMatchedBySource|GetProperties|value\\.GetType\\(|RequiresUnreferencedCode|RequiresDynamicCode|IL3050|MakeGenericType|Expression\\.Compile|DynamicMethod|Reflection\\.Emit|RemoveByTagAsync|WithHybridCacheAsync|ReadMultipleAsync|BulkShape|CREATE UNIQUE INDEX|DateOnly|TimeOnly|DbResult<long>|BulkMergeOptions|CheckConstraints|CHECK \\(|InnerException|decimal\\(18,0\\)|Dispose\\(|Enum.GetUnderlyingType" Lib.Db Verification docs .agents
 ```
 
 Expected:
 
-- secret scan prints only file paths and key names, never values,
+- sensitive-marker scan prints only file paths and key/marker names, never values,
+- scanner coverage includes connection strings, passwords, user-id aliases, tokens, API keys, client secrets, bearer/SAS markers, SQL parameter values, row values, cache payload values, and tenant/user identifier markers,
 - `MERGE` not used as default bulk engine,
 - `DeleteNotMatchedBySource` appears only as rejected/unsupported,
 - new AOT-safe bulk APIs do not carry `RequiresUnreferencedCode` or `RequiresDynamicCode`,
 - new AOT-safe bulk path does not use `MakeGenericType`, `Expression.Compile`, `DynamicMethod`, or `Reflection.Emit`,
 - duplicate source-key rejection, value normalization, and polymorphic merge-option validation appear in tests/docs,
-- cache tag behavior appears in tests/docs.
+- cache tag behavior appears in tests/docs,
+- HybridCache docs cover Native AOT serializer/trimming requirements and the current-server/L2 versus other-server L1 invalidation boundary,
+- bulk docs/tests cover explicit decimal precision/scale, real `CheckConstraints` constraint failures, default merge update+insert behavior, and public SQL failure redaction without `InnerException`.
 
 - [ ] **Step 2: Run targeted tests**
 
@@ -1036,15 +1079,15 @@ $ErrorActionPreference = 'Stop'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $log = "Verification/artifacts/logs/v240-release-verification-$stamp.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
-$verificationOutput = & pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *>&1
+& pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *> $log
 $exitCode = $LASTEXITCODE
-$verificationOutput | Tee-Object -FilePath $log
+Write-Output "Release verification output captured to $log. Raw output is not echoed before artifact scanning."
 $postLogExitCode = 0
 if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
     Write-Warning "Release verification log was not created or is empty: $log"
     $postLogExitCode = 1
 }
-pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths $log
+pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1
 if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
 pwsh -NoProfile -File Verification/scripts/Assert-GeneratedArtifactsUntracked.ps1
 if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
@@ -1053,11 +1096,23 @@ if ($postLogExitCode -ne 0) { exit $postLogExitCode }
 ```
 
 Expected: release-grade verification completes successfully and leaves a durable
-log under `Verification/artifacts/logs/`. The log is audit evidence only; it
-must still pass the repository's secret-scan/redaction expectations and must not
-contain connection-string, password, token, SQL parameter, row-value, or cache
-payload values. Log creation, log non-emptiness, log-specific artifact scanning,
-and generated-artifact tracking are hard failure gates.
+log under `Verification/artifacts/logs/`. Raw verification output is captured to
+the log and is not echoed to the terminal/CI log before artifact scanning. The
+log is audit evidence only; it must still pass the repository's
+secret-scan/redaction expectations and must not contain connection-string,
+password, token, SQL parameter, row-value, or cache payload values. Log creation,
+log non-emptiness, repository artifact scanning, and generated-artifact tracking
+are hard failure gates.
+
+Before trusting this gate for release, inspect or update
+`Verification/scripts/Scan-VerificationArtifacts.ps1` so its artifact scan
+covers the same broadened leak classes as the static marker scan: access tokens,
+API keys, client secrets, bearer/SAS markers, SQL parameter values, row values,
+cache payload values, and tenant/user identifier values. The scanner must print
+only file paths and marker/key names, never matched lines or matched values, and
+it must have a self-test or fixture proving a detected secret-like artifact
+fails without echoing the secret value. If scanner coverage or scanner-output
+redaction is narrower, this step fails until the scanner is broadened and rerun.
 
 - [ ] **Step 5: Final security review checklist**
 
@@ -1070,6 +1125,7 @@ Confirm:
 - duplicate cache tags are deduplicated using ordinal comparison before enforcing the 32-tag ceiling,
 - the existing HybridCache failure test has been rewritten to expect `DB query failed.` and to reject raw `DbError.Message`, SQL text, object names, row values, cache payloads, and tenant/user identifiers,
 - the faulted-task HybridCache failure path maps non-cancellation exceptions to `DB query failed.` without preserving the raw exception as `InnerException`,
+- public docs state the task-based HybridCache overload is not lazy: cache hits do not prevent already-created DB tasks from continuing, faulting later, or performing task-creation side effects,
 - typed multi-result helper disposes readers and maps read failures to failed `DbResult<T>`,
 - typed multi-result helper has ordering and disposal tests for arity 2, 3, and 4,
 - typed multi-result helper has missing-result/read-failure redaction tests for arity 3 or 4, not only arity 2,
@@ -1078,20 +1134,32 @@ Confirm:
 - bulk insert documents `UseTransaction = false` as an explicit non-atomic performance opt-out where partial rows can remain after failure or cancellation,
 - malformed destination names with empty parts or whitespace around separators are rejected instead of normalized,
 - bulk staged mutation rejects duplicate source keys before target DML,
+- bulk staged mutation validates stage-key index metadata: no `max` key columns, no more than 32 key columns, and no declared key width above the 900-byte SQL Server index-key portability limit,
 - unsupported `SqlDbType` values are rejected before any database connection opens,
+- CLR getter type and declared `SqlDbType` compatibility are validated during shape construction, including enum underlying-type alignment,
 - target key uniqueness is documented as an application-owned schema contract,
 - bulk delete uses key-only staging,
 - bulk reader value normalization matches the existing TVP path,
 - bulk enum conversion is shape-metadata based rather than row-time type inspection,
-- AOT smoke verifies an enum column and public bulk overload reachability through the static-shape path,
+- AOT smoke verifies an enum column and concrete public bulk overload/executor reachability through the static-shape path,
 - bulk readers track `IsClosed`, close/dispose idempotently, clear current row state at EOF, throw on missing `GetOrdinal` names, report `HasRows` as result-set presence while preserving first-row behavior, and dispose the underlying row enumerator exactly once,
 - AOT-safe bulk defaults to `CheckConstraints = true`,
+- `CheckConstraints = true` is verified through an actual verification-table `CHECK` constraint failure,
+- staged mutation options document and test that `FireTriggers`, `KeepIdentity`, and `CheckConstraints` are not target-DML controls,
+- decimal columns require explicit precision/scale and stage SQL never silently emits `decimal(18,0)`,
+- unknown `BulkMergeActions` flag bits are rejected before action dispatch,
+- public `BulkMergeAsync` tests prove unknown action bits fail before opening a connection,
+- default `BulkMergeAsync` updates matched rows, inserts missing rows, and returns separated counts in its own integration test,
 - non-cancellation bulk failures return redacted failed `DbResult<T>` after best-effort rollback,
+- SQL/provider bulk failures do not expose raw exceptions through public `DbError.InnerException`,
 - rollback failure cannot replace the original public bulk failure,
 - cancellation attempts rollback before rethrow only before commit begins,
 - final bulk commit is non-cancelable from the caller token to avoid ambiguous canceled results after commit starts,
 - generated/future roadmap docs do not imply automatic production DDL/DML,
-- docs do not overpromise L2 invalidation across all servers.
+- docs do not overpromise L2 invalidation across all servers,
+- docs positively state the HybridCache invalidation boundary: current server and secondary cache visibility can change, but other servers' in-memory L1 entries are not physically cleared by current-server invalidation alone,
+- docs include Native AOT/trimming serializer guidance for HybridCache payloads,
+- release artifact scanning covers tokens, API keys, client secrets, bearer/SAS markers, SQL parameter values, row values, cache payload values, and tenant/user identifiers, not only connection-string/password aliases.
 
 ## Completion Criteria
 
@@ -1101,7 +1169,7 @@ The integrated additional scope is complete when:
 - HybridCache tags overload is implemented and tested.
 - Typed QueryMultiple helper is implemented and tested.
 - AOT-safe bulk mutation sub-plan is implemented and tested.
-- The document review findings from 2026-05-22 are closed: tag cap, duplicate tag dedupe, null tag rejection, leading/trailing tag whitespace rejection, cache factory generic error messages, faulted-task generic mapping, no raw inner exception retention, and the existing failure-test rewrite, QueryMultiple `Lib.Db.Extensions` using guidance, QueryMultiple redacted failure mapping, QueryMultiple arity 3/4 success and failure coverage, DateOnly/TimeOnly/Guid/decimal/byte-array/nullable normalization, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout option tests, polymorphic merge-option validation, invalid merge action combinations, malformed destination-name rejection, separator-whitespace rejection, 128-character identifier limit, duplicate source-key rejection, target key schema contract, key-only delete staging, DbResult failure mapping after rollback, rollback-failure primary-error preservation, final commit non-cancellation, staged-DML rollback/cancellation coverage, rollback-on-cancellation-before-commit, `UseTransaction = false` staged-mutation rejection, insert non-atomic opt-out documentation, redacted bulk general-error mapping, `CheckConstraints = true` default, reader lifecycle/disposal/idempotency, internal reader API surface, EOF current clearing, missing ordinal failure, first-row-safe `HasRows`, AOT enum smoke, public bulk AOT reachability, `RequiresDynamicCode`/IL3050 static gates, durable secret-safe verification log output with post-log scan/tracking gates, pre-implementation AOT/release baseline capture, AOT sub-plan parent linkage, and shape-metadata enum conversion.
+- The document review findings from 2026-05-22 are closed: tag cap, duplicate tag dedupe, null tag rejection, leading/trailing tag whitespace rejection, cache factory generic error messages, faulted-task generic mapping, task-based cache-hit limitation documentation, no raw inner exception retention, HybridCache Native AOT serializer/trimming caveat, current-server/L2 versus other-server L1 invalidation boundary, and the existing failure-test rewrite, QueryMultiple `Lib.Db.Extensions` using guidance, QueryMultiple redacted failure mapping, QueryMultiple arity 3/4 success and failure coverage, DateOnly/TimeOnly/Guid/decimal/byte-array/nullable normalization, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout option tests, explicit decimal precision/scale validation, string/binary size validation, temporal scale validation, CLR/SQL type compatibility validation, stage-key index metadata validation with the 900-byte portability limit, real `CheckConstraints` constraint-failure coverage, staged-mutation direct-bulk-copy flag rejection, polymorphic merge-option validation, unknown merge action-bit rejection in both direct validation and public `BulkMergeAsync`, default merge update+insert coverage, invalid merge action combinations, malformed destination-name rejection, separator-whitespace rejection, 128-character identifier limit, duplicate source-key rejection, target key schema contract, key-only delete staging, DbResult failure mapping after rollback, SQL/provider bulk failure redaction without public `InnerException`, rollback-failure primary-error preservation, final commit non-cancellation, staged-DML rollback/cancellation coverage, rollback-on-cancellation-before-commit, `UseTransaction = false` staged-mutation rejection, insert non-atomic opt-out documentation, redacted bulk general-error mapping, `CheckConstraints = true` default, reader lifecycle/disposal/idempotency, internal reader API surface, EOF current clearing, missing ordinal failure, first-row-safe `HasRows`, AOT enum smoke, concrete public bulk AOT reachability, `RequiresDynamicCode`/IL3050 static gates, durable secret-safe verification log output without pre-scan raw console echo and with broadened repository artifact scanning/tracking gates plus redacted scanner output, pre-implementation AOT/release baseline capture, AOT sub-plan parent linkage, and shape-metadata enum conversion.
 - Roadmap document exists for generator/migration/change-tracking.
 - Public docs and Lib.Db skill guidance are updated.
 - Native AOT verification passes.

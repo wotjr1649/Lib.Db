@@ -1,6 +1,6 @@
 # Lib.Db v2.4.0 AOT-Safe Bulk Mutations Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED WORKFLOW: implement this plan task-by-task with `superpowers:subagent-driven-development` when work can be split safely, or `superpowers:executing-plans` for sequential inline execution. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add AOT-safe bulk insert, update, delete, upsert, and merge APIs without using reflection, runtime code generation, or SQL Server `MERGE` as the default engine.
 
@@ -37,6 +37,40 @@ The implementation must preserve these decisions:
 - Row values are never interpolated into SQL command text.
 - AOT verification must not gain new Lib.Db trim/AOT warnings.
 
+## Agent Checkpoints and Handoff
+
+Implementation agents must not treat this plan as a single large batch. Use these
+review checkpoints even when running `superpowers:subagent-driven-development`:
+
+- after the Pre-Implementation Baseline Gate,
+- after Tasks 1-2,
+- after Tasks 3-4,
+- after Task 5, before Task 6 starts,
+- after Task 6,
+- after Task 7,
+- after Task 8,
+- after Task 9,
+- after Tasks 10-11.
+
+At each checkpoint, run the targeted tests/static gate for the completed task
+group, perform an inline security/code-review pass against this plan's checklist,
+fix any blocker before continuing, and commit the task group or record why the
+checkpoint intentionally has no source diff.
+
+Task 5 must create or update
+`docs/superpowers/artifacts/v240-bulk-implementation-handoff.md` before Task 6
+starts. The handoff must record the exact existing APIs/seams selected for:
+
+- opening a configured SQL connection,
+- returning successful `DbResult<T>` values,
+- mapping redacted SQL and non-SQL bulk failures,
+- creating, committing, rolling back, and testing transactions,
+- injecting rollback/cancellation/failure hooks for integration tests,
+- the task commit or no-diff checkpoint that established those choices.
+
+Tasks 6-8 must consume that handoff instead of inventing a second connection,
+transaction, or error-mapping path.
+
 ## Pre-Implementation Baseline Gate
 
 Before source changes begin, capture the current verification baseline. If this
@@ -60,15 +94,15 @@ $ErrorActionPreference = 'Stop'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $log = "Verification/artifacts/logs/v240-bulk-preimplementation-release-verification-$stamp.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
-$verificationOutput = & pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *>&1
+& pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *> $log
 $exitCode = $LASTEXITCODE
-$verificationOutput | Tee-Object -FilePath $log
+Write-Output "Release verification output captured to $log. Raw output is not echoed before artifact scanning."
 $postLogExitCode = 0
 if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
     Write-Warning "Release verification log was not created or is empty: $log"
     $postLogExitCode = 1
 }
-pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths $log
+pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1
 if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
 pwsh -NoProfile -File Verification/scripts/Assert-GeneratedArtifactsUntracked.ps1
 if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
@@ -76,9 +110,12 @@ if ($exitCode -ne 0) { exit $exitCode }
 if ($postLogExitCode -ne 0) { exit $postLogExitCode }
 ```
 
-Expected: release verification passes, the durable log exists and is non-empty,
-the log-specific artifact scan passes, and generated artifacts remain
-ignored/untracked.
+Expected: release verification passes, raw verification output is captured to a
+durable non-empty log without first echoing to the terminal/CI log, the
+repository artifact scan passes across logs/test/benchmark/package artifacts,
+and generated artifacts remain ignored/untracked. If verification fails, do not
+print the raw log until the artifact scan has passed; record only the log path
+and sanitized failure summary.
 
 ## File Structure
 
@@ -241,6 +278,151 @@ public sealed class BulkShapeTests
         act.Should().Throw<ArgumentException>();
     }
 
+    [Theory]
+    [InlineData(null, 2)]
+    [InlineData(18, null)]
+    public void Build_ShouldRejectDecimalWithoutPrecisionAndScale(byte? precision, byte? scale)
+    {
+        Action act = () => BulkShape.For<BulkShapeRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: precision, scale: scale)
+            .Build();
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*Decimal*precision*scale*");
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(39, 0)]
+    [InlineData(18, 19)]
+    public void Build_ShouldRejectInvalidDecimalPrecisionAndScale(byte precision, byte scale)
+    {
+        Action act = () => BulkShape.For<BulkShapeRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: precision, scale: scale)
+            .Build();
+
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Theory]
+    [InlineData(SqlDbType.NVarChar, 0)]
+    [InlineData(SqlDbType.NVarChar, 4001)]
+    [InlineData(SqlDbType.VarChar, 0)]
+    [InlineData(SqlDbType.VarChar, 8001)]
+    public void Build_ShouldRejectInvalidStringSize(SqlDbType sqlDbType, int size)
+    {
+        Action act = () => BulkShape.For<BulkShapeRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Name", sqlDbType, static row => row.Name, size: size, nullable: false)
+            .Build();
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(8001)]
+    public void Build_ShouldRejectInvalidBinarySize(int size)
+    {
+        Action act = () => BulkShape.For<BulkShapeBinaryRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Payload", SqlDbType.VarBinary, static row => row.Payload, size: size, nullable: false)
+            .Build();
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Theory]
+    [InlineData(SqlDbType.Time, 8)]
+    [InlineData(SqlDbType.DateTime2, 8)]
+    [InlineData(SqlDbType.DateTimeOffset, 8)]
+    public void Build_ShouldRejectInvalidTemporalScale(SqlDbType sqlDbType, byte scale)
+    {
+        Action act = sqlDbType switch
+        {
+            SqlDbType.Time => () => BulkShape.For<BulkShapeTemporalRow>()
+                .Key("Id", SqlDbType.Int, static row => row.Id)
+                .Column("StartsAt", SqlDbType.Time, static row => row.StartsAt, scale: scale)
+                .Build(),
+            SqlDbType.DateTime2 => () => BulkShape.For<BulkShapeTemporalRow>()
+                .Key("Id", SqlDbType.Int, static row => row.Id)
+                .Column("ChangedAtUtc", SqlDbType.DateTime2, static row => row.ChangedAtUtc, scale: scale)
+                .Build(),
+            SqlDbType.DateTimeOffset => () => BulkShape.For<BulkShapeTemporalRow>()
+                .Key("Id", SqlDbType.Int, static row => row.Id)
+                .Column("ChangedAtOffset", SqlDbType.DateTimeOffset, static row => row.ChangedAtOffset, scale: scale)
+                .Build(),
+            _ => throw new InvalidOperationException()
+        };
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void Build_ShouldRejectMaxLengthKeyColumns()
+    {
+        Action act = () => BulkShape.For<BulkShapeRow>()
+            .Key("Sku", SqlDbType.NVarChar, static row => row.Name, size: null)
+            .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2)
+            .Build();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*key*max*");
+    }
+
+    [Fact]
+    public void Build_ShouldRejectStageKeyDeclaredLengthOverIndexLimit()
+    {
+        Action act = () => BulkShape.For<BulkShapeRow>()
+            .Key("Sku", SqlDbType.NVarChar, static row => row.Name, size: 451)
+            .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2)
+            .Build();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*index key*900*");
+    }
+
+    [Fact]
+    public void Build_ShouldRejectMoreThanThirtyTwoKeyColumns()
+    {
+        BulkShapeBuilder<BulkShapeRow> builder = BulkShape.For<BulkShapeRow>();
+        for (int i = 0; i < 33; i++)
+            builder.Key($"K{i}", SqlDbType.Int, static row => row.Id);
+
+        builder.Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2);
+
+        Action act = () => builder.Build();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*32-column*");
+    }
+
+    [Fact]
+    public void Column_ShouldRejectIncompatibleClrAndSqlTypes()
+    {
+        Action act = () => BulkShape.For<BulkShapeTemporalRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("ChangedAtUtc", SqlDbType.DateTime2, static row => row.StartsAt)
+            .Build();
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*TimeSpan*DateTime2*");
+    }
+
+    [Fact]
+    public void Column_ShouldRejectEnumUnderlyingTypeMismatch()
+    {
+        Action act = () => BulkShape.For<BulkShapeEnumRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Status", SqlDbType.BigInt, static row => row.Status)
+            .Build();
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*enum*Int32*BigInt*");
+    }
+
     [Fact]
     public void Build_ShouldRejectDestinationColumnNamesLongerThanSysname()
     {
@@ -267,6 +449,10 @@ public sealed class BulkShapeTests
     }
 
     private sealed record BulkShapeRow(int Id, string Name, decimal Price);
+    private sealed record BulkShapeBinaryRow(int Id, byte[] Payload);
+    private sealed record BulkShapeTemporalRow(int Id, TimeSpan StartsAt, DateTime ChangedAtUtc, DateTimeOffset ChangedAtOffset);
+    private sealed record BulkShapeEnumRow(int Id, BulkShapeStatus Status);
+    private enum BulkShapeStatus { Pending = 0, Active = 1 }
 }
 ```
 
@@ -334,6 +520,7 @@ internal static class BulkValueConverter
     public static Func<TValue, object?> Create<TValue>(SqlDbType sqlDbType)
     {
         Type valueType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+        ValidateClrSqlTypeCompatibility<TValue>(valueType, sqlDbType);
 
         if (valueType == typeof(DateOnly) && sqlDbType == SqlDbType.Date)
             return static value => value is null ? null : ((DateOnly)(object)value).ToDateTime(TimeOnly.MinValue);
@@ -350,6 +537,45 @@ internal static class BulkValueConverter
         }
 
         return static value => value;
+    }
+
+    private static void ValidateClrSqlTypeCompatibility<TValue>(Type valueType, SqlDbType sqlDbType)
+    {
+        if (valueType.IsEnum)
+        {
+            Type underlyingType = Enum.GetUnderlyingType(valueType);
+            SqlDbType expectedSqlType = underlyingType == typeof(byte) ? SqlDbType.TinyInt
+                : underlyingType == typeof(short) ? SqlDbType.SmallInt
+                : underlyingType == typeof(int) ? SqlDbType.Int
+                : underlyingType == typeof(long) ? SqlDbType.BigInt
+                : throw new ArgumentException($"Enum underlying type '{underlyingType.Name}' is not supported by AOT-safe bulk shapes.");
+
+            if (sqlDbType != expectedSqlType)
+                throw new ArgumentException($"Enum underlying type '{underlyingType.Name}' must be mapped to SqlDbType.{expectedSqlType}, not SqlDbType.{sqlDbType}.");
+
+            return;
+        }
+
+        bool compatible = sqlDbType switch
+        {
+            SqlDbType.Bit => valueType == typeof(bool),
+            SqlDbType.TinyInt => valueType == typeof(byte),
+            SqlDbType.SmallInt => valueType == typeof(short),
+            SqlDbType.Int => valueType == typeof(int),
+            SqlDbType.BigInt => valueType == typeof(long),
+            SqlDbType.UniqueIdentifier => valueType == typeof(Guid),
+            SqlDbType.Date => valueType == typeof(DateOnly) || valueType == typeof(DateTime),
+            SqlDbType.Time => valueType == typeof(TimeOnly) || valueType == typeof(TimeSpan),
+            SqlDbType.DateTime2 => valueType == typeof(DateTime),
+            SqlDbType.DateTimeOffset => valueType == typeof(DateTimeOffset),
+            SqlDbType.Decimal => valueType == typeof(decimal),
+            SqlDbType.NVarChar or SqlDbType.VarChar => valueType == typeof(string),
+            SqlDbType.VarBinary => valueType == typeof(byte[]),
+            _ => false
+        };
+
+        if (!compatible)
+            throw new ArgumentException($"CLR type '{valueType.Name}' is not compatible with SqlDbType.{sqlDbType} for AOT-safe bulk shapes.");
     }
 }
 ```
@@ -394,7 +620,7 @@ public sealed class BulkShapeBuilder<T> where T : notnull
         int? size = null,
         byte? precision = null,
         byte? scale = null)
-        => Add(destinationName, sqlDbType, CreateGetter(getter, sqlDbType), isKey: true, nullable, size, precision, scale);
+        => Add(destinationName, sqlDbType, getter, isKey: true, nullable, size, precision, scale);
 
     public BulkShapeBuilder<T> Column<TValue>(
         string destinationName,
@@ -404,7 +630,7 @@ public sealed class BulkShapeBuilder<T> where T : notnull
         int? size = null,
         byte? precision = null,
         byte? scale = null)
-        => Add(destinationName, sqlDbType, CreateGetter(getter, sqlDbType), isKey: false, nullable, size, precision, scale);
+        => Add(destinationName, sqlDbType, getter, isKey: false, nullable, size, precision, scale);
 
     public BulkShape<T> Build()
     {
@@ -424,13 +650,15 @@ public sealed class BulkShapeBuilder<T> where T : notnull
         if (nullableKey is not null)
             throw new InvalidOperationException($"Bulk key column '{nullableKey.DestinationName}' must be non-null.");
 
+        ValidateStageKeyIndexShape(_columns.Where(static column => column.IsKey));
+
         return new BulkShape<T>(_columns);
     }
 
-    private BulkShapeBuilder<T> Add(
+    private BulkShapeBuilder<T> Add<TValue>(
         string destinationName,
         SqlDbType sqlDbType,
-        Func<T, object?> getter,
+        Func<T, TValue> getter,
         bool isKey,
         bool nullable,
         int? size,
@@ -439,12 +667,14 @@ public sealed class BulkShapeBuilder<T> where T : notnull
     {
         ValidateDestinationColumnName(destinationName);
         ValidateSqlDbType(sqlDbType);
+        ValidateSqlMetadata(sqlDbType, size, precision, scale);
+        Func<T, object?> convertedGetter = CreateGetter(getter, sqlDbType);
 
         _columns.Add(new BulkColumn<T>(
             _columns.Count,
             destinationName,
             sqlDbType,
-            getter,
+            convertedGetter,
             isKey,
             nullable,
             size,
@@ -486,6 +716,76 @@ public sealed class BulkShapeBuilder<T> where T : notnull
             throw new ArgumentOutOfRangeException(nameof(sqlDbType), sqlDbType, $"SqlDbType '{sqlDbType}' is not supported by AOT-safe bulk shapes.");
     }
 
+    private static void ValidateSqlMetadata(SqlDbType sqlDbType, int? size, byte? precision, byte? scale)
+    {
+        if (sqlDbType == SqlDbType.Decimal)
+        {
+            if (precision is null || scale is null)
+                throw new ArgumentException("Decimal bulk columns require explicit precision and scale.");
+
+            if (precision is < 1 or > 38)
+                throw new ArgumentOutOfRangeException(nameof(precision), precision, "Decimal precision must be between 1 and 38.");
+
+            if (scale > precision)
+                throw new ArgumentOutOfRangeException(nameof(scale), scale, "Decimal scale cannot exceed precision.");
+        }
+
+        if (sqlDbType is SqlDbType.NVarChar or SqlDbType.VarChar or SqlDbType.VarBinary)
+        {
+            int maxSize = sqlDbType == SqlDbType.NVarChar ? 4_000 : 8_000;
+            if (size is < 1)
+                throw new ArgumentOutOfRangeException(nameof(size), size, $"{sqlDbType} size must be positive. Use null to request max.");
+
+            if (size > maxSize)
+                throw new ArgumentOutOfRangeException(nameof(size), size, $"{sqlDbType} size cannot exceed {maxSize}. Use null to request max.");
+        }
+
+        if ((sqlDbType is SqlDbType.Time or SqlDbType.DateTime2 or SqlDbType.DateTimeOffset)
+            && scale is > 7)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scale), scale, $"{sqlDbType} scale must be between 0 and 7.");
+        }
+    }
+
+    private static void ValidateStageKeyIndexShape(IEnumerable<BulkColumn<T>> keyColumns)
+    {
+        const int MaxIndexKeyColumns = 32;
+        const int MaxNonclusteredIndexKeyBytes = 900;
+
+        int keyCount = 0;
+        int declaredBytes = 0;
+        foreach (BulkColumn<T> keyColumn in keyColumns)
+        {
+            keyCount++;
+            if (keyCount > MaxIndexKeyColumns)
+                throw new InvalidOperationException("Bulk mutation key columns cannot exceed SQL Server's 32-column index-key limit.");
+
+            declaredBytes += GetDeclaredIndexKeyBytes(keyColumn);
+        }
+
+        if (declaredBytes > MaxNonclusteredIndexKeyBytes)
+            throw new InvalidOperationException($"Bulk mutation key columns cannot exceed SQL Server's {MaxNonclusteredIndexKeyBytes}-byte nonclustered index-key limit.");
+    }
+
+    private static int GetDeclaredIndexKeyBytes(BulkColumn<T> column)
+        => column.SqlDbType switch
+        {
+            SqlDbType.Bit or SqlDbType.TinyInt => 1,
+            SqlDbType.SmallInt => 2,
+            SqlDbType.Int => 4,
+            SqlDbType.BigInt => 8,
+            SqlDbType.UniqueIdentifier => 16,
+            SqlDbType.Date => 3,
+            SqlDbType.Time => column.Scale is null ? 5 : column.Scale is <= 2 ? 3 : column.Scale is <= 4 ? 4 : 5,
+            SqlDbType.DateTime2 => column.Scale is <= 2 ? 6 : column.Scale is <= 4 ? 7 : 8,
+            SqlDbType.DateTimeOffset => column.Scale is <= 2 ? 8 : column.Scale is <= 4 ? 9 : 10,
+            SqlDbType.Decimal => column.Precision is <= 9 ? 5 : column.Precision is <= 19 ? 9 : column.Precision is <= 28 ? 13 : 17,
+            SqlDbType.NVarChar => column.Size is null ? throw new InvalidOperationException("Bulk mutation key columns cannot use nvarchar(max).") : checked(column.Size.Value * 2),
+            SqlDbType.VarChar => column.Size ?? throw new InvalidOperationException("Bulk mutation key columns cannot use varchar(max)."),
+            SqlDbType.VarBinary => column.Size ?? throw new InvalidOperationException("Bulk mutation key columns cannot use varbinary(max)."),
+            _ => throw new NotSupportedException($"SqlDbType '{column.SqlDbType}' is not supported by AOT-safe bulk shapes.")
+        };
+
     private static bool IsSupportedSqlDbType(SqlDbType sqlDbType)
         => sqlDbType is SqlDbType.Bit
             or SqlDbType.TinyInt
@@ -518,8 +818,7 @@ Expected: tests pass.
 
 **Files:**
 - Modify: `Lib.Db/Contracts/Core/Primitives.cs`
-- Modify: `Lib.Db/Contracts/Entry/DbEntryContracts.cs`
-- Modify in Task 6: `Lib.Db/Core/DbSession.cs`
+- Do not modify `Lib.Db/Contracts/Entry/DbEntryContracts.cs` or `Lib.Db/Core/DbSession.cs` in this task; public `IDbSession` overloads are added in Tasks 6, 7, and 8 beside their implementations.
 
 - [ ] **Step 1: Add compile-facing tests by extending `BulkShapeTests`**
 
@@ -602,6 +901,19 @@ public void BulkMergeOptions_ShouldRejectDeleteMatchedWithOtherActions(BulkMerge
     act.Should().Throw<InvalidOperationException>()
         .WithMessage("*DeleteMatched*exclusive*");
 }
+
+[Theory]
+[InlineData((BulkMergeActions)16)]
+[InlineData((BulkMergeActions)31)]
+public void BulkMergeOptions_ShouldRejectUnknownActionBits(BulkMergeActions actions)
+{
+    BulkWriteOptions options = new BulkMergeOptions { Actions = actions };
+
+    Action act = () => options.Validate();
+
+    act.Should().Throw<InvalidOperationException>()
+        .WithMessage("*unknown*merge action*");
+}
 ```
 
 - [ ] **Step 2: Run the tests and confirm RED**
@@ -651,12 +963,21 @@ public enum BulkMergeActions
 
 public sealed class BulkMergeOptions : BulkWriteOptions
 {
+    private const BulkMergeActions KnownActions =
+        BulkMergeActions.UpdateMatched
+        | BulkMergeActions.InsertMissing
+        | BulkMergeActions.DeleteMatched
+        | BulkMergeActions.DeleteNotMatchedBySource;
+
     public BulkMergeActions Actions { get; init; } =
         BulkMergeActions.UpdateMatched | BulkMergeActions.InsertMissing;
 
     public override void Validate()
     {
         base.Validate();
+
+        if ((Actions & ~KnownActions) != 0)
+            throw new InvalidOperationException("Bulk merge options contain an unknown merge action.");
 
         if (Actions == BulkMergeActions.None)
             throw new InvalidOperationException("Bulk merge actions cannot be empty.");
@@ -692,6 +1013,21 @@ bulk executors own the transaction-safety contract:
   must reject `UseTransaction = false` before opening a connection in v2.4.0.
 - Any future relaxation of this rule requires a new design entry and tests that
   document non-atomic partial-write semantics.
+
+The `SqlBulkCopyOptions`-shaped toggles on `BulkWriteOptions` have operation
+phase-specific meaning:
+
+- For `BulkInsertAsync`, `FireTriggers`, `CheckConstraints`, and `KeepIdentity`
+  apply to the direct `SqlBulkCopy` into the user destination table.
+- For staged update/delete/upsert/merge, the `SqlBulkCopy` destination is the
+  generated local temp staging table, not the user target table. Target changes
+  are ordinary SQL Server DML and follow normal SQL Server trigger/constraint
+  behavior; Lib.Db does not disable target constraints, suppress target triggers,
+  or enable identity insert for staged target DML.
+- Therefore staged update/delete/upsert/merge must reject `FireTriggers = true`,
+  `KeepIdentity = true`, and `CheckConstraints = false` before opening a
+  connection. This is intentionally strict so callers do not believe these
+  bulk-copy flags alter target DML semantics.
 
 - [ ] **Step 4: Keep `IDbSession` unchanged in this task**
 
@@ -1339,6 +1675,17 @@ public sealed class BulkSqlBuilderTests
     }
 
     [Fact]
+    public void Render_ShouldRequireExplicitDecimalPrecisionAndScale()
+    {
+        BulkShape<BulkSqlRow> shape = BulkShape.For<BulkSqlRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 19, scale: 4)
+            .Build();
+
+        BulkSqlTypeRenderer.Render(shape.Columns[1]).Should().Be("decimal(19,4)");
+    }
+
+    [Fact]
     public void CreateUniqueStageKeyIndex_ShouldRenderKeyColumns()
     {
         BulkShape<BulkSqlRow> shape = BulkShape.For<BulkSqlRow>()
@@ -1389,8 +1736,8 @@ internal readonly record struct BulkIdentifier(string Schema, string Name)
         string[] parts = SplitTwoPartName(value);
         return parts.Length switch
         {
-            1 => new BulkIdentifier("dbo", NormalizePart(parts[0], input)),
-            2 => new BulkIdentifier(NormalizePart(parts[0], input), NormalizePart(parts[1], input)),
+            1 => new BulkIdentifier("dbo", NormalizePart(parts[0])),
+            2 => new BulkIdentifier(NormalizePart(parts[0]), NormalizePart(parts[1])),
             _ => throw new ArgumentException("Destination table name must be one or two parts.", nameof(input))
         };
     }
@@ -1418,10 +1765,10 @@ internal readonly record struct BulkIdentifier(string Schema, string Name)
         return rawParts;
     }
 
-    private static string NormalizePart(string part, string original)
+    private static string NormalizePart(string part)
     {
         if (string.IsNullOrWhiteSpace(part))
-            throw new ArgumentException($"Invalid destination table name '{original}'.");
+            throw new ArgumentException("Destination table name contains an empty identifier part.");
 
         if (part.Length > MaxSqlIdentifierLength)
             throw new ArgumentException("Destination identifier parts cannot exceed 128 characters.");
@@ -1431,7 +1778,7 @@ internal readonly record struct BulkIdentifier(string Schema, string Name)
             || part.Contains("--", StringComparison.Ordinal)
             || part.Contains("/*", StringComparison.Ordinal)
             || part.Contains("*/", StringComparison.Ordinal))
-            throw new ArgumentException($"Invalid destination table name '{original}'.");
+            throw new ArgumentException("Destination table name contains unsupported SQL identifier syntax.");
 
         return part;
     }
@@ -1489,10 +1836,10 @@ internal static class BulkSqlTypeRenderer
             SqlDbType.Time => column.Scale is null ? "time" : $"time({column.Scale})",
             SqlDbType.DateTime2 => column.Scale is null ? "datetime2" : $"datetime2({column.Scale})",
             SqlDbType.DateTimeOffset => column.Scale is null ? "datetimeoffset" : $"datetimeoffset({column.Scale})",
-            SqlDbType.Decimal => $"decimal({column.Precision ?? 18},{column.Scale ?? 0})",
-            SqlDbType.NVarChar => column.Size is > 0 ? $"nvarchar({column.Size})" : "nvarchar(max)",
-            SqlDbType.VarChar => column.Size is > 0 ? $"varchar({column.Size})" : "varchar(max)",
-            SqlDbType.VarBinary => column.Size is > 0 ? $"varbinary({column.Size})" : "varbinary(max)",
+            SqlDbType.Decimal => $"decimal({column.Precision!.Value},{column.Scale!.Value})",
+            SqlDbType.NVarChar => column.Size is null ? "nvarchar(max)" : $"nvarchar({column.Size.Value})",
+            SqlDbType.VarChar => column.Size is null ? "varchar(max)" : $"varchar({column.Size.Value})",
+            SqlDbType.VarBinary => column.Size is null ? "varbinary(max)" : $"varbinary({column.Size.Value})",
             _ => throw new NotSupportedException($"SqlDbType '{column.SqlDbType}' is not supported by AOT-safe bulk operations.")
         };
 
@@ -1622,6 +1969,12 @@ private Task<DbResult<TValue>> ExecuteBulkAsync<TValue>(
 
 Pick the form that preserves existing `DbSession` ownership and minimizes public surface. Do not add compile-green stubs for operations that are not implemented in the same task.
 
+Before Task 6 begins, write the selected decision set to
+`docs/superpowers/artifacts/v240-bulk-implementation-handoff.md`. This artifact
+is part of Task 5 output, so Task 5 is no longer expected to be a pure no-diff
+inspection task. Keep it concise and implementation-facing: exact method names,
+test seams, redaction helper choice, and the checkpoint commit/no-commit note.
+
 - [ ] **Step 4: Run a no-change status check**
 
 Run:
@@ -1630,7 +1983,9 @@ Run:
 git status --short
 ```
 
-Expected: only planned test/production files from Tasks 1-4 are modified. If Task 5 only inspects files, it should create no new diff.
+Expected: only planned test/production files from Tasks 1-4 plus the Task 5
+handoff artifact are modified. If an implementation session chooses to commit
+Tasks 1-4 before Task 5, the status should show only the handoff artifact.
 
 ### Task 6: Implement AOT-Safe Bulk Insert
 
@@ -1652,10 +2007,24 @@ BEGIN
         [Id] int NOT NULL CONSTRAINT [PK_BulkMutationTarget] PRIMARY KEY,
         [Sku] nvarchar(64) NOT NULL,
         [Name] nvarchar(200) NOT NULL,
-        [Qty] int NOT NULL,
-        [Price] decimal(18,2) NOT NULL,
+        [Qty] int NOT NULL CONSTRAINT [CK_BulkMutationTarget_Qty_NonNegative] CHECK ([Qty] >= 0),
+        [Price] decimal(18,2) NOT NULL CONSTRAINT [CK_BulkMutationTarget_Price_NonNegative] CHECK ([Price] >= 0),
         [UpdatedAtUtc] datetime2(7) NOT NULL
     );
+END;
+
+IF OBJECT_ID('[gap].[BulkMutationTarget]', 'U') IS NOT NULL
+   AND OBJECT_ID('[gap].[CK_BulkMutationTarget_Qty_NonNegative]', 'C') IS NULL
+BEGIN
+    ALTER TABLE [gap].[BulkMutationTarget] WITH CHECK
+    ADD CONSTRAINT [CK_BulkMutationTarget_Qty_NonNegative] CHECK ([Qty] >= 0);
+END;
+
+IF OBJECT_ID('[gap].[BulkMutationTarget]', 'U') IS NOT NULL
+   AND OBJECT_ID('[gap].[CK_BulkMutationTarget_Price_NonNegative]', 'C') IS NULL
+BEGIN
+    ALTER TABLE [gap].[BulkMutationTarget] WITH CHECK
+    ADD CONSTRAINT [CK_BulkMutationTarget_Price_NonNegative] CHECK ([Price] >= 0);
 END;
 ```
 
@@ -1828,6 +2197,8 @@ Also add focused failure-path coverage before marking Task 6 complete:
 
 - `BulkInsertAsync_WhenCanceledBeforeCommit_ShouldAttemptRollbackBeforeRethrow`: use the smallest local seam available after Task 5 inventory (for example a test bulk-copy/executor factory, cancellation hook, or fake transaction wrapper) to prove cancellation attempts rollback before the `OperationCanceledException` escapes.
 - `BulkInsertAsync_WhenGeneralExceptionOccurs_ShouldReturnRedactedFailure`: force a non-SQL exception from the bulk reader/getter/executor path and assert the returned `DbError` uses a generic public message, contains the sanitized destination object name only, and does not expose the row value, connection string, raw payload, or raw exception message.
+- `BulkInsertAsync_WhenSqlExceptionOccurs_ShouldReturnRedactedFailureWithoutInnerException`: force a deterministic SQL Server error, such as inserting a negative `Qty` into the verification table whose `CHECK` constraint is enabled by default, and assert `result.Error.Value.Message` is generic, `ObjectName` is the sanitized destination only, `InnerException` is `null`, and target rows are unchanged.
+- `BulkInsertAsync_WhenCheckConstraintFailsByDefault_ShouldNotInsertRows`: prove the default `CheckConstraints = true` option reaches `SqlBulkCopyOptions.CheckConstraints` by using the verification table `CHECK` constraint instead of only asserting option values in memory.
 - Keep the normal insert success test above as the positive control so rollback/error hardening does not break the happy path.
 
 - [ ] **Step 4: Run insert integration test and confirm RED**
@@ -1932,7 +2303,7 @@ catch (SqlException ex)
     if (transaction is not null)
         await TryRollbackAsync(transaction).ConfigureAwait(false);
 
-    return DbResult<long>.Fail(DbErrorMapper.FromSqlException(ex, destination.ToSql()));
+    return DbResult<long>.Fail(MapBulkSqlException(ex, destination));
 }
 catch (Exception ex)
 {
@@ -1947,6 +2318,30 @@ catch (Exception ex)
     });
 }
 ```
+
+`MapBulkSqlException` must preserve useful classification fields from the existing
+mapper while removing raw exception reachability from the public result:
+
+```csharp
+private static DbError MapBulkSqlException(SqlException ex, BulkIdentifier destination)
+{
+    DbError mapped = DbErrorMapper.FromSqlException(ex, destination.ToSql());
+
+    return mapped with
+    {
+        Message = "Bulk operation failed.",
+        ObjectName = destination.ToSql(),
+        InnerException = null
+    };
+}
+```
+
+Do not return `DbErrorMapper.FromSqlException(...)` directly from the bulk public
+path. That mapper currently preserves the provider exception on `DbError`, and
+bulk failures can include row payloads, object details, or connection/provider
+state through `Exception.ToString()`. Raw provider exceptions may still be sent
+to the existing redacted diagnostics path, but the public `DbResult<T>` must not
+retain them.
 
 Use `CancellationToken.None` for final `CommitAsync` once all cancellable staging and DML work has completed. The public cancellation contract is: cancellation before commit begins attempts rollback and rethrows `OperationCanceledException`; after commit begins, Lib.Db does not report caller cancellation because the database outcome can be ambiguous. If commit itself fails with a provider exception, return the established redacted failure and attempt best-effort rollback only if the provider still considers the transaction pending.
 
@@ -1972,7 +2367,7 @@ If the implementation has an existing redacted diagnostic hook available at this
 
 Do not leak connection strings, row values, raw payloads, or raw exception messages in public mapped errors. If the final implementation preserves the original exception for in-process diagnostics, it must be behind the existing diagnostic redaction policy and must not be logged or serialized by Lib.Db. If the final implementation uses `ExecuteBulkAsync<TValue>`, that helper owns rollback and non-cancellation exception mapping; raw operation delegates may rethrow only after rollback is best-effort attempted without replacing the primary failure.
 
-Add required rollback/commit boundary tests before marking Task 5 complete:
+Add required rollback/commit boundary tests before marking Task 6 complete:
 
 - `BulkInsertAsync_WhenRollbackFails_ShouldPreserveOriginalFailureAndRedactRollbackError`: inject a rollback failure after a primary bulk failure and assert the returned/propagated public error still describes the original generic bulk failure, not the rollback exception.
 - `BulkInsertAsync_WhenCanceledBeforeCommit_ShouldAttemptRollbackBeforeRethrow`: cancellation before commit attempts rollback and rethrows `OperationCanceledException`.
@@ -2105,6 +2500,8 @@ Also add failure-path coverage before marking Task 7 complete:
 - `BulkDeleteAsync_WhenCanceledBeforeCommit_ShouldAttemptRollbackBeforeRethrow`: use the same seam or a cancellation hook after delete DML but before commit. Assert cancellation propagates and the deleted row is still present after rollback.
 - `BulkUpdateAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection`: pass `new BulkWriteOptions { UseTransaction = false }` and assert a validation failure before any connection/session executor opens SQL Server.
 - `BulkDeleteAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection`: same validation contract for delete.
+- `BulkUpdateAsync_WhenFireTriggersTrue_ShouldRejectBeforeOpeningConnection`: staged target updates use ordinary DML trigger semantics; `FireTriggers` is a direct bulk-copy destination flag and must not be accepted for staged operations.
+- `BulkDeleteAsync_WhenCheckConstraintsFalse_ShouldRejectBeforeOpeningConnection`: staged target deletes do not support disabling target constraints; reject the misleading non-default option even though the stage load itself is a bulk copy.
 
 - [ ] **Step 3: Run update/delete tests and confirm RED**
 
@@ -2176,6 +2573,7 @@ It must:
 - parse destination,
 - create a unique local temp table name,
 - reject `UseTransaction = false` before opening the connection, then begin one local transaction for every staged update/delete path,
+- reject staged-mutation-inapplicable bulk-copy flags before opening the connection: `FireTriggers = true`, `KeepIdentity = true`, and `CheckConstraints = false`,
 - open connection after option validation succeeds,
 - create stage table,
 - bulk copy rows into stage,
@@ -2283,6 +2681,35 @@ public async Task BulkUpsertAsync_WithStaticShape_ShouldUpdateMatchedAndInsertMi
 }
 
 [Fact]
+public async Task BulkMergeAsync_WithDefaultActions_ShouldUpdateMatchedInsertMissingAndReturnSeparatedCounts()
+{
+    await ClearTargetAsync();
+    await SeedRowsAsync();
+    BulkShape<BulkMutationRow> shape = CreateShape();
+
+    DbResult<BulkMergeResult> result = await _session.BulkMergeAsync(
+        TestDatabaseNames.Default,
+        "[gap].[BulkMutationTarget]",
+        [
+            new BulkMutationRow(1, "SKU-1M", "One Merged", 88, 18.88m, DateTime.UtcNow),
+            new BulkMutationRow(3, "SKU-3", "Three", 30, 33.33m, DateTime.UtcNow)
+        ],
+        shape,
+        options: null,
+        ct: TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeTrue(result.Error?.Message);
+    result.Value.Updated.Should().Be(1);
+    result.Value.Inserted.Should().Be(1);
+    result.Value.Deleted.Should().Be(0);
+    result.Value.TotalAffected.Should().Be(2);
+    (await CountTargetAsync()).Should().Be(3);
+    await AssertRowAsync(1, "SKU-1M", "One Merged", 88, 18.88m);
+    await AssertRowAsync(2, "SKU-2", "Two", 20, 22.50m);
+    await AssertRowAsync(3, "SKU-3", "Three", 30, 33.33m);
+}
+
+[Fact]
 public async Task BulkMergeAsync_WithDeleteMatched_ShouldDeleteOnlyStagedKeys()
 {
     await ClearTargetAsync();
@@ -2326,6 +2753,23 @@ public async Task BulkMergeAsync_WithInvalidDeleteMatchedCombination_ShouldFailB
     (await CountTargetAsync()).Should().Be(2);
     await AssertRowAsync(1, "SKU-1", "One", 10, 12.50m);
     await AssertRowAsync(2, "SKU-2", "Two", 20, 22.50m);
+}
+
+[Fact]
+public async Task BulkMergeAsync_WithUnknownActionBits_ShouldFailBeforeOpeningConnection()
+{
+    BulkShape<BulkMutationRow> shape = CreateShape();
+
+    DbResult<BulkMergeResult> result = await _session.BulkMergeAsync(
+        TestDatabaseNames.Default,
+        "[gap].[BulkMutationTarget]",
+        [new BulkMutationRow(1, "SKU-1U", "One Updated", 99, 19.99m, DateTime.UtcNow)],
+        shape,
+        new BulkMergeOptions { Actions = (BulkMergeActions)16 },
+        TestContext.Current.CancellationToken);
+
+    result.IsSuccess.Should().BeFalse();
+    result.Error.Value.Message.Should().Contain("unknown merge action");
 }
 ```
 
@@ -2380,6 +2824,9 @@ Implement shared staged multi-action execution that:
 - runs delete-matched only when it is the sole selected action,
 - rejects `DeleteNotMatchedBySource`,
 - rejects `DeleteMatched` combined with update or insert actions before opening a connection,
+- calls `BulkMergeOptions.Validate()` before opening a connection so unknown
+  action bits fail through the public `BulkMergeAsync` path instead of being
+  silently ignored,
 - returns separated counts.
 
 Use `ExecuteNonQueryAsync(ct)` for each action and store the returned affected rows immediately.
@@ -2392,6 +2839,12 @@ Also add failure-path coverage before marking Task 8 complete:
 - `BulkMergeAsync_WhenCanceledAfterActionBeforeCommit_ShouldAttemptRollbackBeforeRethrow`: cancel after the selected action reports affected rows and before commit. Assert cancellation propagates and target rows remain unchanged.
 - `BulkUpsertAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection`: non-atomic staged upsert is not supported in v2.4.0.
 - `BulkMergeAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection`: non-atomic staged merge is not supported in v2.4.0.
+- `BulkUpsertAsync_WhenKeepIdentityTrue_ShouldRejectBeforeOpeningConnection`: staged insert-missing is ordinary target DML and does not enable `IDENTITY_INSERT`.
+- `BulkMergeAsync_WhenFireTriggersTrueOrCheckConstraintsFalse_ShouldRejectBeforeOpeningConnection`: `FireTriggers` and `CheckConstraints` are direct bulk-copy destination flags, not target-DML controls for staged merge.
+- `BulkMergeAsync_WithUnknownActionBits_ShouldFailBeforeOpeningConnection`: public
+  merge orchestration must call `BulkMergeOptions.Validate()` before any
+  connection/session executor opens SQL Server, proving the direct
+  `options.Validate()` unit test cannot be bypassed.
 
 - [ ] **Step 6: Run upsert/merge tests and confirm GREEN**
 
@@ -2475,7 +2928,25 @@ internal enum AotBulkStatus { Inactive = 0, Active = 1 }
 internal readonly record struct AotBulkRow(int Id, string Sku, int Qty, AotBulkStatus Status);
 ```
 
-Also add a no-DB reachability smoke that roots the public AOT-safe bulk overloads and option types during publish analysis. This is not a behavioral DB test; integration tests still own SQL Server execution:
+Also add a no-DB reachability smoke that roots the public AOT-safe bulk overloads,
+option types, and concrete bulk executor path during publish analysis. This is
+not a behavioral DB test; integration tests still own SQL Server execution. Do
+not stop at `IDbSession` delegate creation plus `GC.KeepAlive`, because that can
+miss trim/AOT warnings inside the concrete `DbSession`/bulk executor body. The
+smoke must directly reference the implemented bulk execution path by one of
+these release-safe mechanisms:
+
+- resolve `IDbSession` from the real Lib.Db service registration and invoke each
+  new overload far enough to enter the concrete `DbSession` bulk path while using
+  a no-open executor seam selected in Task 5,
+- or expose an internal AOT-verification-only no-DB bulk execution probe, rooted
+  from `Lib.Db.AotVerification`, that instantiates the concrete executor/SQL
+  builder/error mapper/reader pipeline used by the public overloads without
+  opening SQL Server.
+
+The smoke fails review if it only roots interface delegates. It must be updated
+after Task 5 records the connection/executor seam and before Task 11 AOT
+verification is considered complete:
 
 ```csharp
 static void VerifyAotSafeBulkPublicApiReachability()
@@ -2507,6 +2978,11 @@ static void VerifyAotSafeBulkPublicApiReachability()
     GC.KeepAlive(delete);
     GC.KeepAlive(upsert);
     GC.KeepAlive(merge);
+
+    // After Task 5 chooses the concrete seam, add a direct no-DB executor probe
+    // here. The probe must reach BulkWriteExecutor or the final equivalent
+    // concrete implementation type, not only IDbSession delegate metadata.
+    VerifyAotSafeBulkConcreteExecutorReachability(shape, writeOptions, mergeOptions);
 }
 ```
 
@@ -2545,6 +3021,7 @@ Ensure the integrated docs pass includes:
 - SQL Server `MERGE` is not the default engine,
 - duplicate source keys are rejected before target DML,
 - target keys must be backed by `PRIMARY KEY` or `UNIQUE` schema constraints,
+- `BulkWriteOptions.FireTriggers`, `CheckConstraints`, and `KeepIdentity` are direct bulk-copy destination flags for `BulkInsertAsync`; staged update/delete/upsert/merge reject misleading non-default values because target changes are ordinary SQL Server DML,
 - `DateOnly` and `TimeOnly` are normalized through the same provider-facing convention used by TVP.
 
 - [ ] **Step 2: Prepare API reference content**
@@ -2615,15 +3092,15 @@ $ErrorActionPreference = 'Stop'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $log = "Verification/artifacts/logs/v240-release-verification-$stamp.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
-$verificationOutput = & pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *>&1
+& pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *> $log
 $exitCode = $LASTEXITCODE
-$verificationOutput | Tee-Object -FilePath $log
+Write-Output "Release verification output captured to $log. Raw output is not echoed before artifact scanning."
 $postLogExitCode = 0
 if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
     Write-Warning "Release verification log was not created or is empty: $log"
     $postLogExitCode = 1
 }
-pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths $log
+pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1
 if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
 pwsh -NoProfile -File Verification/scripts/Assert-GeneratedArtifactsUntracked.ps1
 if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
@@ -2632,10 +3109,22 @@ if ($postLogExitCode -ne 0) { exit $postLogExitCode }
 ```
 
 Expected: release-grade verification completes successfully and leaves a durable
-audit log under `Verification/artifacts/logs/`. The log must remain secret-safe:
-no connection-string values, passwords, tokens, SQL parameter values, row values,
-or cache payloads. Log creation, log non-emptiness, log-specific artifact
+audit log under `Verification/artifacts/logs/`. Raw verification output is
+captured to the log and is not echoed to the terminal/CI log before artifact
+scanning. The log and other verification artifacts must remain secret-safe: no
+connection-string values, passwords, tokens, SQL parameter values, row values,
+or cache payloads. Log creation, log non-emptiness, repository artifact
 scanning, and generated-artifact tracking are hard failure gates.
+
+Before trusting this standalone bulk release gate, inspect or update
+`Verification/scripts/Scan-VerificationArtifacts.ps1` so its artifact scan
+covers access tokens, API keys, client secrets, bearer/SAS markers, SQL
+parameter values, row values, cache payload values, and tenant/user identifiers,
+not only connection-string/password aliases. The scanner must print only file
+paths and marker/key names, never matched lines or matched values, and it must
+have a self-test or fixture proving a detected secret-like artifact fails
+without echoing the secret value. If scanner coverage or scanner-output
+redaction is narrower, this step fails until the scanner is broadened and rerun.
 
 - [ ] **Step 5: Run review gates**
 
@@ -2649,21 +3138,31 @@ Review checklist:
 - cancellation token passed into async DB calls,
 - transactions roll back staging + DML failures,
 - staged update/delete/upsert/merge reject `UseTransaction = false` before opening a connection,
+- staged update/delete/upsert/merge reject direct-bulk-copy destination flags that do not control target DML semantics: `FireTriggers = true`, `KeepIdentity = true`, and `CheckConstraints = false`,
 - insert `UseTransaction = false` is documented and tested as a non-atomic opt-out, not as a rollback-capable mode,
 - rollback failure cannot replace the primary bulk failure in public results,
 - final commit uses `CancellationToken.None` and documents that cancellation rollback is guaranteed only before commit begins,
 - duplicate source keys fail through the stage unique index before target DML,
+- stage-key metadata rejects `max` key columns, more than 32 key columns, and declared key widths over a conservative 900-byte SQL Server index-key portability limit before staged mutation proceeds,
 - target key uniqueness is documented as a database contract, not silently assumed in examples,
 - delete uses key-only stage columns and matching `SqlBulkCopy` mappings,
 - insert tests include a shape whose destination column names differ from CLR member names,
 - success tests assert actual target row values and missing rows, not only affected-row counts,
+- default `BulkMergeAsync` actions update matched rows and insert missing rows with separated counts,
 - `DateOnly`, `TimeOnly`, enum, `Guid`, `decimal`, `byte[]`, and nullable values are normalized or passed through before `SqlBulkCopy` reads them,
+- CLR getter type and declared `SqlDbType` compatibility are validated during shape construction, including enum underlying-type alignment,
+- decimal columns require explicit precision and scale; no stage SQL renderer silently defaults to `decimal(18,0)`,
+- string and binary columns reject out-of-range non-null sizes before any connection opens; `null` is the only supported way to request `max`,
+- `time`, `datetime2`, and `datetimeoffset` columns reject scale values outside SQL Server's 0..7 range before any connection opens,
 - enum conversion is selected from shape metadata and does not call `value.GetType()` or `Enum.GetUnderlyingType(...)` per row,
 - `BulkShapeDataReader<T>` tracks `IsClosed`, implements idempotent `Close()`/`Dispose(bool)`, clears current row state at EOF, throws on missing `GetOrdinal` names, reports `HasRows` without skipping the first row, and disposes the underlying enumerator exactly once,
-- `CheckConstraints` is enabled by default and mapped into `SqlBulkCopyOptions`,
+- `CheckConstraints` is enabled by default, mapped into `SqlBulkCopyOptions`, and verified against a real SQL Server `CHECK` constraint,
 - non-cancellation errors return redacted failed `DbResult<T>` instead of escaping after rollback,
+- SQL Server bulk failures do not expose raw provider exceptions through public `DbError.InnerException`,
 - cancellation attempts rollback before rethrow,
 - `BulkMergeOptions.Validate()` cannot be bypassed through a `BulkWriteOptions` reference,
+- `BulkMergeOptions.Validate()` rejects unknown flag bits before action dispatch,
+- public `BulkMergeAsync` proves unknown action bits fail before opening a connection,
 - `DeleteMatched` is rejected when combined with update or insert actions,
 - `DeleteNotMatchedBySource` rejected,
 - staged update/delete/upsert/merge failure and cancellation tests prove rollback after target DML has started,
@@ -2673,7 +3172,7 @@ Review checklist:
 Run:
 
 ```powershell
-rg -n "MERGE|GetProperties|value\\.GetType\\(|RequiresUnreferencedCode|RequiresDynamicCode|IL3050|MakeGenericType|Expression\\.Compile|DynamicMethod|Reflection\\.Emit|DeleteNotMatchedBySource|WriteToServerAsync|CREATE UNIQUE INDEX|DateOnly|TimeOnly|BulkMergeOptions|stageKeysOnly|DbResult<long>|CheckConstraints|Dispose\\(|Enum.GetUnderlyingType" Lib.Db Verification docs
+rg -n "MERGE|GetProperties|value\\.GetType\\(|RequiresUnreferencedCode|RequiresDynamicCode|IL3050|MakeGenericType|Expression\\.Compile|DynamicMethod|Reflection\\.Emit|DeleteNotMatchedBySource|WriteToServerAsync|CREATE UNIQUE INDEX|DateOnly|TimeOnly|BulkMergeOptions|stageKeysOnly|DbResult<long>|CheckConstraints|CHECK \\(|InnerException|decimal\\(18,0\\)|Dispose\\(|Enum.GetUnderlyingType" Lib.Db Verification docs
 ```
 
 Expected: findings are explainable and limited to allowed locations.
@@ -2683,13 +3182,15 @@ Expected: findings are explainable and limited to allowed locations.
 Implementation is release-candidate ready only when:
 
 - all tasks are checked off,
+- task-group checkpoint review/commit notes and the Task 5 handoff artifact are present,
 - pre-implementation AOT and release-verification baselines were captured before source changes,
 - targeted unit and integration tests pass,
-- shape minimum-column validation, duplicate destination-column rejection, required mutation keys, update non-key column validation, bracket escaping, SQL type rendering, nullable false null rejection, reader row-order preservation, duplicate source keys, malformed destination names, separator-whitespace rejection, 128-character identifier limits, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout options, destination-column mapping, key-only delete staging, value normalization for `DateOnly`/`TimeOnly`/enum/`Guid`/`decimal`/`byte[]`/nullable values, reader lifecycle/disposal/idempotency, EOF current clearing, missing ordinal failure, `CheckConstraints` defaulting, metadata-based enum conversion, invalid merge action combinations, AOT enum smoke, public bulk AOT reachability, staged-DML rollback/cancellation, staged-mutation `UseTransaction = false` rejection, insert non-atomic opt-out documentation/tests, rollback-on-cancellation, rollback-failure primary-error preservation, non-cancelable final commit, redacted general-error mapping, and polymorphic merge-option validation are covered by tests or explicit static gates,
+- shape minimum-column validation, duplicate destination-column rejection, required mutation keys, update non-key column validation, bracket escaping, SQL type rendering, explicit decimal precision/scale validation, string/binary size validation, temporal scale validation, CLR/SQL type compatibility validation, stage-key index metadata validation with the 900-byte portability limit, nullable false null rejection, reader row-order preservation, duplicate source keys, malformed destination names, separator-whitespace rejection, 128-character identifier limits, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout options, destination-column mapping, key-only delete staging, value normalization for `DateOnly`/`TimeOnly`/enum/`Guid`/`decimal`/`byte[]`/nullable values, reader lifecycle/disposal/idempotency, EOF current clearing, missing ordinal failure, `CheckConstraints` defaulting with a real constraint-failure test, metadata-based enum conversion, default merge update+insert behavior, invalid merge action combinations, unknown merge action-bit rejection, AOT enum smoke, concrete public bulk AOT reachability, staged-DML rollback/cancellation, staged-mutation `UseTransaction = false` rejection, staged-mutation rejection of misleading direct-bulk-copy flags, insert non-atomic opt-out documentation/tests, rollback-on-cancellation, rollback-failure primary-error preservation, non-cancelable final commit, redacted SQL/general-error mapping without public `InnerException`, no pre-scan raw verification-output console echo, broadened standalone repository artifact scanning, and polymorphic merge-option validation are covered by tests or explicit static gates,
 - AOT verification passes with no new Lib.Db warnings,
 - official release verification passes,
 - durable release-verification log is captured, non-empty, post-scanned, ignored/untracked, and remains secret-safe,
-- docs are updated,
+- if this sub-plan is executed standalone, public docs/history/skill guidance are updated by Task 10,
+- if this sub-plan is executed through the integrated v2.4.0 plan, Task 10's bulk documentation checklist is complete and integrated Task 5 owns the actual public docs/history/skill edits before release readiness is claimed,
 - a final security/code review finds no blocking issue.
 
 ## Scope Reduction Gate

@@ -1,7 +1,7 @@
 # Lib.Db v2.4.0 Integrated Additional Scope Design
 
 Date: 2026-05-22
-Status: Draft, implementation not started from this document
+Status: Approved for v2.4.0 implementation planning; implementation not started from this document
 Scope: The five adopted v2.4.0 additional-scope items and their release gates
 
 ## Purpose
@@ -83,15 +83,19 @@ This section applies the Codex Security threat-model lens to the integrated scop
 - Target key columns are a database contract and must be backed by application-owned `PRIMARY KEY` or `UNIQUE` constraints/indexes.
 - Bulk readers normalize `DateOnly`, `TimeOnly`, and enum values before `SqlBulkCopy` consumes rows.
 - Bulk enum conversion is selected from shape metadata at shape-build time, not by per-row runtime type inspection.
-- AOT smoke includes an enum column, verifies enum normalization through the static shape path, and roots public AOT-safe bulk overloads/executor setup enough for publish-time AOT analysis to inspect them without requiring a live database.
+- AOT smoke includes an enum column, verifies enum normalization through the static shape path, and roots the concrete public AOT-safe bulk overload/executor setup enough for publish-time AOT analysis to inspect it without requiring a live database. Interface delegate creation alone is not sufficient.
 - Bulk readers track `IsClosed`, implement idempotent `Close()`/`Dispose(bool)`, clear current row state when `Read()` reaches EOF, throw on missing `GetOrdinal` names, report `HasRows` as result-set presence while preserving first-row behavior, and dispose the underlying row enumerator exactly once.
 - `BulkShapeDataReader<T>` remains internal and is not a public API surface.
 - New AOT-safe bulk options default to `CheckConstraints = true`.
+- `CheckConstraints = true` is verified by a real SQL Server `CHECK` constraint failure, not only by inspecting option defaults.
+- Bulk decimal columns require explicit precision and scale; generated stage SQL must not silently default to `decimal(18,0)`.
 - Unsupported `SqlDbType` values are rejected before any database connection opens.
 - Bulk public methods explicitly attempt best-effort rollback for SQL/general/cancellation failures before returning redacted failed `DbResult<T>` or rethrowing cancellation.
+- Bulk SQL/provider failures use a generic public message and do not retain raw provider exceptions as `DbError.InnerException`.
 - Rollback failure is diagnostic-only and cannot replace the original public bulk failure.
 - Final commit is non-cancelable from the caller token; cancellation rollback is guaranteed only before commit begins.
 - Staged bulk update/delete/upsert/merge reject `UseTransaction = false` in v2.4.0 before opening a connection.
+- Staged bulk update/delete/upsert/merge reject direct-bulk-copy destination flags that would otherwise be mistaken for target-DML controls: `FireTriggers = true`, `KeepIdentity = true`, and `CheckConstraints = false`.
 - Bulk insert may accept `UseTransaction = false` only as an explicit non-atomic performance opt-out; public docs and tests must not promise rollback or cleanup for that mode.
 - `DeleteNotMatchedBySource` is rejected for v2.4.0.
 - `DeleteMatched` is rejected when combined with update or insert actions in v2.4.0.
@@ -101,7 +105,8 @@ This section applies the Codex Security threat-model lens to the integrated scop
 - Cache factory failures use generic public messages and must not copy raw `DbError.Message`, SQL text, object names, row values, cache payloads, or tenant/user identifiers into thrown exceptions.
 - The existing HybridCache failure test is rewritten to expect the generic `DB query failed.` message and to assert that raw failure details are not exposed.
 - Faulted HybridCache query tasks also map to the generic failure message without preserving the raw exception as `InnerException`.
-- Cache documentation states that tag invalidation is logical and that other servers' in-memory L1 entries are not affected by current-server invalidation alone.
+- Cache documentation states that tag invalidation is logical; with a provider-backed L2 it updates the current server and secondary cache view, but other servers' in-memory L1 entries are not physically cleared by current-server invalidation alone.
+- HybridCache docs call out Native AOT/trimming serializer requirements: callers using provider-backed distributed cache payloads in Native AOT deployments must use AOT-compatible serializers/source-generated metadata rather than assuming runtime reflection-based serialization is available.
 - Typed multi-result helpers must dispose the underlying reader, preserve strict result-set ordering, convert read failures into the established redacted `DbResult<T>` failure pattern, and include arity 3/4 failure coverage in addition to arity 2 success/failure tests.
 - Future generator/migration/change-tracking docs must stay explicit opt-in and must not imply that Lib.Db will own application schema evolution automatically.
 
@@ -147,7 +152,7 @@ Security guidance:
 
 Known limitation:
 
-- The existing task-based `WithHybridCacheAsync` pattern cannot prevent the original DB task from starting if the caller has already created it. v2.4.0 will document this honestly. A future factory-style HybridCache helper can be considered, but it is not required to satisfy the adopted tags-overload scope.
+- The existing task-based `WithHybridCacheAsync` pattern cannot prevent the original DB task from starting if the caller has already created it. A cache hit can return the cached value while the already-created DB task continues in the background, faults later, or performs any side effect already caused by task creation. v2.4.0 will document this honestly and will not promise lazy factory semantics for this overload. A future factory-style HybridCache helper can be considered, but it is not required to satisfy the adopted tags-overload scope.
 
 ## Item 2: Typed QueryMultiple Helper
 
@@ -258,8 +263,12 @@ Security controls:
 - Target key uniqueness is documented as a required schema contract, not verified through default per-call metadata probes.
 - Delete uses a key-only stage shape so temp-table columns, reader columns, and `SqlBulkCopy` mappings align.
 - `DateOnly`, `TimeOnly`, and enum values are normalized before bulk-copy consumption.
-- enum conversion is shape-metadata based, static gates reject row-time `value.GetType()`/`Enum.GetUnderlyingType` in the reader, AOT smoke includes an enum column and public bulk overload reachability, current row state is cleared at EOF, missing column ordinals fail explicitly, and row enumerators are closed/disposed idempotently by the reader.
+- enum conversion is shape-metadata based, static gates reject row-time `value.GetType()`/`Enum.GetUnderlyingType` in the reader, AOT smoke includes an enum column and concrete bulk executor reachability, current row state is cleared at EOF, missing column ordinals fail explicitly, and row enumerators are closed/disposed idempotently by the reader.
 - `CheckConstraints` is enabled by default for the AOT-safe bulk path.
+- staged mutation options document and test that `FireTriggers`, `KeepIdentity`, and `CheckConstraints` do not alter target DML semantics.
+- default `BulkMergeAsync` update+insert behavior has its own integration test and cannot rely on `BulkUpsertAsync` coverage as a proxy.
+- decimal precision/scale validation and SQL rendering are explicit.
+- SQL/provider failures from the bulk path return redacted public `DbResult<T>` values without raw `InnerException`.
 - `BulkMergeOptions` validation is polymorphic and cannot be bypassed through a base options reference.
 - `DeleteMatched` is exclusive so a staged key cannot be updated or inserted and then deleted in the same v2.4.0 bulk merge call.
 - `BulkShapeDataReader<T>` remains internal; tests and AOT verification access it only through existing `InternalsVisibleTo`.
@@ -322,6 +331,7 @@ No NuGet publish or tag should occur until:
 - official release verification passes from a clean environment,
 - official release verification leaves a durable, non-empty, post-scanned, ignored/untracked, secret-safe log under `Verification/artifacts/logs/`,
 - docs clearly distinguish v2.4.0 implemented features from v2.5.0 roadmap items,
+- docs include HybridCache Native AOT serializer/trimming caveats and the positive/negative L1/L2 invalidation boundary,
 - final review confirms no secrets, raw connection strings, or unsafe SQL examples were introduced.
 
 Scope reduction is a release decision, not a local implementation detail. The
@@ -358,7 +368,7 @@ The integrated additional scope is complete when:
 - this design and the implementation plan are committed,
 - the three v2.4.0 implemented areas have tests and docs,
 - the roadmap areas are documented as v2.5.0 candidates only,
-- cache duplicate-tag dedupe, cache generic failure messages, faulted-task generic mapping, no raw inner exception retention, and existing failure-test rewrite, QueryMultiple arity 3/4 success and failure coverage, staged DML rollback/cancellation, staged-mutation `UseTransaction = false` rejection, insert non-atomic opt-out documentation, rollback-failure primary-error preservation, non-cancelable final commit, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout tests, identifier length limits, separator-whitespace rejection, destination-column mapping, internal bulk reader surface, full target-row assertions, durable secret-safe verification output with post-log scan/tracking gates, pre-implementation baseline capture, `RequiresDynamicCode`/IL3050 static gates, and invalid merge action combinations are all represented in the sub-plans,
+- cache duplicate-tag dedupe, cache generic failure messages, faulted-task generic mapping, task-based cache-hit limitation documentation, no raw inner exception retention, HybridCache Native AOT serializer/trimming caveat, current-server/L2 versus other-server L1 invalidation boundary, and existing failure-test rewrite, QueryMultiple arity 3/4 success and failure coverage, staged DML rollback/cancellation, staged-mutation `UseTransaction = false` rejection, staged-mutation direct-bulk-copy flag rejection, insert non-atomic opt-out documentation, rollback-failure primary-error preservation, non-cancelable final commit, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout tests, explicit decimal precision/scale validation, string/binary size and temporal scale validation, CLR/SQL type compatibility validation, stage-key index metadata validation with the 900-byte portability limit, real `CheckConstraints` constraint-failure coverage, bulk SQL failure redaction without public `InnerException`, default merge update+insert coverage, identifier length limits, separator-whitespace rejection, destination-column mapping, internal bulk reader surface, full target-row assertions, durable secret-safe verification output without pre-scan raw console echo and with broadened repository artifact scanning/tracking gates plus redacted scanner output, pre-implementation baseline capture, `RequiresDynamicCode`/IL3050 static gates, unknown merge action-bit rejection through direct validation and public merge path, and invalid merge action combinations are all represented in the sub-plans,
 - official verification passes,
 - security review finds no release-blocking issue,
 - v2.4.0 package docs state exactly what is implemented and what is planned.
