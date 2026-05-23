@@ -1512,6 +1512,30 @@ internal static class SchemaInitializer
             END
             """).ExecuteAsync().ConfigureAwait(false);
 
+        // BulkMutationTarget 테이블
+        await db.Sql("""
+            IF OBJECT_ID('[gap].[BulkMutationTarget]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [gap].[BulkMutationTarget] (
+                    [Id] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_BulkMutationTarget] PRIMARY KEY,
+                    [ExternalId] int NOT NULL,
+                    [Name] nvarchar(100) NOT NULL,
+                    [Price] decimal(18,2) NOT NULL,
+                    [UpdatedAt] datetime2(7) NOT NULL CONSTRAINT [DF_BulkMutationTarget_UpdatedAt] DEFAULT SYSUTCDATETIME(),
+                    CONSTRAINT [CK_BulkMutationTarget_Price_NonNegative] CHECK ([Price] >= 0)
+                )
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            IF OBJECT_ID('[gap].[BulkMutationTarget]', 'U') IS NOT NULL
+               AND OBJECT_ID('[gap].[CK_BulkMutationTarget_Price_NonNegative]', 'C') IS NULL
+            BEGIN
+                ALTER TABLE [gap].[BulkMutationTarget] WITH CHECK
+                ADD CONSTRAINT [CK_BulkMutationTarget_Price_NonNegative] CHECK ([Price] >= 0);
+            END;
+            """).ExecuteAsync().ConfigureAwait(false);
+
         // SP 1: usp_BulkInsert_Tvp
         await db.Sql("""
             CREATE OR ALTER PROCEDURE [gap].[usp_BulkInsert_Tvp]
@@ -2088,6 +2112,7 @@ internal static class SchemaInitializer
                 DELETE FROM [resilience].[RetryTest];
                 DELETE FROM [resilience].[TimeoutTest];
                 IF OBJECT_ID('[gap].[BulkTarget]', 'U') IS NOT NULL DELETE FROM [gap].[BulkTarget];
+                IF OBJECT_ID('[gap].[BulkMutationTarget]', 'U') IS NOT NULL DELETE FROM [gap].[BulkMutationTarget];
                 IF OBJECT_ID('[gap].[JsonData]', 'U') IS NOT NULL DELETE FROM [gap].[JsonData];
                 IF OBJECT_ID('[gap].[MergeTarget]', 'U') IS NOT NULL DELETE FROM [gap].[MergeTarget];
                 IF OBJECT_ID('[verify].[VerificationOrderAudit]', 'U') IS NOT NULL DELETE FROM [verify].[VerificationOrderAudit];

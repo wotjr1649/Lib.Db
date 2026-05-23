@@ -271,6 +271,24 @@ internal sealed class DbSession(
         }
     }
 
+    public Task<DbResult<long>> BulkInsertAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkWriteOptions? options = null,
+        CancellationToken ct = default)
+        where T : notnull
+    {
+        CheckDisposed();
+        EnsureRegisteredInstanceName(instanceName, nameof(instanceName));
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(shape);
+
+        BulkWriteExecutor executor = new(connectionFactory);
+        return executor.BulkInsertAsync(instanceName, destinationTable, records, shape, options, ct);
+    }
+
     #endregion
 
     #region 인스턴스 상태 관리
