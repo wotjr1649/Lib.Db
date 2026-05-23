@@ -6,6 +6,7 @@
 
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Lib.Db.Caching;
 using Lib.Db.Contracts.Core;
 using Lib.Db.Extensions;
 using Microsoft.Extensions.Caching.Distributed;
@@ -206,38 +207,239 @@ public sealed class QueryCacheExtensionsCoverageTests
     }
 
     [Fact]
-    public async Task WithHybridCacheAsync_ShouldThrowWhenResultFails()
+    public async Task WithHybridCacheAsync_ShouldPreserveDefaultLiteralCancellationTokenCall()
+    {
+        using ServiceProvider provider = CreateHybridCacheProvider();
+        HybridCache cache = provider.GetRequiredService<HybridCache>();
+
+        DbResult<CachedUser?> result = await Task
+            .FromResult(DbResult<CachedUser?>.Ok(new CachedUser(11, "default-ct")))
+            .WithHybridCacheAsync(cache, "hybrid:default-ct", TimeSpan.FromMinutes(1), default);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().Be(new CachedUser(11, "default-ct"));
+    }
+
+    [Fact]
+    public async Task WithHybridCacheAsync_ShouldStoreHybridCacheEntryWithTags()
+    {
+        var cache = new LibDbAotHybridCache();
+        int queryCalls = 0;
+
+        Task<DbResult<string?>> Query()
+        {
+            queryCalls++;
+            return Task.FromResult(DbResult<string?>.Ok("before"));
+        }
+
+        DbResult<string?> first = await Query()
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:tagged",
+                TimeSpan.FromMinutes(5),
+                tags: ["product", "tenant:hash"],
+                TestContext.Current.CancellationToken);
+
+        await cache.RemoveByTagAsync("product", TestContext.Current.CancellationToken);
+
+        DbResult<string?> second = await Task.FromResult(DbResult<string?>.Ok("after"))
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:tagged",
+                TimeSpan.FromMinutes(5),
+                tags: ["product", "tenant:hash"],
+                TestContext.Current.CancellationToken);
+
+        first.Value.Should().Be("before");
+        second.Value.Should().Be("after");
+        queryCalls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" tag")]
+    [InlineData("tag ")]
+    [InlineData("*")]
+    public async Task WithHybridCacheAsync_ShouldRejectInvalidTags(string? tag)
+    {
+        var cache = new LibDbAotHybridCache();
+        string[] tags = tag is null ? [null!] : [tag];
+
+        Func<Task> act = () => Task.FromResult(DbResult<string?>.Ok("value"))
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:invalid-tag",
+                TimeSpan.FromMinutes(1),
+                tags,
+                TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task WithHybridCacheAsync_ShouldTreatNullTagsAsNoTags()
+    {
+        var cache = new LibDbAotHybridCache();
+
+        DbResult<string?> result = await Task.FromResult(DbResult<string?>.Ok("value"))
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:null-tags",
+                TimeSpan.FromMinutes(1),
+                tags: null,
+                TestContext.Current.CancellationToken);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().Be("value");
+    }
+
+    [Fact]
+    public async Task WithHybridCacheAsync_ShouldRejectTooManyDistinctTags()
+    {
+        var cache = new LibDbAotHybridCache();
+        string[] tags = Enumerable.Range(0, 33)
+            .Select(static index => $"tag:{index}")
+            .ToArray();
+
+        Func<Task> act = () => Task.FromResult(DbResult<string?>.Ok("value"))
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:too-many-tags",
+                TimeSpan.FromMinutes(1),
+                tags,
+                TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*32*tags*");
+    }
+
+    [Fact]
+    public async Task WithHybridCacheAsync_ShouldCountDistinctTagsWhenEnforcingLimit()
+    {
+        var cache = new LibDbAotHybridCache();
+        string[] tags = Enumerable.Range(0, 32)
+            .Select(static index => $"tag:{index}")
+            .Concat(["tag:0", "tag:0"])
+            .ToArray();
+
+        DbResult<string?> result = await Task.FromResult(DbResult<string?>.Ok("value"))
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:duplicate-tags",
+                TimeSpan.FromMinutes(1),
+                tags,
+                TestContext.Current.CancellationToken);
+
+        result.IsSuccess.Should().BeTrue(result.Error?.Message);
+    }
+
+    [Fact]
+    public async Task WithHybridCacheAsync_ShouldThrowGenericMessageWhenResultFails()
+    {
+        var cache = new LibDbAotHybridCache();
+
+        Func<Task> act = () => Task
+            .FromResult(DbResult<CachedUser?>.Fail(CreateError("hybrid failed: SELECT * FROM dbo.SecretTenant")))
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:failure",
+                TimeSpan.FromMinutes(1),
+                TestContext.Current.CancellationToken);
+
+        InvalidOperationException exception = (await act.Should()
+            .ThrowAsync<InvalidOperationException>()).Which;
+
+        exception.Message.Should().Be("DB query failed.");
+        exception.Message.Should().NotContain("hybrid failed");
+        exception.Message.Should().NotContain("SecretTenant");
+        exception.Message.Should().NotContain("SELECT");
+    }
+
+    [Fact]
+    public async Task WithHybridCacheAsync_ShouldThrowGenericMessageWhenDefaultHybridCacheResultFails()
     {
         using ServiceProvider provider = CreateHybridCacheProvider();
         HybridCache cache = provider.GetRequiredService<HybridCache>();
 
         Func<Task> act = () => Task
-            .FromResult(DbResult<CachedUser?>.Fail(CreateError("hybrid failed")))
-            .WithHybridCacheAsync(cache, "hybrid:failure", TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+            .FromResult(DbResult<CachedUser?>.Fail(CreateError("raw row value: SELECT * FROM dbo.SecretTenant")))
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:default-provider-failure",
+                TimeSpan.FromMinutes(1),
+                TestContext.Current.CancellationToken);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("hybrid failed");
+        InvalidOperationException exception = (await act.Should()
+            .ThrowAsync<InvalidOperationException>()).Which;
+
+        exception.Message.Should().Be("DB query failed.");
+        exception.InnerException.Should().BeNull();
+        exception.ToString().Should().NotContain("raw row value");
+        exception.ToString().Should().NotContain("SecretTenant");
+        exception.ToString().Should().NotContain("SELECT");
+    }
+
+    [Fact]
+    public async Task WithHybridCacheAsync_ShouldThrowGenericMessageWhenResultTaskFaults()
+    {
+        var cache = new LibDbAotHybridCache();
+        InvalidOperationException rawFailure = new("raw provider failure: SELECT * FROM dbo.SecretTenant");
+
+        Func<Task> act = () => Task
+            .FromException<DbResult<CachedUser?>>(rawFailure)
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:faulted",
+                TimeSpan.FromMinutes(1),
+                TestContext.Current.CancellationToken);
+
+        InvalidOperationException exception = (await act.Should()
+            .ThrowAsync<InvalidOperationException>()).Which;
+
+        exception.Message.Should().Be("DB query failed.");
+        exception.InnerException.Should().BeNull();
+        exception.ToString().Should().NotContain("raw provider failure");
+        exception.ToString().Should().NotContain("SecretTenant");
+        exception.ToString().Should().NotContain("SELECT");
+    }
+
+    [Fact]
+    public async Task WithHybridCacheAsync_ShouldPreserveCancellationWhenResultTaskCancels()
+    {
+        var cache = new LibDbAotHybridCache();
+        using CancellationTokenSource cts = new();
+        await cts.CancelAsync();
+
+        Func<Task> act = () => Task
+            .FromCanceled<DbResult<CachedUser?>>(cts.Token)
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:canceled",
+                TimeSpan.FromMinutes(1),
+                TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
     public async Task WithHybridCacheAsync_ShouldUseFallbackMessageWhenErrorMessageIsMissing()
     {
-        using ServiceProvider provider = CreateHybridCacheProvider();
-        HybridCache cache = provider.GetRequiredService<HybridCache>();
+        var cache = new LibDbAotHybridCache();
 
         Func<Task> act = () => Task
             .FromResult(DbResult<CachedUser?>.Fail(new DbError { Kind = DbErrorKind.Unknown, Message = null! }))
             .WithHybridCacheAsync(cache, "hybrid:failure:fallback", TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("DB 쿼리 실패");
+            .WithMessage("DB query failed.");
     }
 
     [Fact]
     public async Task WithHybridCacheAsync_ShouldUseFallbackMessageWhenErrorObjectIsMissing()
     {
-        using ServiceProvider provider = CreateHybridCacheProvider();
-        HybridCache cache = provider.GetRequiredService<HybridCache>();
+        var cache = new LibDbAotHybridCache();
         DbResult<CachedUser?> failureWithoutError = default;
 
         Func<Task> act = () => Task
@@ -245,7 +447,7 @@ public sealed class QueryCacheExtensionsCoverageTests
             .WithHybridCacheAsync(cache, "hybrid:failure:null-error", TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("DB 쿼리 실패");
+            .WithMessage("DB query failed.");
     }
 
     private static async IAsyncEnumerable<CachedUser> CreateUsersAsync()

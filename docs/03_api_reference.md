@@ -321,6 +321,7 @@ DB 명령 실행 전후를 가로채는 사용자 수준 인터셉터입니다.
 | `WithCacheAsync<T>` | `Task<DbResult<T?>> WithCacheAsync<T>(this Task<DbResult<T?>> resultTask, IDistributedCache cache, string cacheKey, TimeSpan duration, JsonSerializerOptions? jsonOptions, CancellationToken ct)` | 단건 결과 캐싱 |
 | `WithCacheListAsync<T>` | `Task<DbResult<List<T>>> WithCacheListAsync<T>(this Task<DbResult<IAsyncEnumerable<T>>> resultTask, IDistributedCache cache, string cacheKey, TimeSpan duration, JsonSerializerOptions? jsonOptions, CancellationToken ct)` | 다건 스트림 -> List 캐싱 |
 | `WithHybridCacheAsync<T>` | `Task<DbResult<T?>> WithHybridCacheAsync<T>(this Task<DbResult<T?>> resultTask, HybridCache hybridCache, string cacheKey, TimeSpan duration, CancellationToken ct)` | HybridCache L1+L2 캐싱 |
+| `WithHybridCacheAsync<T>` | `Task<DbResult<T?>> WithHybridCacheAsync<T>(this Task<DbResult<T?>> resultTask, HybridCache hybridCache, string cacheKey, TimeSpan duration, IEnumerable<string>? tags, CancellationToken ct)` | HybridCache L1+L2 캐싱 및 태그 연결 |
 | `InvalidateCacheAsync` | `Task InvalidateCacheAsync(this IDistributedCache cache, string cacheKey, CancellationToken ct)` | 캐시 무효화 |
 
 ---

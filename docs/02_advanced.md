@@ -548,13 +548,22 @@ DbResult<ProductDto?> result = await session.Default
     .Procedure("dbo.usp_GetProduct")
     .With(new { ProductId = 42 })
     .QuerySingleAsync<ProductDto>()
-    .WithHybridCacheAsync(hybridCache, "product:42", TimeSpan.FromMinutes(30));
+    .WithHybridCacheAsync(
+        hybridCache,
+        "product:42",
+        TimeSpan.FromMinutes(30),
+        tags: ["product", "schema:product"]);
 ```
+
+`tags`는 `RemoveByTagAsync` 기반 논리 무효화를 위한 애플리케이션 소유 라벨입니다. null은 태그 없음을 의미하며, null 요소, 빈 문자열/공백, 앞뒤 공백, wildcard 예약값 `*`, 중복 제거 후 32개 초과 태그는 거부됩니다. 태그에는 사용자 ID, 전자메일, 토큰, 연결 문자열, SQL 원문 같은 민감값을 넣지 마세요.
+
+이 overload는 이미 생성된 `Task<DbResult<T?>>`를 받습니다. 따라서 캐시 히트여도 DB Task 생성, Task 생성 시점의 부작용, 이후 background fault 자체를 막는 lazy factory API가 아닙니다.
 
 ### 9-4. 캐시 무효화
 
 ```csharp
 await cache.InvalidateCacheAsync("user:1");
+await hybridCache.RemoveByTagAsync("product");
 ```
 
 ### 9-5. 캐시 동작 흐름
