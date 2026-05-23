@@ -495,12 +495,12 @@ public sealed class VerificationEntryPointTests
         combined.Should().Contain("Invoke-Verification.ps1");
         combined.Should().Contain("LIBDB_TEST_SQL_PASSWORD");
         combined.Should().NotContain("dotnet test");
-        combined.Should().Contain("id-token: write");
-        combined.Should().Contain("NuGet/login@v1");
-        combined.Should().Contain("secrets.NUGET_USER");
+        combined.Should().Contain("NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}");
         combined.Should().Contain("--api-key \"$NUGET_API_KEY\"");
+        combined.Should().NotContain("id-token: write");
+        combined.Should().NotContain("NuGet/login@v1");
+        combined.Should().NotContain("secrets.NUGET_USER");
         combined.Should().NotContain("--api-key ${{ secrets.NUGET_API_KEY }}");
-        combined.Should().NotContain("secrets.NUGET_API_KEY");
     }
 
     private static DirectoryInfo FindRepoRoot()
