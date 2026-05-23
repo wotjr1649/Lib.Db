@@ -113,7 +113,9 @@ public sealed class BulkSqlBuilderTests
 
         string sql = BulkSqlBuilder.UpdateFromStage(destination, "#LibDbBulk_Test", shape);
 
-        sql.Should().Be("UPDATE target SET target.[Sku] = source.[Sku], target.[Price] = source.[Price] FROM [sales].[Products] AS target INNER JOIN #LibDbBulk_Test AS source ON target.[Id] = source.[Id];");
+        sql.Should().Be("DECLARE @LibDbAffectedRows TABLE ([Affected] bit NOT NULL); UPDATE target SET target.[Sku] = source.[Sku], target.[Price] = source.[Price] OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows FROM [sales].[Products] AS target INNER JOIN #LibDbBulk_Test AS source ON target.[Id] = source.[Id]; SELECT COUNT_BIG(*) FROM @LibDbAffectedRows;");
+        sql.Should().Contain("OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows");
+        sql.Should().Contain("SELECT COUNT_BIG(*) FROM @LibDbAffectedRows");
         sql.Should().NotContain("MERGE");
         sql.Should().NotContain(rowValue);
     }
@@ -130,10 +132,33 @@ public sealed class BulkSqlBuilderTests
 
         string sql = BulkSqlBuilder.DeleteFromStage(destination, "#LibDbBulk_Test", shape);
 
-        sql.Should().Be("DELETE target FROM [sales].[Products] AS target INNER JOIN #LibDbBulk_Test AS source ON target.[Id] = source.[Id];");
+        sql.Should().Be("DECLARE @LibDbAffectedRows TABLE ([Affected] bit NOT NULL); DELETE target OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows FROM [sales].[Products] AS target INNER JOIN #LibDbBulk_Test AS source ON target.[Id] = source.[Id]; SELECT COUNT_BIG(*) FROM @LibDbAffectedRows;");
+        sql.Should().Contain("OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows");
+        sql.Should().Contain("SELECT COUNT_BIG(*) FROM @LibDbAffectedRows");
         sql.Should().NotContain("[Sku]");
         sql.Should().NotContain("[Price]");
         sql.Should().NotContain("MERGE");
+    }
+
+    [Fact]
+    public void InsertMissingFromStage_ShouldRenderNotExistsWithUpdateHoldLockWithoutMergeOrRowValues()
+    {
+        const string rowValue = "SKU-42";
+        BulkIdentifier destination = BulkIdentifier.ParseTableName("sales.Products");
+        BulkShape<BulkSqlRow> shape = BulkShape.For<BulkSqlRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64, nullable: false)
+            .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2)
+            .Build();
+
+        string sql = BulkSqlBuilder.InsertMissingFromStage(destination, "#LibDbBulk_Test", shape);
+
+        sql.Should().Be("DECLARE @LibDbAffectedRows TABLE ([Affected] bit NOT NULL); INSERT INTO [sales].[Products] ([Id], [Sku], [Price]) OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows SELECT source.[Id], source.[Sku], source.[Price] FROM #LibDbBulk_Test AS source WHERE NOT EXISTS (SELECT 1 FROM [sales].[Products] AS target WITH (UPDLOCK, HOLDLOCK) WHERE target.[Id] = source.[Id]); SELECT COUNT_BIG(*) FROM @LibDbAffectedRows;");
+        sql.Should().Contain("OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows");
+        sql.Should().Contain("SELECT COUNT_BIG(*) FROM @LibDbAffectedRows");
+        sql.Should().Contain("WITH (UPDLOCK, HOLDLOCK)");
+        sql.Should().NotContain("MERGE");
+        sql.Should().NotContain(rowValue);
     }
 
     [Fact]
@@ -164,6 +189,20 @@ public sealed class BulkSqlBuilderTests
     }
 
     [Fact]
+    public void InsertMissingFromStage_ShouldRejectShapeWithoutKeys()
+    {
+        BulkIdentifier destination = BulkIdentifier.ParseTableName("sales.Products");
+        BulkShape<BulkSqlRow> shape = BulkShape.For<BulkSqlRow>()
+            .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64, nullable: false)
+            .Build();
+
+        Action act = () => BulkSqlBuilder.InsertMissingFromStage(destination, "#LibDbBulk_Test", shape);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*key*");
+    }
+
+    [Fact]
     public void BuilderSql_ShouldNotEmitMergeOrRowValues()
     {
         const string rowValue = "SKU-42";
@@ -174,7 +213,11 @@ public sealed class BulkSqlBuilderTests
 
         string tableSql = BulkSqlBuilder.CreateStageTable("#LibDbBulk_Test", shape.Columns);
         string indexSql = BulkSqlBuilder.CreateUniqueStageKeyIndex("#LibDbBulk_Test", shape);
-        string combinedSql = tableSql + indexSql;
+        string insertMissingSql = BulkSqlBuilder.InsertMissingFromStage(
+            BulkIdentifier.ParseTableName("sales.Products"),
+            "#LibDbBulk_Test",
+            shape);
+        string combinedSql = tableSql + indexSql + insertMissingSql;
 
         combinedSql.Should().NotContain("MERGE");
         combinedSql.Should().NotContain(rowValue);

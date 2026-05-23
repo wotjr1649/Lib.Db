@@ -1536,6 +1536,40 @@ internal static class SchemaInitializer
             END;
             """).ExecuteAsync().ConfigureAwait(false);
 
+        await db.Sql("""
+            IF OBJECT_ID('[gap].[BulkMutationAudit]', 'U') IS NULL
+            BEGIN
+                CREATE TABLE [gap].[BulkMutationAudit] (
+                    [Id] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_BulkMutationAudit] PRIMARY KEY,
+                    [ActionName] nvarchar(20) NOT NULL,
+                    [AffectedRows] int NOT NULL,
+                    [CreatedAt] datetime2(7) NOT NULL CONSTRAINT [DF_BulkMutationAudit_CreatedAt] DEFAULT SYSUTCDATETIME()
+                )
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER TRIGGER [gap].[TR_BulkMutationTarget_AuditInsert]
+            ON [gap].[BulkMutationTarget]
+            AFTER INSERT
+            AS
+            BEGIN
+                INSERT INTO [gap].[BulkMutationAudit] ([ActionName], [AffectedRows])
+                SELECT N'INSERT', COUNT(*) FROM inserted;
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
+            CREATE OR ALTER TRIGGER [gap].[TR_BulkMutationTarget_AuditUpdate]
+            ON [gap].[BulkMutationTarget]
+            AFTER UPDATE
+            AS
+            BEGIN
+                INSERT INTO [gap].[BulkMutationAudit] ([ActionName], [AffectedRows])
+                SELECT N'UPDATE', COUNT(*) FROM inserted;
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
         // SP 1: usp_BulkInsert_Tvp
         await db.Sql("""
             CREATE OR ALTER PROCEDURE [gap].[usp_BulkInsert_Tvp]

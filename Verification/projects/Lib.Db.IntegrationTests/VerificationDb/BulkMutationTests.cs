@@ -527,10 +527,311 @@ public sealed class BulkMutationTests(MultiDbFixture fixture)
         }
     }
 
+    [Fact]
+    public async Task BulkUpsertAsync_WithStaticShape_ShouldUpdateMatchedAndInsertMissing()
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        await ClearTargetAsync(ct);
+
+        try
+        {
+            await SeedRowsAsync(ct);
+
+            DbResult<BulkUpsertResult> result = await _session.BulkUpsertAsync(
+                "Verification",
+                DestinationTable,
+                [
+                    new BulkMutationRow(1001, "Seed one upserted", 19.99m),
+                    new BulkMutationRow(1003, "Seed three inserted", 33.75m)
+                ],
+                s_shape,
+                ct: ct);
+
+            result.IsSuccess.Should().BeTrue(result.Error?.Message);
+            result.Value.Updated.Should().Be(1);
+            result.Value.Inserted.Should().Be(1);
+            result.Value.TotalAffected.Should().Be(2);
+            (await CountRowsAsync(ct)).Should().Be(3);
+            await AssertRowAsync(1001, "Seed one upserted", 19.99m, ct);
+            await AssertRowAsync(1002, "Seed two", 22.50m, ct);
+            await AssertRowAsync(1003, "Seed three inserted", 33.75m, ct);
+        }
+        finally
+        {
+            await ClearTargetAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task BulkMergeAsync_WithDefaultActions_ShouldUpdateMatchedInsertMissingAndReturnSeparatedCounts()
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        await ClearTargetAsync(ct);
+
+        try
+        {
+            await SeedRowsAsync(ct);
+
+            DbResult<BulkMergeResult> result = await _session.BulkMergeAsync(
+                "Verification",
+                DestinationTable,
+                [
+                    new BulkMutationRow(1001, "Seed one merged", 29.99m),
+                    new BulkMutationRow(1003, "Seed three merged", 43.75m)
+                ],
+                s_shape,
+                ct: ct);
+
+            result.IsSuccess.Should().BeTrue(result.Error?.Message);
+            result.Value.Updated.Should().Be(1);
+            result.Value.Inserted.Should().Be(1);
+            result.Value.Deleted.Should().Be(0);
+            result.Value.TotalAffected.Should().Be(2);
+            (await CountRowsAsync(ct)).Should().Be(3);
+            await AssertRowAsync(1001, "Seed one merged", 29.99m, ct);
+            await AssertRowAsync(1002, "Seed two", 22.50m, ct);
+            await AssertRowAsync(1003, "Seed three merged", 43.75m, ct);
+        }
+        finally
+        {
+            await ClearTargetAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task BulkMergeAsync_WithDeleteMatched_ShouldDeleteOnlyStagedKeys()
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        await ClearTargetAsync(ct);
+
+        try
+        {
+            await SeedRowsAsync(ct);
+
+            DbResult<BulkMergeResult> result = await _session.BulkMergeAsync(
+                "Verification",
+                DestinationTable,
+                [new BulkMutationRow(1001, "ignored", 0m)],
+                s_shape,
+                new BulkMergeOptions { Actions = BulkMergeActions.DeleteMatched },
+                ct);
+
+            result.IsSuccess.Should().BeTrue(result.Error?.Message);
+            result.Value.Updated.Should().Be(0);
+            result.Value.Inserted.Should().Be(0);
+            result.Value.Deleted.Should().Be(1);
+            result.Value.TotalAffected.Should().Be(1);
+            (await CountRowsAsync(ct)).Should().Be(1);
+            await AssertMissingAsync(1001, ct);
+            await AssertRowAsync(1002, "Seed two", 22.50m, ct);
+        }
+        finally
+        {
+            await ClearTargetAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(BulkMergeActions.UpdateMatched | BulkMergeActions.DeleteMatched)]
+    [InlineData(BulkMergeActions.InsertMissing | BulkMergeActions.DeleteMatched)]
+    public async Task BulkMergeAsync_WithInvalidDeleteMatchedCombination_ShouldFailBeforeChangingTarget(
+        BulkMergeActions actions)
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        await ClearTargetAsync(ct);
+
+        try
+        {
+            await SeedRowsAsync(ct);
+
+            DbResult<BulkMergeResult> result = await _session.BulkMergeAsync(
+                "Verification",
+                DestinationTable,
+                [new BulkMutationRow(1001, "Seed one should not change", 99.99m)],
+                s_shape,
+                new BulkMergeOptions { Actions = actions },
+                ct);
+
+            result.IsSuccess.Should().BeFalse();
+            (await CountRowsAsync(ct)).Should().Be(2);
+            await AssertRowAsync(1001, "Seed one", 11.25m, ct);
+            await AssertRowAsync(1002, "Seed two", 22.50m, ct);
+        }
+        finally
+        {
+            await ClearTargetAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task BulkUpsertAsync_WhenInsertMissingFails_ShouldRollbackPriorUpdate()
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        await ClearTargetAsync(ct);
+        BulkWriteExecutor.ResetTestHooks();
+        BulkWriteExecutor.BeforeInsertMissingAsync = static (_, _) =>
+            throw new InvalidOperationException("insert missing secret raw payload");
+
+        try
+        {
+            await SeedRowsAsync(ct);
+
+            DbResult<BulkUpsertResult> result = await _session.BulkUpsertAsync(
+                "Verification",
+                DestinationTable,
+                [
+                    new BulkMutationRow(1001, "Seed one should rollback", 19.99m),
+                    new BulkMutationRow(1003, "Seed three should not insert", 33.75m)
+                ],
+                s_shape,
+                ct: ct);
+
+            AssertRedactedFailure(
+                result,
+                "Bulk upsert failed.",
+                SanitizedDestinationTable,
+                "insert missing secret",
+                "raw payload",
+                "Seed one should rollback",
+                "Seed three should not insert",
+                "33.75");
+            await AssertRowAsync(1001, "Seed one", 11.25m, CancellationToken.None);
+            await AssertRowAsync(1002, "Seed two", 22.50m, CancellationToken.None);
+            await AssertMissingAsync(1003, CancellationToken.None);
+        }
+        finally
+        {
+            BulkWriteExecutor.ResetTestHooks();
+            await ClearTargetAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task BulkMergeAsync_WhenCanceledAfterActionBeforeCommit_ShouldAttemptRollbackBeforeRethrow()
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        await ClearTargetAsync(ct);
+        int rollbackAttempts = 0;
+        BulkWriteExecutor.ResetTestHooks();
+
+        try
+        {
+            await SeedRowsAsync(ct);
+            BulkWriteExecutor.BeforeCommitAsync = static (_, token) => throw new OperationCanceledException(token);
+            BulkWriteExecutor.RollbackAttempted = _ => Interlocked.Increment(ref rollbackAttempts);
+
+            Func<Task> act = () => _session.BulkMergeAsync(
+                "Verification",
+                DestinationTable,
+                [
+                    new BulkMutationRow(1001, "Seed one should rollback", 19.99m),
+                    new BulkMutationRow(1003, "Seed three should not insert", 33.75m)
+                ],
+                s_shape,
+                ct: ct);
+
+            await act.Should().ThrowAsync<OperationCanceledException>();
+            rollbackAttempts.Should().Be(1);
+            await AssertRowAsync(1001, "Seed one", 11.25m, CancellationToken.None);
+            await AssertRowAsync(1002, "Seed two", 22.50m, CancellationToken.None);
+            await AssertMissingAsync(1003, CancellationToken.None);
+        }
+        finally
+        {
+            BulkWriteExecutor.ResetTestHooks();
+            await ClearTargetAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task BulkUpsertAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection()
+    {
+        await AssertRejectsBeforeOpeningConnectionAsync(
+            static (executor, options, token) => executor.BulkUpsertAsync(
+                "Verification",
+                DestinationTable,
+                [new BulkMutationRow(1001, "pre-open validation", 1.00m)],
+                s_shape,
+                options,
+                token),
+            new BulkWriteOptions { UseTransaction = false },
+            "Bulk upsert failed.");
+    }
+
+    [Fact]
+    public async Task BulkMergeAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection()
+    {
+        await AssertRejectsBeforeOpeningConnectionAsync(
+            static (executor, options, token) => executor.BulkMergeAsync(
+                "Verification",
+                DestinationTable,
+                [new BulkMutationRow(1001, "pre-open validation", 1.00m)],
+                s_shape,
+                (BulkMergeOptions)options,
+                token),
+            new BulkMergeOptions { UseTransaction = false },
+            "Bulk merge failed.");
+    }
+
+    [Fact]
+    public async Task BulkUpsertAsync_WhenKeepIdentityTrue_ShouldRejectBeforeOpeningConnection()
+    {
+        await AssertRejectsBeforeOpeningConnectionAsync(
+            static (executor, options, token) => executor.BulkUpsertAsync(
+                "Verification",
+                DestinationTable,
+                [new BulkMutationRow(1001, "pre-open validation", 1.00m)],
+                s_shape,
+                options,
+                token),
+            new BulkWriteOptions { KeepIdentity = true },
+            "Bulk upsert failed.");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BulkMergeAsync_WhenFireTriggersTrueOrCheckConstraintsFalse_ShouldRejectBeforeOpeningConnection(
+        bool fireTriggers)
+    {
+        BulkMergeOptions options = fireTriggers
+            ? new BulkMergeOptions { FireTriggers = true }
+            : new BulkMergeOptions { CheckConstraints = false };
+
+        await AssertRejectsBeforeOpeningConnectionAsync(
+            static (executor, options, token) => executor.BulkMergeAsync(
+                "Verification",
+                DestinationTable,
+                [new BulkMutationRow(1001, "pre-open validation", 1.00m)],
+                s_shape,
+                (BulkMergeOptions)options,
+                token),
+            options,
+            "Bulk merge failed.");
+    }
+
+    [Fact]
+    public async Task BulkMergeAsync_WithUnknownActionBits_ShouldFailBeforeOpeningConnection()
+    {
+        await AssertRejectsBeforeOpeningConnectionAsync(
+            static (executor, options, token) => executor.BulkMergeAsync(
+                "Verification",
+                DestinationTable,
+                [new BulkMutationRow(1001, "pre-open validation", 1.00m)],
+                s_shape,
+                (BulkMergeOptions)options,
+                token),
+            new BulkMergeOptions { Actions = (BulkMergeActions)16 },
+            "Bulk merge failed.");
+    }
+
     private async Task ClearTargetAsync(CancellationToken ct)
     {
         DbResult<int> result = await _db
-            .Sql("DELETE FROM [gap].[BulkMutationTarget]")
+            .Sql("""
+                DELETE FROM [gap].[BulkMutationAudit];
+                DELETE FROM [gap].[BulkMutationTarget];
+                """)
             .ExecuteAsync(ct);
 
         result.IsSuccess.Should().BeTrue();
@@ -601,15 +902,15 @@ public sealed class BulkMutationTests(MultiDbFixture fixture)
             (decimal)result.Value["Price"]!);
     }
 
-    private static async Task AssertRejectsBeforeOpeningConnectionAsync(
-        Func<BulkWriteExecutor, BulkWriteOptions, CancellationToken, Task<DbResult<long>>> act,
+    private static async Task AssertRejectsBeforeOpeningConnectionAsync<TResult>(
+        Func<BulkWriteExecutor, BulkWriteOptions, CancellationToken, Task<DbResult<TResult>>> act,
         BulkWriteOptions options,
         string expectedMessage)
     {
         CountingConnectionFactory connectionFactory = new();
         BulkWriteExecutor executor = new(connectionFactory);
 
-        DbResult<long> result = await act(executor, options, CancellationToken.None);
+        DbResult<TResult> result = await act(executor, options, CancellationToken.None);
 
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().NotBeNull();
@@ -646,8 +947,8 @@ public sealed class BulkMutationTests(MultiDbFixture fixture)
     private static string ThrowBulkName(string secret)
         => throw new InvalidOperationException($"getter secret raw payload {secret}");
 
-    private static void AssertRedactedFailure(
-        DbResult<long> result,
+    private static void AssertRedactedFailure<TResult>(
+        DbResult<TResult> result,
         string expectedMessage,
         string? expectedObjectName,
         params string[] forbiddenFragments)

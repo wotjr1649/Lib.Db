@@ -325,6 +325,42 @@ internal sealed class DbSession(
         return executor.BulkDeleteAsync(instanceName, destinationTable, records, shape, options, ct);
     }
 
+    public Task<DbResult<BulkUpsertResult>> BulkUpsertAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkWriteOptions? options = null,
+        CancellationToken ct = default)
+        where T : notnull
+    {
+        CheckDisposed();
+        EnsureRegisteredInstanceName(instanceName, nameof(instanceName));
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(shape);
+
+        BulkWriteExecutor executor = new(connectionFactory);
+        return executor.BulkUpsertAsync(instanceName, destinationTable, records, shape, options, ct);
+    }
+
+    public Task<DbResult<BulkMergeResult>> BulkMergeAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkMergeOptions? options = null,
+        CancellationToken ct = default)
+        where T : notnull
+    {
+        CheckDisposed();
+        EnsureRegisteredInstanceName(instanceName, nameof(instanceName));
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(shape);
+
+        BulkWriteExecutor executor = new(connectionFactory);
+        return executor.BulkMergeAsync(instanceName, destinationTable, records, shape, options, ct);
+    }
+
     #endregion
 
     #region 인스턴스 상태 관리

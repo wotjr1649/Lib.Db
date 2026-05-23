@@ -64,7 +64,7 @@ internal static class BulkSqlBuilder
             $"target.{BulkIdentifier.Quote(column.DestinationName)} = source.{BulkIdentifier.Quote(column.DestinationName)}"));
         string joinClause = JoinOnKeys(shape);
 
-        return $"UPDATE target SET {setClause} FROM {destination.ToSql()} AS target INNER JOIN {stageTableName} AS source ON {joinClause};";
+        return $"DECLARE @LibDbAffectedRows TABLE ([Affected] bit NOT NULL); UPDATE target SET {setClause} OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows FROM {destination.ToSql()} AS target INNER JOIN {stageTableName} AS source ON {joinClause}; SELECT COUNT_BIG(*) FROM @LibDbAffectedRows;";
     }
 
     public static string DeleteFromStage<T>(BulkIdentifier destination, string stageTableName, BulkShape<T> shape)
@@ -77,7 +77,25 @@ internal static class BulkSqlBuilder
             throw new InvalidOperationException("Bulk delete requires at least one key column.");
 
         string joinClause = JoinOnKeys(shape);
-        return $"DELETE target FROM {destination.ToSql()} AS target INNER JOIN {stageTableName} AS source ON {joinClause};";
+        return $"DECLARE @LibDbAffectedRows TABLE ([Affected] bit NOT NULL); DELETE target OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows FROM {destination.ToSql()} AS target INNER JOIN {stageTableName} AS source ON {joinClause}; SELECT COUNT_BIG(*) FROM @LibDbAffectedRows;";
+    }
+
+    public static string InsertMissingFromStage<T>(BulkIdentifier destination, string stageTableName, BulkShape<T> shape)
+        where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        ValidateStageTableName(stageTableName);
+
+        if (shape.KeyColumns.Count == 0)
+            throw new InvalidOperationException("Bulk upsert requires at least one key column.");
+
+        string columnList = string.Join(", ", shape.Columns.Select(static column =>
+            BulkIdentifier.Quote(column.DestinationName)));
+        string sourceList = string.Join(", ", shape.Columns.Select(static column =>
+            $"source.{BulkIdentifier.Quote(column.DestinationName)}"));
+        string joinClause = JoinOnKeys(shape);
+
+        return $"DECLARE @LibDbAffectedRows TABLE ([Affected] bit NOT NULL); INSERT INTO {destination.ToSql()} ({columnList}) OUTPUT CONVERT(bit, 1) INTO @LibDbAffectedRows SELECT {sourceList} FROM {stageTableName} AS source WHERE NOT EXISTS (SELECT 1 FROM {destination.ToSql()} AS target WITH (UPDLOCK, HOLDLOCK) WHERE {joinClause}); SELECT COUNT_BIG(*) FROM @LibDbAffectedRows;";
     }
 
     private static string JoinOnKeys<T>(BulkShape<T> shape)

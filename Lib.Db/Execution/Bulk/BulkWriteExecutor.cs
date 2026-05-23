@@ -1,3 +1,4 @@
+using System.Globalization;
 using Lib.Db.Contracts.Core;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Diagnostics;
@@ -10,8 +11,12 @@ internal sealed class BulkWriteExecutor(IDbConnectionFactory connectionFactory)
     private const string BulkInsertFailureMessage = "Bulk insert failed.";
     private const string BulkUpdateFailureMessage = "Bulk update failed.";
     private const string BulkDeleteFailureMessage = "Bulk delete failed.";
+    private const string BulkUpsertFailureMessage = "Bulk upsert failed.";
+    private const string BulkMergeFailureMessage = "Bulk merge failed.";
 
     internal static Func<BulkWriteHookContext, CancellationToken, ValueTask>? BeforeCommitAsync { get; set; }
+
+    internal static Func<BulkWriteHookContext, CancellationToken, ValueTask>? BeforeInsertMissingAsync { get; set; }
 
     internal static Action<BulkWriteHookContext>? RollbackAttempted { get; set; }
 
@@ -20,6 +25,7 @@ internal sealed class BulkWriteExecutor(IDbConnectionFactory connectionFactory)
     internal static void ResetTestHooks()
     {
         BeforeCommitAsync = null;
+        BeforeInsertMissingAsync = null;
         RollbackAttempted = null;
         RollbackAsyncForTesting = null;
     }
@@ -104,6 +110,106 @@ internal sealed class BulkWriteExecutor(IDbConnectionFactory connectionFactory)
             stageKeysOnly: true,
             BulkDeleteFailureMessage,
             ct);
+
+    public async Task<DbResult<BulkUpsertResult>> BulkUpsertAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkWriteOptions? options,
+        CancellationToken ct)
+        where T : notnull
+    {
+        string? objectName = null;
+
+        try
+        {
+            BulkIdentifier destination = BulkIdentifier.ParseTableName(destinationTable);
+            objectName = destination.ToSql();
+            string stageTableName = CreateStageTableName();
+
+            BulkWriteOptions effectiveOptions = options ?? new BulkWriteOptions();
+            effectiveOptions.Validate();
+            ValidateStagedOptions(effectiveOptions);
+
+            StagedMutationCounts counts = await ExecuteStagedMultiActionAsync(
+                    instanceName,
+                    destination,
+                    objectName,
+                    stageTableName,
+                    records,
+                    shape,
+                    effectiveOptions,
+                    BulkMergeActions.UpdateMatched | BulkMergeActions.InsertMissing,
+                    ct)
+                .ConfigureAwait(false);
+
+            return DbResult<BulkUpsertResult>.Ok(new BulkUpsertResult(counts.Inserted, counts.Updated));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (SqlException ex)
+        {
+            return DbResult<BulkUpsertResult>.Fail(CreateSqlFailure(ex, objectName, BulkUpsertFailureMessage));
+        }
+        catch (Exception ex)
+        {
+            _ = ex;
+            return DbResult<BulkUpsertResult>.Fail(CreateGeneralFailure(objectName, BulkUpsertFailureMessage));
+        }
+    }
+
+    public async Task<DbResult<BulkMergeResult>> BulkMergeAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkMergeOptions? options,
+        CancellationToken ct)
+        where T : notnull
+    {
+        string? objectName = null;
+
+        try
+        {
+            BulkIdentifier destination = BulkIdentifier.ParseTableName(destinationTable);
+            objectName = destination.ToSql();
+            string stageTableName = CreateStageTableName();
+
+            BulkMergeOptions effectiveOptions = options ?? new BulkMergeOptions();
+            effectiveOptions.Validate();
+            ValidateStagedOptions(effectiveOptions);
+
+            StagedMutationCounts counts = await ExecuteStagedMultiActionAsync(
+                    instanceName,
+                    destination,
+                    objectName,
+                    stageTableName,
+                    records,
+                    shape,
+                    effectiveOptions,
+                    effectiveOptions.Actions,
+                    ct)
+                .ConfigureAwait(false);
+
+            return DbResult<BulkMergeResult>.Ok(new BulkMergeResult(counts.Inserted, counts.Updated, counts.Deleted));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (SqlException ex)
+        {
+            return DbResult<BulkMergeResult>.Fail(CreateSqlFailure(ex, objectName, BulkMergeFailureMessage));
+        }
+        catch (Exception ex)
+        {
+            _ = ex;
+            return DbResult<BulkMergeResult>.Fail(CreateGeneralFailure(objectName, BulkMergeFailureMessage));
+        }
+    }
 
     private async Task<DbResult<long>> BulkInsertCoreAsync<T>(
         string instanceName,
@@ -299,7 +405,7 @@ internal sealed class BulkWriteExecutor(IDbConnectionFactory connectionFactory)
                 .ConfigureAwait(false);
 
             string actionSql = buildActionSql(destination, stageTableName, shape);
-            long affectedRows = await ExecuteNonQueryAsync(connection, transaction, actionSql, options.TimeoutSeconds, ct)
+            long affectedRows = await ExecuteAffectedRowsAsync(connection, transaction, actionSql, options.TimeoutSeconds, ct)
                 .ConfigureAwait(false);
 
             ct.ThrowIfCancellationRequested();
@@ -317,6 +423,123 @@ internal sealed class BulkWriteExecutor(IDbConnectionFactory connectionFactory)
             await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
 
             return affectedRows;
+        }
+        catch (OperationCanceledException)
+        {
+            if (transaction is not null && !commitStarted)
+                await TryRollbackAsync(transaction, destinationTable).ConfigureAwait(false);
+            throw;
+        }
+        catch (SqlException)
+        {
+            if (transaction is not null && !commitStarted)
+                await TryRollbackAsync(transaction, destinationTable).ConfigureAwait(false);
+            throw;
+        }
+        catch (Exception)
+        {
+            if (transaction is not null && !commitStarted)
+                await TryRollbackAsync(transaction, destinationTable).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            transaction?.Dispose();
+        }
+    }
+
+    private async Task<StagedMutationCounts> ExecuteStagedMultiActionAsync<T>(
+        string instanceName,
+        BulkIdentifier destination,
+        string destinationTable,
+        string stageTableName,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkWriteOptions options,
+        BulkMergeActions actions,
+        CancellationToken ct)
+        where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(shape);
+
+        shape.ValidateForMutation();
+        if ((actions & BulkMergeActions.UpdateMatched) != 0 && shape.WritableColumns.Count == 0)
+            throw new InvalidOperationException("Bulk update requires at least one non-key column.");
+
+        bool deleteMatchedOnly = actions == BulkMergeActions.DeleteMatched;
+        IReadOnlyList<BulkColumn<T>> stageColumns = GetStageColumns(shape, deleteMatchedOnly);
+        using BulkShapeDataReader<T> reader = new(records, shape, stageColumns);
+        if (!reader.HasRows)
+            return default;
+
+        await using SqlConnection connection = await connectionFactory
+            .CreateConnectionAsync(instanceName, ct)
+            .ConfigureAwait(false);
+
+        SqlTransaction? transaction = null;
+        bool commitStarted = false;
+
+        try
+        {
+            transaction = (SqlTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+            string createStageSql = BulkSqlBuilder.CreateStageTable(stageTableName, stageColumns);
+            await ExecuteNonQueryAsync(connection, transaction, createStageSql, options.TimeoutSeconds, ct)
+                .ConfigureAwait(false);
+
+            await BulkCopyToStageAsync(connection, transaction, stageTableName, reader, stageColumns, options, ct)
+                .ConfigureAwait(false);
+
+            string createKeyIndexSql = BulkSqlBuilder.CreateUniqueStageKeyIndex(stageTableName, shape);
+            await ExecuteNonQueryAsync(connection, transaction, createKeyIndexSql, options.TimeoutSeconds, ct)
+                .ConfigureAwait(false);
+
+            long updated = 0;
+            long inserted = 0;
+            long deleted = 0;
+
+            if ((actions & BulkMergeActions.UpdateMatched) != 0)
+            {
+                string updateSql = BulkSqlBuilder.UpdateFromStage(destination, stageTableName, shape);
+                updated = await ExecuteAffectedRowsAsync(connection, transaction, updateSql, options.TimeoutSeconds, ct)
+                    .ConfigureAwait(false);
+            }
+
+            if ((actions & BulkMergeActions.InsertMissing) != 0)
+            {
+                BulkWriteHookContext context = new(destinationTable);
+                Func<BulkWriteHookContext, CancellationToken, ValueTask>? beforeInsertMissing = BeforeInsertMissingAsync;
+                if (beforeInsertMissing is not null)
+                    await beforeInsertMissing(context, ct).ConfigureAwait(false);
+
+                string insertMissingSql = BulkSqlBuilder.InsertMissingFromStage(destination, stageTableName, shape);
+                inserted = await ExecuteAffectedRowsAsync(connection, transaction, insertMissingSql, options.TimeoutSeconds, ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (deleteMatchedOnly)
+            {
+                string deleteSql = BulkSqlBuilder.DeleteFromStage(destination, stageTableName, shape);
+                deleted = await ExecuteAffectedRowsAsync(connection, transaction, deleteSql, options.TimeoutSeconds, ct)
+                    .ConfigureAwait(false);
+            }
+
+            ct.ThrowIfCancellationRequested();
+            await TryDropStageTableAsync(connection, transaction, stageTableName, options.TimeoutSeconds)
+                .ConfigureAwait(false);
+
+            ct.ThrowIfCancellationRequested();
+            BulkWriteHookContext commitContext = new(destinationTable);
+            Func<BulkWriteHookContext, CancellationToken, ValueTask>? beforeCommit = BeforeCommitAsync;
+            if (beforeCommit is not null)
+                await beforeCommit(commitContext, ct).ConfigureAwait(false);
+
+            ct.ThrowIfCancellationRequested();
+            commitStarted = true;
+            await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
+
+            return new StagedMutationCounts(inserted, updated, deleted);
         }
         catch (OperationCanceledException)
         {
@@ -403,6 +626,29 @@ internal sealed class BulkWriteExecutor(IDbConnectionFactory connectionFactory)
         return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    private static async Task<long> ExecuteAffectedRowsAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        string sql,
+        int timeoutSeconds,
+        CancellationToken ct)
+    {
+        await using SqlCommand command = new(sql, connection, transaction)
+        {
+            CommandTimeout = timeoutSeconds
+        };
+
+        object? value = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return value switch
+        {
+            long longValue => longValue,
+            int intValue => intValue,
+            decimal decimalValue => decimal.ToInt64(decimalValue),
+            null => throw new InvalidOperationException("Bulk action did not return an affected row count."),
+            _ => Convert.ToInt64(value, CultureInfo.InvariantCulture)
+        };
+    }
+
     private static async Task TryDropStageTableAsync(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -483,3 +729,5 @@ internal sealed class BulkWriteExecutor(IDbConnectionFactory connectionFactory)
 }
 
 internal readonly record struct BulkWriteHookContext(string DestinationTable);
+
+internal readonly record struct StagedMutationCounts(long Inserted, long Updated, long Deleted);
