@@ -8,6 +8,7 @@ public sealed class BulkSqlBuilderTests
     [Theory]
     [InlineData("Products", "[dbo].[Products]")]
     [InlineData("sales.Products", "[sales].[Products]")]
+    [InlineData("[sales].[Products]", "[sales].[Products]")]
     public void ParseTableName_ShouldRenderSafeTwoPartName(string input, string expected)
     {
         BulkIdentifier.ParseTableName(input).ToSql().Should().Be(expected);
@@ -20,8 +21,16 @@ public sealed class BulkSqlBuilderTests
     [InlineData("dbo.Products;DELETE FROM dbo.Products")]
     [InlineData("dbo.Products -- comment")]
     [InlineData("dbo.Products/*comment*/")]
-    [InlineData("[dbo].[Products]")]
     [InlineData("[Products]")]
+    [InlineData("[dbo].Products")]
+    [InlineData("dbo.[Products]")]
+    [InlineData("[dbo].[Products")]
+    [InlineData("[dbo.Products]")]
+    [InlineData("[dbo].[]")]
+    [InlineData("[dbo].[Products]]Archive]")]
+    [InlineData("[dbo] .[Products]")]
+    [InlineData("[dbo]. [Products]")]
+    [InlineData("[dbo].[Products].[Archive]")]
     [InlineData(".Products")]
     [InlineData("Products.")]
     [InlineData("dbo..Products")]

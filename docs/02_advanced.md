@@ -688,7 +688,8 @@ DbResult<long> result = await session.BulkInsertAsync(
     "Default",
     "[dbo].[SensorReadings]",
     readings,
-    new BulkInsertOptions { BatchSize = 10_000, FireTriggers = true });
+    shape,
+    new BulkWriteOptions { BatchSize = 10_000, FireTriggers = true });
 ```
 
 ```csharp

@@ -53,6 +53,42 @@ public sealed class BulkMutationTests(MultiDbFixture fixture)
     }
 
     [Fact]
+    public async Task BulkInsertAsync_WhenClrMemberNamesDifferFromDestinationColumns_ShouldUseShapeMappings()
+    {
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        await ClearTargetAsync(ct);
+
+        try
+        {
+            BulkShape<MappedBulkMutationRow> shape = BulkShape.For<MappedBulkMutationRow>()
+                .Key("ExternalId", SqlDbType.Int, static row => row.SourceKey, nullable: false)
+                .Column("Name", SqlDbType.NVarChar, static row => row.DisplayName, nullable: false, size: 100)
+                .Column("Price", SqlDbType.Decimal, static row => row.Amount, nullable: false, precision: 18, scale: 2)
+                .Build();
+
+            MappedBulkMutationRow[] rows =
+            [
+                new(151, "Mapped bulk row", 19.95m)
+            ];
+
+            DbResult<long> result = await _session.BulkInsertAsync(
+                "Verification",
+                DestinationTable,
+                rows,
+                shape,
+                ct: ct);
+
+            result.IsSuccess.Should().BeTrue(result.Error?.Message);
+            result.Value.Should().Be(rows.Length);
+            await AssertRowAsync(151, "Mapped bulk row", 19.95m, ct);
+        }
+        finally
+        {
+            await ClearTargetAsync(ct);
+        }
+    }
+
+    [Fact]
     public async Task BulkInsertAsync_WhenCheckConstraintFailsByDefault_ShouldNotInsertRows()
     {
         CancellationToken ct = TestContext.Current.CancellationToken;
@@ -991,5 +1027,6 @@ public sealed class BulkMutationTests(MultiDbFixture fixture)
     }
 
     private sealed record BulkMutationRow(int ExternalId, string Name, decimal Price);
+    private sealed record MappedBulkMutationRow(int SourceKey, string DisplayName, decimal Amount);
     private sealed record BulkMutationSnapshot(int ExternalId, string Name, decimal Price);
 }

@@ -46,7 +46,8 @@ DbResult<long> result = await db.BulkInsertAsync(
     "Default",
     "[dbo].[OrderImport]",
     records,
-    new BulkInsertOptions
+    shape,
+    new BulkWriteOptions
     {
         BatchSize = 10_000,
         TimeoutSeconds = 600,
@@ -79,7 +80,7 @@ Shape metadata must include explicit SQL type information. Decimal columns requi
 - Validate tenant or authorization boundaries before bulk inserting.
 - Use least-privilege SQL permissions for the destination table.
 - Consider transaction scope when the bulk load must be atomic with other commands.
-- Bulk insert is reflection-based and not Native AOT friendly. Read `aot-trimming.md`.
+- Legacy bulk insert is reflection-based and not Native AOT friendly. Read `aot-trimming.md`.
 - Prefer `BulkShape<T>` overloads in Native AOT/trimming-sensitive applications.
 - Update/delete/upsert/merge use staged DML and do not use SQL Server `MERGE` as the default engine.
 - Staged mutation keys must be non-null and backed by application-owned `PRIMARY KEY` or `UNIQUE` constraints on the target table.

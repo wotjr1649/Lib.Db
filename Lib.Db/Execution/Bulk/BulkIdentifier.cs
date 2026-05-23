@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace Lib.Db.Execution.Bulk;
 
 internal readonly record struct BulkIdentifier(string Schema, string Name)
@@ -12,7 +14,8 @@ internal readonly record struct BulkIdentifier(string Schema, string Name)
         if (!string.Equals(input, input.Trim(), StringComparison.Ordinal))
             throw new ArgumentException("Destination table name cannot contain leading or trailing whitespace.", nameof(input));
 
-        RejectSqlSyntax(input, nameof(input));
+        if (TryParseBracketedTwoPartName(input, out BulkIdentifier bracketed))
+            return bracketed;
 
         string[] parts = input.Split('.');
         if (parts.Length is < 1 or > 2)
@@ -61,6 +64,49 @@ internal readonly record struct BulkIdentifier(string Schema, string Name)
         {
             throw new ArgumentException("Destination table name contains unsupported SQL identifier syntax.", paramName);
         }
+    }
+
+    private static bool TryParseBracketedTwoPartName(string input, out BulkIdentifier identifier)
+    {
+        identifier = default;
+
+        if (!input.Contains('[', StringComparison.Ordinal)
+            && !input.Contains(']', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        string[] parts = input.Split('.');
+        if (parts.Length != 2)
+            return false;
+
+        if (!TryUnwrapBracketedPart(parts[0], out string? schema)
+            || !TryUnwrapBracketedPart(parts[1], out string? name))
+        {
+            return false;
+        }
+
+        identifier = new BulkIdentifier(
+            NormalizePart(schema, nameof(input)),
+            NormalizePart(name, nameof(input)));
+        return true;
+    }
+
+    private static bool TryUnwrapBracketedPart(string part, [NotNullWhen(true)] out string? value)
+    {
+        value = null;
+
+        if (part.Length < 3
+            || part[0] != '['
+            || part[^1] != ']'
+            || part.IndexOf('[', 1) >= 0
+            || part.IndexOf(']', 1, part.Length - 2) >= 0)
+        {
+            return false;
+        }
+
+        value = part[1..^1];
+        return true;
     }
 
     private static bool IsNarrowIdentifier(string value)
