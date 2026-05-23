@@ -6,7 +6,6 @@ on:
       - 'v*' # Trigger on version tags like v1.0.0, v2.0-beta
 
 permissions:
-  id-token: write # Required for NuGet Trusted Publishing
   contents: read  # Required to checkout code
 
 jobs:
@@ -64,15 +63,15 @@ jobs:
     - name: Verify required secrets
       shell: bash
       env:
-        NUGET_USER: ${{ secrets.NUGET_USER }}
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
       run: |
         set -euo pipefail
         if [[ -z "${LIBDB_TEST_SQL_PASSWORD}" ]]; then
           echo "ERROR: LIBDB_TEST_SQL_PASSWORD secret is required for release verification." >&2
           exit 1
         fi
-        if [[ -z "${NUGET_USER}" ]]; then
-          echo "ERROR: NUGET_USER secret is required for NuGet Trusted Publishing." >&2
+        if [[ -z "${NUGET_API_KEY}" ]]; then
+          echo "ERROR: NUGET_API_KEY secret is required for NuGet publishing." >&2
           exit 1
         fi
 
@@ -148,16 +147,10 @@ jobs:
           -p:PackageVersion=${{ steps.version.outputs.version }} \
           -p:Version=${{ steps.version.outputs.version }}
 
-    - name: NuGet login
-      uses: NuGet/login@v1
-      id: nuget-login
-      with:
-        user: ${{ secrets.NUGET_USER }}
-
     - name: Push to NuGet
       shell: bash
       env:
-        NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
       run: |
         set -euo pipefail
         dotnet nuget push ./nupkgs/*.nupkg \
