@@ -101,6 +101,56 @@ public sealed class BulkSqlBuilderTests
     }
 
     [Fact]
+    public void UpdateFromStage_ShouldRenderJoinedUpdateWithoutMergeOrRowValues()
+    {
+        const string rowValue = "SKU-42";
+        BulkIdentifier destination = BulkIdentifier.ParseTableName("sales.Products");
+        BulkShape<BulkSqlRow> shape = BulkShape.For<BulkSqlRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64, nullable: false)
+            .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2)
+            .Build();
+
+        string sql = BulkSqlBuilder.UpdateFromStage(destination, "#LibDbBulk_Test", shape);
+
+        sql.Should().Be("UPDATE target SET target.[Sku] = source.[Sku], target.[Price] = source.[Price] FROM [sales].[Products] AS target INNER JOIN #LibDbBulk_Test AS source ON target.[Id] = source.[Id];");
+        sql.Should().NotContain("MERGE");
+        sql.Should().NotContain(rowValue);
+    }
+
+    [Fact]
+    public void DeleteFromStage_ShouldRenderKeyJoinDeleteWithoutWritableColumnsOrMerge()
+    {
+        BulkIdentifier destination = BulkIdentifier.ParseTableName("sales.Products");
+        BulkShape<BulkSqlRow> shape = BulkShape.For<BulkSqlRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64, nullable: false)
+            .Column("Price", SqlDbType.Decimal, static row => row.Price, precision: 18, scale: 2)
+            .Build();
+
+        string sql = BulkSqlBuilder.DeleteFromStage(destination, "#LibDbBulk_Test", shape);
+
+        sql.Should().Be("DELETE target FROM [sales].[Products] AS target INNER JOIN #LibDbBulk_Test AS source ON target.[Id] = source.[Id];");
+        sql.Should().NotContain("[Sku]");
+        sql.Should().NotContain("[Price]");
+        sql.Should().NotContain("MERGE");
+    }
+
+    [Fact]
+    public void UpdateFromStage_ShouldRejectShapeWithoutWritableColumns()
+    {
+        BulkIdentifier destination = BulkIdentifier.ParseTableName("sales.Products");
+        BulkShape<BulkSqlRow> shape = BulkShape.For<BulkSqlRow>()
+            .Key("Id", SqlDbType.Int, static row => row.Id)
+            .Build();
+
+        Action act = () => BulkSqlBuilder.UpdateFromStage(destination, "#LibDbBulk_Test", shape);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*non-key*");
+    }
+
+    [Fact]
     public void CreateUniqueStageKeyIndex_ShouldRejectShapeWithoutKeys()
     {
         BulkShape<BulkSqlRow> shape = BulkShape.For<BulkSqlRow>()

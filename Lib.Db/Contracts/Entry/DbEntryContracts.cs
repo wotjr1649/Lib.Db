@@ -115,6 +115,60 @@ public interface IDbSession : IAsyncDisposable
         CancellationToken ct = default)
         where T : notnull;
 
+    /// <summary>
+    /// AOT-safe shape metadata 기반 staged 대량 UPDATE를 수행합니다.
+    /// </summary>
+    /// <remarks>
+    /// staged UPDATE는 v2.4.0에서 로컬 트랜잭션을 필수로 사용합니다.
+    /// <see cref="BulkWriteOptions.UseTransaction"/>을 <see langword="false"/>로 지정하거나
+    /// 직접 bulk-copy 대상에만 의미가 있는 <see cref="BulkWriteOptions.FireTriggers"/>,
+    /// <see cref="BulkWriteOptions.KeepIdentity"/>, <c>CheckConstraints = false</c> 옵션을 지정하면
+    /// 연결을 열기 전에 실패합니다.
+    /// </remarks>
+    /// <typeparam name="T">레코드 타입입니다.</typeparam>
+    /// <param name="instanceName">등록된 DB 인스턴스 이름</param>
+    /// <param name="destinationTable">대상 테이블 이름입니다.</param>
+    /// <param name="records">수정할 레코드 컬렉션입니다.</param>
+    /// <param name="shape">AOT-safe bulk column shape입니다. 하나 이상의 key column과 하나 이상의 writable column이 필요합니다.</param>
+    /// <param name="options">벌크 쓰기 옵션입니다. null이면 기본값을 사용합니다.</param>
+    /// <param name="ct">취소 토큰</param>
+    /// <returns>수정된 행 수를 포함하는 <see cref="DbResult{T}"/></returns>
+    Task<DbResult<long>> BulkUpdateAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        Lib.Db.Execution.Bulk.BulkShape<T> shape,
+        BulkWriteOptions? options = null,
+        CancellationToken ct = default)
+        where T : notnull;
+
+    /// <summary>
+    /// AOT-safe shape metadata 기반 staged 대량 DELETE를 수행합니다.
+    /// </summary>
+    /// <remarks>
+    /// staged DELETE는 key column만 staging하며 v2.4.0에서 로컬 트랜잭션을 필수로 사용합니다.
+    /// <see cref="BulkWriteOptions.UseTransaction"/>을 <see langword="false"/>로 지정하거나
+    /// 직접 bulk-copy 대상에만 의미가 있는 <see cref="BulkWriteOptions.FireTriggers"/>,
+    /// <see cref="BulkWriteOptions.KeepIdentity"/>, <c>CheckConstraints = false</c> 옵션을 지정하면
+    /// 연결을 열기 전에 실패합니다.
+    /// </remarks>
+    /// <typeparam name="T">레코드 타입입니다.</typeparam>
+    /// <param name="instanceName">등록된 DB 인스턴스 이름</param>
+    /// <param name="destinationTable">대상 테이블 이름입니다.</param>
+    /// <param name="records">삭제할 key를 포함한 레코드 컬렉션입니다.</param>
+    /// <param name="shape">AOT-safe bulk column shape입니다. 하나 이상의 key column이 필요합니다.</param>
+    /// <param name="options">벌크 쓰기 옵션입니다. null이면 기본값을 사용합니다.</param>
+    /// <param name="ct">취소 토큰</param>
+    /// <returns>삭제된 행 수를 포함하는 <see cref="DbResult{T}"/></returns>
+    Task<DbResult<long>> BulkDeleteAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        Lib.Db.Execution.Bulk.BulkShape<T> shape,
+        BulkWriteOptions? options = null,
+        CancellationToken ct = default)
+        where T : notnull;
+
     #endregion
 
     #region 트랜잭션 시작

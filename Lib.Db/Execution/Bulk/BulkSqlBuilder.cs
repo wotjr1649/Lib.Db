@@ -48,6 +48,43 @@ internal static class BulkSqlBuilder
         return $"CREATE UNIQUE INDEX [IX_LibDbBulk_Key] ON {stageTableName} ({keyColumns});";
     }
 
+    public static string UpdateFromStage<T>(BulkIdentifier destination, string stageTableName, BulkShape<T> shape)
+        where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        ValidateStageTableName(stageTableName);
+
+        if (shape.KeyColumns.Count == 0)
+            throw new InvalidOperationException("Bulk update requires at least one key column.");
+
+        if (shape.WritableColumns.Count == 0)
+            throw new InvalidOperationException("Bulk update requires at least one non-key column.");
+
+        string setClause = string.Join(", ", shape.WritableColumns.Select(static column =>
+            $"target.{BulkIdentifier.Quote(column.DestinationName)} = source.{BulkIdentifier.Quote(column.DestinationName)}"));
+        string joinClause = JoinOnKeys(shape);
+
+        return $"UPDATE target SET {setClause} FROM {destination.ToSql()} AS target INNER JOIN {stageTableName} AS source ON {joinClause};";
+    }
+
+    public static string DeleteFromStage<T>(BulkIdentifier destination, string stageTableName, BulkShape<T> shape)
+        where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        ValidateStageTableName(stageTableName);
+
+        if (shape.KeyColumns.Count == 0)
+            throw new InvalidOperationException("Bulk delete requires at least one key column.");
+
+        string joinClause = JoinOnKeys(shape);
+        return $"DELETE target FROM {destination.ToSql()} AS target INNER JOIN {stageTableName} AS source ON {joinClause};";
+    }
+
+    private static string JoinOnKeys<T>(BulkShape<T> shape)
+        where T : notnull
+        => string.Join(" AND ", shape.KeyColumns.Select(static column =>
+            $"target.{BulkIdentifier.Quote(column.DestinationName)} = source.{BulkIdentifier.Quote(column.DestinationName)}"));
+
     private static void ValidateStageTableName(string stageTableName)
     {
         if (string.IsNullOrWhiteSpace(stageTableName))
