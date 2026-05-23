@@ -250,18 +250,25 @@ Shape-based bulk mutation should use a local transaction by default.
 For insert:
 
 - `SqlBulkCopy` can receive the local `SqlTransaction`.
-- All inserted rows roll back on failure when `UseTransaction = true`.
+- Insert failures roll back when `UseTransaction = true` and the failure occurs before final commit begins. Commit-outcome ambiguity after commit begins remains a provider/database reality and must not be reported as a guaranteed rollback.
+- `UseTransaction = false` is an explicit non-atomic performance opt-out for insert only. If the provider fails or cancellation arrives after rows have been sent, some rows can remain in the target table; Lib.Db must not document or test this mode as rollback-capable.
 - `CheckConstraints` defaults to `true` for the new AOT-safe options. Callers may opt out explicitly for controlled performance scenarios, but the safe release default is to keep destination constraints checked.
 
 For update/delete/upsert/merge:
 
+- reject `UseTransaction = false` before opening a connection in v2.4.0,
 - create temp table,
 - bulk copy stage rows,
 - execute DML,
 - drop temp table,
 - commit transaction.
 
-If any step fails before final commit begins, including cancellation, explicitly attempt rollback before returning or rethrowing. Do not rely on connection/transaction disposal as the only rollback mechanism in the documented implementation path. Rollback failure is a secondary diagnostic event: it must not replace the original SQL/general/cancellation failure in public `DbResult<T>` errors.
+For transaction-enabled operations, if any step fails before final commit begins,
+including cancellation, explicitly attempt rollback before returning or
+rethrowing. Do not rely on connection/transaction disposal as the only rollback
+mechanism in the documented implementation path. Rollback failure is a secondary
+diagnostic event: it must not replace the original SQL/general/cancellation
+failure in public `DbResult<T>` errors.
 
 The final commit boundary uses `CancellationToken.None` after all cancellable staging and DML work has completed. This avoids reporting caller cancellation after the database may already be committing. The public contract is:
 
@@ -271,6 +278,12 @@ The final commit boundary uses `CancellationToken.None` after all cancellable st
 - commit-outcome ambiguity caused by connection loss remains a provider/database reality and must be documented as such rather than hidden behind a false cancellation result.
 
 `UseInternalTransaction` is not part of the new default path because Microsoft documents that `SqlBulkCopyOptions.UseInternalTransaction` cannot be combined with an external transaction and each batch is independent. The new API should prefer one explicit transaction for release safety.
+
+This policy intentionally separates the fast insert opt-out from staged mutation
+safety. Update/delete/upsert/merge are multi-step operations that load a staging
+table and then mutate target rows. Allowing them to run without one transaction
+would create partial-write states that are hard to reason about and easy to
+misdocument, so v2.4.0 rejects that mode instead of downgrading guarantees.
 
 ## Staging Table Model
 
@@ -475,6 +488,8 @@ Required integration tests:
 - merge update+insert path returns separated counts,
 - merge delete-matched path deletes only staged keys,
 - update/delete/upsert/merge failure and cancellation tests prove rollback after target DML has started,
+- update/delete/upsert/merge reject `UseTransaction = false` before opening a connection,
+- insert `UseTransaction = false` has a non-atomic opt-out test or doc assertion that does not promise rollback,
 - success tests assert final target row values and missing rows, not only affected-row counts,
 - invalid destination table returns a failed `DbResult`,
 - cancellation token is passed to cancellable async DB calls before commit,
@@ -490,10 +505,12 @@ Required AOT checks:
 
 Required release gates:
 
+- pre-implementation AOT and release-verification baseline capture,
 - targeted unit tests,
 - targeted integration tests with local SQL Server verification DB,
 - `pwsh -NoProfile -File Verification/scripts/Invoke-Aot.ps1`,
 - `pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short`,
+- a durable release-verification log under `Verification/artifacts/logs/` that is non-empty, post-scanned, ignored/untracked, and remains secret-safe,
 - final code review and security review before tag/publish.
 
 ## Release Risk Assessment
@@ -510,8 +527,10 @@ This feature is acceptable for v2.4.0 only if these constraints hold:
 - all write operations have key/identifier validation,
 - identifier validation enforces malformed-bracket rejection, separator-whitespace rejection, and 128-character table/column part limits,
 - all staged mutation operations run in one local transaction by default,
+- staged mutation operations reject `UseTransaction = false` in v2.4.0,
+- insert `UseTransaction = false` is explicitly documented as non-atomic and outside rollback guarantees,
 - rollback failure cannot replace the primary public failure,
 - cancellation rollback is guaranteed only before final commit begins, and final commit is non-cancelable from the caller token,
-- release verification passes from a clean environment.
+- release verification passes from a clean environment and leaves a durable, non-empty, post-scanned, ignored/untracked, secret-safe audit log.
 
-If any of those constraints breaks during implementation, the feature should be reduced to AOT-safe insert/update/upsert or postponed to v2.5.0.
+If any of those constraints breaks during implementation, the feature should be reduced to AOT-safe insert/update/upsert or postponed to v2.5.0. Any reduction from the approved insert/update/delete/upsert/merge v2.4.0 scope is not an implementation-only decision: update this sub-spec, the bulk sub-plan, the integrated spec and plan, revise public docs/history/API promises, rerun review on the reduced scope, and obtain explicit user approval before continuing release work.

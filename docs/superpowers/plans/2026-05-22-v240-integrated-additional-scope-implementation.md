@@ -75,6 +75,63 @@ Modify:
 
 ---
 
+### Task 0: Pre-Implementation Baseline Evidence
+
+**Files:**
+- No planned source changes.
+
+Run this task before implementing the runtime changes. If a command fails here,
+stop and classify it as a pre-existing baseline issue before touching source.
+Do not hide baseline failures inside feature implementation work.
+
+This is the single pre-source baseline gate for the integrated plan and it
+satisfies the bulk sub-plan baseline requirement when Task 3 starts in the same
+session with no intervening source changes. If bulk work starts standalone, or
+if any source file changed after this task and before Task 3, rerun the bulk
+sub-plan's baseline gate and record the newer evidence.
+
+- [ ] **Step 1: Capture current Native AOT baseline**
+
+Run:
+
+```powershell
+pwsh -NoProfile -File Verification/scripts/Invoke-Aot.ps1
+```
+
+Expected: the current baseline has no new Lib.Db trim/AOT warnings. Record the
+warning count summary and whether only the known provider warnings are present in
+the implementation notes or PR body.
+
+- [ ] **Step 2: Capture current release-verification baseline with durable log**
+
+Run:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$log = "Verification/artifacts/logs/v240-preimplementation-release-verification-$stamp.log"
+New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
+$verificationOutput = & pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *>&1
+$exitCode = $LASTEXITCODE
+$verificationOutput | Tee-Object -FilePath $log
+$postLogExitCode = 0
+if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
+    Write-Warning "Release verification log was not created or is empty: $log"
+    $postLogExitCode = 1
+}
+pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths $log
+if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
+pwsh -NoProfile -File Verification/scripts/Assert-GeneratedArtifactsUntracked.ps1
+if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
+if ($exitCode -ne 0) { exit $exitCode }
+if ($postLogExitCode -ne 0) { exit $postLogExitCode }
+```
+
+Expected: release verification passes, a non-empty log is created under
+`Verification/artifacts/logs/`, the log-specific artifact scan passes, and the
+generated-artifact tracking gate still passes. Record the log path without
+copying secret values into notes.
+
 ### Task 1: HybridCache Tags Overload
 
 **Files:**
@@ -212,6 +269,66 @@ public async Task WithHybridCacheAsync_ShouldCountDistinctTagsWhenEnforcingLimit
 }
 ```
 
+Update the existing failure-path test instead of leaving the old raw-message expectation in place:
+
+```csharp
+[Fact]
+public async Task WithHybridCacheAsync_ShouldThrowGenericMessageWhenResultFails()
+{
+    var cache = new LibDbAotHybridCache();
+
+    Func<Task> act = () => Task
+        .FromResult(DbResult<CachedUser?>.Fail(CreateError("hybrid failed: SELECT * FROM dbo.SecretTenant")))
+        .WithHybridCacheAsync(
+            cache,
+            "hybrid:failure",
+            TimeSpan.FromMinutes(1),
+            TestContext.Current.CancellationToken);
+
+    InvalidOperationException exception = (await act.Should()
+        .ThrowAsync<InvalidOperationException>()).Which;
+
+    exception.Message.Should().Be("DB query failed.");
+    exception.Message.Should().NotContain("hybrid failed");
+    exception.Message.Should().NotContain("SecretTenant");
+    exception.Message.Should().NotContain("SELECT");
+}
+```
+
+Add a second failure-path test for a faulted query task. This closes the case
+where the task faults before producing a failed `DbResult<T>`:
+
+```csharp
+[Fact]
+public async Task WithHybridCacheAsync_ShouldThrowGenericMessageWhenResultTaskFaults()
+{
+    var cache = new LibDbAotHybridCache();
+    InvalidOperationException rawFailure = new("raw provider failure: SELECT * FROM dbo.SecretTenant");
+
+    Func<Task> act = () => Task
+        .FromException<DbResult<CachedUser?>>(rawFailure)
+        .WithHybridCacheAsync(
+            cache,
+            "hybrid:faulted",
+            TimeSpan.FromMinutes(1),
+            TestContext.Current.CancellationToken);
+
+    InvalidOperationException exception = (await act.Should()
+        .ThrowAsync<InvalidOperationException>()).Which;
+
+    exception.Message.Should().Be("DB query failed.");
+    exception.InnerException.Should().BeNull();
+    exception.ToString().Should().NotContain("raw provider failure");
+    exception.ToString().Should().NotContain("SecretTenant");
+    exception.ToString().Should().NotContain("SELECT");
+}
+```
+
+The current `WithHybridCacheAsync_ShouldThrowWhenResultFails` test in
+`QueryCacheExtensionsCoverageTests.cs` must be renamed or rewritten to this
+contract. Do not keep a duplicate test that still asserts the raw
+`DbError.Message` value.
+
 - [ ] **Step 3: Run targeted tests and confirm RED**
 
 Run:
@@ -270,9 +387,22 @@ private static async Task<DbResult<T?>> WithHybridCacheCoreAsync<T>(
         cacheKey,
         async token =>
         {
-            DbResult<T?> result = await resultTask.ConfigureAwait(false);
+            DbResult<T?> result;
+            try
+            {
+                result = await resultTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                throw CreateHybridCacheFactoryFailure();
+            }
+
             if (!result.IsSuccess)
-                throw new InvalidOperationException("DB query failed.");
+                throw CreateHybridCacheFactoryFailure();
 
             return result.Value;
         },
@@ -284,7 +414,14 @@ private static async Task<DbResult<T?>> WithHybridCacheCoreAsync<T>(
 }
 ```
 
-Do not copy `DbError.Message`, SQL text, object names, provider details, row values, cache payloads, connection-string fragments, or tenant/user identifiers into cache factory exception messages. The cache wrapper's public failure path must use a generic message and rely on the existing redacted diagnostics path for details.
+Add:
+
+```csharp
+private static InvalidOperationException CreateHybridCacheFactoryFailure()
+    => new("DB query failed.");
+```
+
+Do not copy `DbError.Message`, SQL text, object names, provider details, row values, cache payloads, connection-string fragments, raw faulted-task exception messages, inner exceptions, or tenant/user identifiers into cache factory exception messages. The cache wrapper's public failure path must use a generic message and rely on the existing redacted diagnostics path for details. The generic exception must not retain the raw provider exception as `InnerException`, because `Exception.ToString()` would expose it.
 
 Add normalization:
 
@@ -672,6 +809,10 @@ While executing the sub-plan, verify:
 - `BulkMergeOptions.Validate()` rejects `DeleteNotMatchedBySource` even through a `BulkWriteOptions` reference.
 - staged mutation operations create a unique stage index to reject duplicate source key tuples before target DML.
 - staged update/delete/upsert/merge failure and cancellation tests prove rollback after target DML has started.
+- staged update/delete/upsert/merge reject `UseTransaction = false` before opening a connection.
+- bulk insert `UseTransaction = false` is documented and tested as a non-atomic opt-out, not as a rollback-capable mode.
+- rollback failure preserves the original public failure and is diagnostic-only.
+- final bulk commit uses `CancellationToken.None` so caller cancellation cannot create a false canceled result after commit starts.
 - target key uniqueness remains an explicit database schema contract, not a default per-call metadata probe.
 - delete uses key-only stage columns and matching reader/mapping shape.
 - table and column identifiers reject malformed bracket syntax and identifier parts longer than 128 characters.
@@ -766,6 +907,13 @@ In `docs/history.md`, add:
 - Modify: `docs/06_cookbook.md`
 - Modify: `docs/history.md`
 - Modify: `.agents/skills/lib-db/SKILL.md`
+
+This task owns the final public documentation and skill edits for all integrated
+v2.4.0 scope items. Consume the bulk sub-plan's Task 10 documentation checklist
+instead of re-editing content that was already committed elsewhere. If the bulk
+sub-plan was executed standalone and already modified these public docs, merge
+or de-duplicate those edits here; do not add duplicate cookbook sections or
+history entries.
 
 - [ ] **Step 1: Update HybridCache docs**
 
@@ -884,10 +1032,32 @@ Expected: no new Lib.Db trim/AOT warnings.
 Run:
 
 ```powershell
-pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
+$ErrorActionPreference = 'Stop'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$log = "Verification/artifacts/logs/v240-release-verification-$stamp.log"
+New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
+$verificationOutput = & pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *>&1
+$exitCode = $LASTEXITCODE
+$verificationOutput | Tee-Object -FilePath $log
+$postLogExitCode = 0
+if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
+    Write-Warning "Release verification log was not created or is empty: $log"
+    $postLogExitCode = 1
+}
+pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths $log
+if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
+pwsh -NoProfile -File Verification/scripts/Assert-GeneratedArtifactsUntracked.ps1
+if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
+if ($exitCode -ne 0) { exit $exitCode }
+if ($postLogExitCode -ne 0) { exit $postLogExitCode }
 ```
 
-Expected: release-grade verification completes successfully.
+Expected: release-grade verification completes successfully and leaves a durable
+log under `Verification/artifacts/logs/`. The log is audit evidence only; it
+must still pass the repository's secret-scan/redaction expectations and must not
+contain connection-string, password, token, SQL parameter, row-value, or cache
+payload values. Log creation, log non-emptiness, log-specific artifact scanning,
+and generated-artifact tracking are hard failure gates.
 
 - [ ] **Step 5: Final security review checklist**
 
@@ -898,10 +1068,14 @@ Confirm:
 - cache tag wildcard `*` cannot be assigned to entries,
 - more than 32 distinct cache tags are rejected rather than silently truncated,
 - duplicate cache tags are deduplicated using ordinal comparison before enforcing the 32-tag ceiling,
+- the existing HybridCache failure test has been rewritten to expect `DB query failed.` and to reject raw `DbError.Message`, SQL text, object names, row values, cache payloads, and tenant/user identifiers,
+- the faulted-task HybridCache failure path maps non-cancellation exceptions to `DB query failed.` without preserving the raw exception as `InnerException`,
 - typed multi-result helper disposes readers and maps read failures to failed `DbResult<T>`,
 - typed multi-result helper has ordering and disposal tests for arity 2, 3, and 4,
 - typed multi-result helper has missing-result/read-failure redaction tests for arity 3 or 4, not only arity 2,
 - bulk writes validate identifiers and run staged mutation in a transaction,
+- staged bulk update/delete/upsert/merge reject `UseTransaction = false` in v2.4.0 instead of promising rollback without a transaction,
+- bulk insert documents `UseTransaction = false` as an explicit non-atomic performance opt-out where partial rows can remain after failure or cancellation,
 - malformed destination names with empty parts or whitespace around separators are rejected instead of normalized,
 - bulk staged mutation rejects duplicate source keys before target DML,
 - unsupported `SqlDbType` values are rejected before any database connection opens,
@@ -923,12 +1097,22 @@ Confirm:
 
 The integrated additional scope is complete when:
 
+- Pre-implementation AOT and release-verification baselines were captured before source changes.
 - HybridCache tags overload is implemented and tested.
 - Typed QueryMultiple helper is implemented and tested.
 - AOT-safe bulk mutation sub-plan is implemented and tested.
-- The document review findings from 2026-05-22 are closed: tag cap, duplicate tag dedupe, null tag rejection, leading/trailing tag whitespace rejection, cache factory generic error messages, QueryMultiple `Lib.Db.Extensions` using guidance, QueryMultiple redacted failure mapping, QueryMultiple arity 3/4 success and failure coverage, DateOnly/TimeOnly/Guid/decimal/byte-array/nullable normalization, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout option tests, polymorphic merge-option validation, invalid merge action combinations, malformed destination-name rejection, separator-whitespace rejection, 128-character identifier limit, duplicate source-key rejection, target key schema contract, key-only delete staging, DbResult failure mapping after rollback, rollback-failure primary-error preservation, final commit non-cancellation, staged-DML rollback/cancellation coverage, rollback-on-cancellation-before-commit, redacted bulk general-error mapping, `CheckConstraints = true` default, reader lifecycle/disposal/idempotency, internal reader API surface, EOF current clearing, missing ordinal failure, first-row-safe `HasRows`, AOT enum smoke, public bulk AOT reachability, `RequiresDynamicCode`/IL3050 static gates, secret-safe verification output, AOT sub-plan parent linkage, and shape-metadata enum conversion.
+- The document review findings from 2026-05-22 are closed: tag cap, duplicate tag dedupe, null tag rejection, leading/trailing tag whitespace rejection, cache factory generic error messages, faulted-task generic mapping, no raw inner exception retention, and the existing failure-test rewrite, QueryMultiple `Lib.Db.Extensions` using guidance, QueryMultiple redacted failure mapping, QueryMultiple arity 3/4 success and failure coverage, DateOnly/TimeOnly/Guid/decimal/byte-array/nullable normalization, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout option tests, polymorphic merge-option validation, invalid merge action combinations, malformed destination-name rejection, separator-whitespace rejection, 128-character identifier limit, duplicate source-key rejection, target key schema contract, key-only delete staging, DbResult failure mapping after rollback, rollback-failure primary-error preservation, final commit non-cancellation, staged-DML rollback/cancellation coverage, rollback-on-cancellation-before-commit, `UseTransaction = false` staged-mutation rejection, insert non-atomic opt-out documentation, redacted bulk general-error mapping, `CheckConstraints = true` default, reader lifecycle/disposal/idempotency, internal reader API surface, EOF current clearing, missing ordinal failure, first-row-safe `HasRows`, AOT enum smoke, public bulk AOT reachability, `RequiresDynamicCode`/IL3050 static gates, durable secret-safe verification log output with post-log scan/tracking gates, pre-implementation AOT/release baseline capture, AOT sub-plan parent linkage, and shape-metadata enum conversion.
 - Roadmap document exists for generator/migration/change-tracking.
 - Public docs and Lib.Db skill guidance are updated.
 - Native AOT verification passes.
 - Official release verification passes.
 - Final security review has no blocking findings.
+
+## Scope Reduction Gate
+
+The approved v2.4.0 implementation scope is HybridCache tags, typed
+QueryMultiple, and AOT-safe bulk insert/update/delete/upsert/merge. If bulk
+implementation constraints force removing delete, merge, upsert, or any other
+approved operation, stop before continuing release work. Update both integrated
+and bulk specs/plans, revise docs/history/API promises, rerun review on the
+reduced scope, and obtain explicit user approval for the new v2.4.0 scope.

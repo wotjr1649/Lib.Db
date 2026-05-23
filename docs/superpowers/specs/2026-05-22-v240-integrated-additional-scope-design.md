@@ -91,12 +91,16 @@ This section applies the Codex Security threat-model lens to the integrated scop
 - Bulk public methods explicitly attempt best-effort rollback for SQL/general/cancellation failures before returning redacted failed `DbResult<T>` or rethrowing cancellation.
 - Rollback failure is diagnostic-only and cannot replace the original public bulk failure.
 - Final commit is non-cancelable from the caller token; cancellation rollback is guaranteed only before commit begins.
+- Staged bulk update/delete/upsert/merge reject `UseTransaction = false` in v2.4.0 before opening a connection.
+- Bulk insert may accept `UseTransaction = false` only as an explicit non-atomic performance opt-out; public docs and tests must not promise rollback or cleanup for that mode.
 - `DeleteNotMatchedBySource` is rejected for v2.4.0.
 - `DeleteMatched` is rejected when combined with update or insert actions in v2.4.0.
 - Cache tag APIs reject empty/whitespace tags and the reserved wildcard tag `*` for individual entries.
 - Cache tag APIs reject more than 32 distinct tags rather than silently dropping invalidation labels.
 - Cache tag APIs deduplicate duplicate tags with ordinal comparison before enforcing the 32-tag ceiling.
 - Cache factory failures use generic public messages and must not copy raw `DbError.Message`, SQL text, object names, row values, cache payloads, or tenant/user identifiers into thrown exceptions.
+- The existing HybridCache failure test is rewritten to expect the generic `DB query failed.` message and to assert that raw failure details are not exposed.
+- Faulted HybridCache query tasks also map to the generic failure message without preserving the raw exception as `InnerException`.
 - Cache documentation states that tag invalidation is logical and that other servers' in-memory L1 entries are not affected by current-server invalidation alone.
 - Typed multi-result helpers must dispose the underlying reader, preserve strict result-set ordering, convert read failures into the established redacted `DbResult<T>` failure pattern, and include arity 3/4 failure coverage in addition to arity 2 success/failure tests.
 - Future generator/migration/change-tracking docs must stay explicit opt-in and must not imply that Lib.Db will own application schema evolution automatically.
@@ -312,11 +316,20 @@ v2.4.0 release readiness requires the additional scope to be visible in:
 
 No NuGet publish or tag should occur until:
 
+- pre-implementation AOT and release-verification baselines have been captured,
 - targeted tests for all three implemented scope items pass,
 - Native AOT verification passes with no new Lib.Db trim/AOT warnings,
 - official release verification passes from a clean environment,
+- official release verification leaves a durable, non-empty, post-scanned, ignored/untracked, secret-safe log under `Verification/artifacts/logs/`,
 - docs clearly distinguish v2.4.0 implemented features from v2.5.0 roadmap items,
 - final review confirms no secrets, raw connection strings, or unsafe SQL examples were introduced.
+
+Scope reduction is a release decision, not a local implementation detail. The
+approved v2.4.0 bulk scope is insert/update/delete/upsert/merge. If implementation
+forces removing any approved operation or moving it to v2.5.0, update this
+integrated design, the integrated plan, the bulk sub-spec/sub-plan, and public
+docs/history/API promises, then obtain explicit user approval before continuing
+release work.
 
 ## Alternatives Considered
 
@@ -345,7 +358,7 @@ The integrated additional scope is complete when:
 - this design and the implementation plan are committed,
 - the three v2.4.0 implemented areas have tests and docs,
 - the roadmap areas are documented as v2.5.0 candidates only,
-- cache duplicate-tag dedupe, cache generic failure messages, QueryMultiple arity 3/4 success and failure coverage, staged DML rollback/cancellation, rollback-failure primary-error preservation, non-cancelable final commit, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout tests, identifier length limits, separator-whitespace rejection, destination-column mapping, internal bulk reader surface, full target-row assertions, secret-safe verification output, `RequiresDynamicCode`/IL3050 static gates, and invalid merge action combinations are all represented in the sub-plans,
+- cache duplicate-tag dedupe, cache generic failure messages, faulted-task generic mapping, no raw inner exception retention, and existing failure-test rewrite, QueryMultiple arity 3/4 success and failure coverage, staged DML rollback/cancellation, staged-mutation `UseTransaction = false` rejection, insert non-atomic opt-out documentation, rollback-failure primary-error preservation, non-cancelable final commit, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout tests, identifier length limits, separator-whitespace rejection, destination-column mapping, internal bulk reader surface, full target-row assertions, durable secret-safe verification output with post-log scan/tracking gates, pre-implementation baseline capture, `RequiresDynamicCode`/IL3050 static gates, and invalid merge action combinations are all represented in the sub-plans,
 - official verification passes,
 - security review finds no release-blocking issue,
 - v2.4.0 package docs state exactly what is implemented and what is planned.

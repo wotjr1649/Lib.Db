@@ -12,7 +12,7 @@
 
 ## Implementation Status
 
-The user approved the staged-DML design and later requested implementation planning hardening before source changes. This plan is ready for an implementation session. It is the authoritative bulk sub-plan, but implementation must also satisfy the integrated orchestration plan listed below.
+The user approved the staged-DML design and later requested implementation planning hardening before source changes. This plan is ready for an implementation session only after the pre-implementation baseline gate below passes. It is the authoritative bulk sub-plan, but implementation must also satisfy the integrated orchestration plan listed below.
 
 ## Reviewed Spec
 
@@ -36,6 +36,49 @@ The implementation must preserve these decisions:
 - Identifiers are validated and bracket-quoted.
 - Row values are never interpolated into SQL command text.
 - AOT verification must not gain new Lib.Db trim/AOT warnings.
+
+## Pre-Implementation Baseline Gate
+
+Before source changes begin, capture the current verification baseline. If this
+gate fails, stop and classify the failure as pre-existing instead of mixing it
+with the bulk implementation.
+
+Run:
+
+```powershell
+pwsh -NoProfile -File Verification/scripts/Invoke-Aot.ps1
+```
+
+Expected: no new Lib.Db trim/AOT warnings compared with the current baseline.
+Record the warning count summary and whether only the known provider warnings
+remain.
+
+Then run:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$log = "Verification/artifacts/logs/v240-bulk-preimplementation-release-verification-$stamp.log"
+New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
+$verificationOutput = & pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *>&1
+$exitCode = $LASTEXITCODE
+$verificationOutput | Tee-Object -FilePath $log
+$postLogExitCode = 0
+if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
+    Write-Warning "Release verification log was not created or is empty: $log"
+    $postLogExitCode = 1
+}
+pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths $log
+if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
+pwsh -NoProfile -File Verification/scripts/Assert-GeneratedArtifactsUntracked.ps1
+if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
+if ($exitCode -ne 0) { exit $exitCode }
+if ($postLogExitCode -ne 0) { exit $postLogExitCode }
+```
+
+Expected: release verification passes, the durable log exists and is non-empty,
+the log-specific artifact scan passes, and generated artifacts remain
+ignored/untracked.
 
 ## File Structure
 
@@ -495,6 +538,17 @@ public void BulkWriteOptions_ShouldExposeSafeDefaults()
     options.CheckConstraints.Should().BeTrue();
 }
 
+[Fact]
+public void BulkWriteOptions_ShouldNotRejectTransactionOptOutInScalarValidation()
+{
+    BulkWriteOptions options = new() { UseTransaction = false };
+
+    Action act = () => options.Validate();
+
+    act.Should().NotThrow();
+    options.UseTransaction.Should().BeFalse();
+}
+
 [Theory]
 [InlineData(0)]
 [InlineData(-1)]
@@ -628,6 +682,16 @@ public readonly record struct BulkMergeResult(long Inserted, long Updated, long 
     public long TotalAffected => Inserted + Updated + Deleted;
 }
 ```
+
+`BulkWriteOptions.Validate()` validates scalar option values only. Operation-level
+bulk executors own the transaction-safety contract:
+
+- `BulkInsertAsync` may accept `UseTransaction = false` as an explicit
+  performance opt-out.
+- `BulkUpdateAsync`, `BulkDeleteAsync`, `BulkUpsertAsync`, and `BulkMergeAsync`
+  must reject `UseTransaction = false` before opening a connection in v2.4.0.
+- Any future relaxation of this rule requires a new design entry and tests that
+  document non-atomic partial-write semantics.
 
 - [ ] **Step 4: Keep `IDbSession` unchanged in this task**
 
@@ -1771,10 +1835,13 @@ Also add focused failure-path coverage before marking Task 6 complete:
 Run:
 
 ```powershell
-pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterMethod "*BulkInsertAsync_WithStaticShape_ShouldInsertRows*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterMethod "*BulkInsertAsync*"
 ```
 
-Expected: fails because the public insert overload or executor insert path is not implemented yet.
+Expected: fails because the public insert overload, executor insert path, and
+required insert failure/commit-boundary behaviors are not implemented yet. Do
+not narrow this to the happy-path test after adding the failure-path tests in
+this task.
 
 - [ ] **Step 5: Implement `SqlBulkCopy` insert path**
 
@@ -1800,6 +1867,14 @@ if (options.FireTriggers) copyOptions |= SqlBulkCopyOptions.FireTriggers;
 if (options.CheckConstraints) copyOptions |= SqlBulkCopyOptions.CheckConstraints;
 if (options.KeepIdentity) copyOptions |= SqlBulkCopyOptions.KeepIdentity;
 ```
+
+`UseTransaction = false` is allowed only for `BulkInsertAsync` in v2.4.0. Treat
+it as a non-atomic opt-out: if `SqlBulkCopy` or the provider fails after sending
+some rows, those rows can remain in the target table, and Lib.Db must not claim a
+rollback guarantee. Do not replace this with
+`SqlBulkCopyOptions.UseInternalTransaction`; that option is batch-scoped and does
+not provide the same cross-step transaction model as the explicit local
+transaction used by the safe default path.
 
 ```csharp
 await using SqlConnection connection = await OpenConnectionAsync(instanceName, ct).ConfigureAwait(false);
@@ -1902,16 +1977,19 @@ Add required rollback/commit boundary tests before marking Task 5 complete:
 - `BulkInsertAsync_WhenRollbackFails_ShouldPreserveOriginalFailureAndRedactRollbackError`: inject a rollback failure after a primary bulk failure and assert the returned/propagated public error still describes the original generic bulk failure, not the rollback exception.
 - `BulkInsertAsync_WhenCanceledBeforeCommit_ShouldAttemptRollbackBeforeRethrow`: cancellation before commit attempts rollback and rethrows `OperationCanceledException`.
 - `BulkInsertAsync_WhenCommitHasStarted_ShouldUseNonCancelableCommit`: verify the final commit call receives `CancellationToken.None` or the local abstraction equivalent so caller cancellation cannot create a false canceled result after commit has started.
+- `BulkInsertAsync_WhenUseTransactionFalseFails_ShouldDocumentPartialWriteRisk`: use a controlled non-transactional insert failure or a narrow executor seam to prove the test name and assertions do not promise rollback. If a deterministic partial-write integration test would be flaky, keep the behavioral test at the executor seam and add public-doc assertions that describe the non-atomic contract.
 
 - [ ] **Step 6: Run insert integration test and confirm GREEN**
 
 Run:
 
 ```powershell
-pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterMethod "*BulkInsertAsync_WithStaticShape_ShouldInsertRows*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -FilterMethod "*BulkInsertAsync*"
 ```
 
-Expected: test passes.
+Expected: all insert success, cancellation rollback, redacted general failure,
+rollback-failure preservation, non-cancelable commit, and non-atomic opt-out
+tests pass.
 
 ### Task 7: Implement Update and Delete
 
@@ -2025,6 +2103,8 @@ Also add failure-path coverage before marking Task 7 complete:
 
 - `BulkUpdateAsync_WhenActionSqlFails_ShouldRollbackTargetChanges`: inject a controlled DML failure after the stage load and before commit using the smallest executor seam available after Task 5. Assert the operation returns a redacted failed `DbResult<long>` and that seeded target rows are unchanged.
 - `BulkDeleteAsync_WhenCanceledBeforeCommit_ShouldAttemptRollbackBeforeRethrow`: use the same seam or a cancellation hook after delete DML but before commit. Assert cancellation propagates and the deleted row is still present after rollback.
+- `BulkUpdateAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection`: pass `new BulkWriteOptions { UseTransaction = false }` and assert a validation failure before any connection/session executor opens SQL Server.
+- `BulkDeleteAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection`: same validation contract for delete.
 
 - [ ] **Step 3: Run update/delete tests and confirm RED**
 
@@ -2095,8 +2175,8 @@ It must:
 
 - parse destination,
 - create a unique local temp table name,
-- open connection,
-- begin transaction when configured,
+- reject `UseTransaction = false` before opening the connection, then begin one local transaction for every staged update/delete path,
+- open connection after option validation succeeds,
 - create stage table,
 - bulk copy rows into stage,
 - create a unique index on stage key columns when the operation uses keys,
@@ -2293,6 +2373,7 @@ public static string InsertMissingFromStage<T>(BulkIdentifier destination, strin
 Implement shared staged multi-action execution that:
 
 - creates and loads stage once,
+- rejects `UseTransaction = false` before opening a connection,
 - creates the stage unique index on key columns before any target DML,
 - runs update when selected,
 - runs insert-missing when selected,
@@ -2309,6 +2390,8 @@ Also add failure-path coverage before marking Task 8 complete:
 
 - `BulkUpsertAsync_WhenInsertMissingFails_ShouldRollbackPriorUpdate`: inject a controlled failure in the insert-missing step after the update step has run but before commit. Assert previously matched rows are unchanged after rollback and the returned failure is redacted.
 - `BulkMergeAsync_WhenCanceledAfterActionBeforeCommit_ShouldAttemptRollbackBeforeRethrow`: cancel after the selected action reports affected rows and before commit. Assert cancellation propagates and target rows remain unchanged.
+- `BulkUpsertAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection`: non-atomic staged upsert is not supported in v2.4.0.
+- `BulkMergeAsync_WhenUseTransactionFalse_ShouldRejectBeforeOpeningConnection`: non-atomic staged merge is not supported in v2.4.0.
 
 - [ ] **Step 6: Run upsert/merge tests and confirm GREEN**
 
@@ -2435,20 +2518,26 @@ Run:
 pwsh -NoProfile -File Verification/scripts/Invoke-Aot.ps1
 ```
 
-Expected: `AotWarningCount=0` or the existing baseline count with no new Lib.Db warning. The output must show the `AotSafeBulkShape` step completed.
+Expected: `AotWarningCount=0` or the existing baseline count with no new Lib.Db warning. The output must show both `AotSafeBulkShape` and `AotSafeBulkPublicApiReachability` steps completed.
 
-### Task 10: Update Documentation
+### Task 10: Prepare Bulk Documentation Inputs
 
 **Files:**
-- Modify: `docs/02_advanced.md`
-- Modify: `docs/03_api_reference.md`
-- Modify: `docs/05_fluent_api_reference.md`
-- Modify: `docs/06_cookbook.md`
-- Modify: `docs/history.md`
+- No direct public documentation edits when this sub-plan is executed from the
+  integrated v2.4.0 plan.
+- The integrated plan's Task 5 owns final edits to `docs/02_advanced.md`,
+  `docs/03_api_reference.md`, `docs/05_fluent_api_reference.md`,
+  `docs/06_cookbook.md`, `docs/history.md`, and `.agents/skills/lib-db/SKILL.md`.
 
-- [ ] **Step 1: Update advanced docs**
+This task produces the bulk-specific documentation checklist for the integrated
+documentation pass. If this bulk sub-plan is executed standalone outside the
+integrated v2.4.0 plan, either perform these edits here and mark integrated Task
+5 as already satisfied for bulk, or defer the edits to the integrated task. Do
+not edit the same public docs twice or add duplicate history entries.
 
-Add a section explaining:
+- [ ] **Step 1: Prepare advanced-docs content**
+
+Ensure the integrated docs pass includes:
 
 - legacy reflection `BulkInsertAsync<T>` is still available,
 - new `BulkShape<T>` overloads are AOT-safe,
@@ -2458,13 +2547,13 @@ Add a section explaining:
 - target keys must be backed by `PRIMARY KEY` or `UNIQUE` schema constraints,
 - `DateOnly` and `TimeOnly` are normalized through the same provider-facing convention used by TVP.
 
-- [ ] **Step 2: Update API reference**
+- [ ] **Step 2: Prepare API reference content**
 
-Add public signatures and result types exactly as implemented.
+Ensure public signatures and result types are documented exactly as implemented.
 
-- [ ] **Step 3: Update cookbook**
+- [ ] **Step 3: Prepare cookbook content**
 
-Add examples for:
+Ensure the cookbook includes examples for:
 
 - insert,
 - update,
@@ -2472,9 +2561,9 @@ Add examples for:
 - upsert,
 - merge delete matched.
 
-- [ ] **Step 4: Update history**
+- [ ] **Step 4: Prepare history entry**
 
-Add a v2.4.0 entry:
+Ensure the final `docs/history.md` v2.4.0 entry includes:
 
 ```markdown
 - Added AOT-safe `BulkShape<T>` bulk mutation APIs for insert, update, delete, upsert, and merge. These overloads avoid reflection and use `SqlBulkCopy` plus staged set-based DML. Existing reflection-based `BulkInsertAsync<T>` remains for compatibility.
@@ -2522,10 +2611,31 @@ Expected: no new Lib.Db trim/AOT warnings; AOT smoke executable completes.
 Run:
 
 ```powershell
-pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
+$ErrorActionPreference = 'Stop'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$log = "Verification/artifacts/logs/v240-release-verification-$stamp.log"
+New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
+$verificationOutput = & pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short *>&1
+$exitCode = $LASTEXITCODE
+$verificationOutput | Tee-Object -FilePath $log
+$postLogExitCode = 0
+if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
+    Write-Warning "Release verification log was not created or is empty: $log"
+    $postLogExitCode = 1
+}
+pwsh -NoProfile -File Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths $log
+if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
+pwsh -NoProfile -File Verification/scripts/Assert-GeneratedArtifactsUntracked.ps1
+if ($LASTEXITCODE -ne 0) { $postLogExitCode = $LASTEXITCODE }
+if ($exitCode -ne 0) { exit $exitCode }
+if ($postLogExitCode -ne 0) { exit $postLogExitCode }
 ```
 
-Expected: release-grade verification completes successfully.
+Expected: release-grade verification completes successfully and leaves a durable
+audit log under `Verification/artifacts/logs/`. The log must remain secret-safe:
+no connection-string values, passwords, tokens, SQL parameter values, row values,
+or cache payloads. Log creation, log non-emptiness, log-specific artifact
+scanning, and generated-artifact tracking are hard failure gates.
 
 - [ ] **Step 5: Run review gates**
 
@@ -2538,6 +2648,8 @@ Review checklist:
 - no `RequiresDynamicCode`, `IL3050`, `MakeGenericType`, `Expression.Compile`, `DynamicMethod`, or `Reflection.Emit` in the new AOT-safe bulk path,
 - cancellation token passed into async DB calls,
 - transactions roll back staging + DML failures,
+- staged update/delete/upsert/merge reject `UseTransaction = false` before opening a connection,
+- insert `UseTransaction = false` is documented and tested as a non-atomic opt-out, not as a rollback-capable mode,
 - rollback failure cannot replace the primary bulk failure in public results,
 - final commit uses `CancellationToken.None` and documents that cancellation rollback is guaranteed only before commit begins,
 - duplicate source keys fail through the stage unique index before target DML,
@@ -2571,9 +2683,20 @@ Expected: findings are explainable and limited to allowed locations.
 Implementation is release-candidate ready only when:
 
 - all tasks are checked off,
+- pre-implementation AOT and release-verification baselines were captured before source changes,
 - targeted unit and integration tests pass,
-- duplicate source keys, malformed destination names, separator-whitespace rejection, 128-character identifier limits, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout options, destination-column mapping, key-only delete staging, value normalization for `DateOnly`/`TimeOnly`/enum/`Guid`/`decimal`/`byte[]`/nullable values, reader lifecycle/disposal/idempotency, EOF current clearing, missing ordinal failure, `CheckConstraints` defaulting, metadata-based enum conversion, invalid merge action combinations, AOT enum smoke, public bulk AOT reachability, staged-DML rollback/cancellation, rollback-on-cancellation, rollback-failure primary-error preservation, non-cancelable final commit, redacted general-error mapping, and polymorphic merge-option validation are covered by tests or explicit static gates,
+- shape minimum-column validation, duplicate destination-column rejection, required mutation keys, update non-key column validation, bracket escaping, SQL type rendering, nullable false null rejection, reader row-order preservation, duplicate source keys, malformed destination names, separator-whitespace rejection, 128-character identifier limits, unsupported `SqlDbType` pre-connection rejection, invalid batch/timeout options, destination-column mapping, key-only delete staging, value normalization for `DateOnly`/`TimeOnly`/enum/`Guid`/`decimal`/`byte[]`/nullable values, reader lifecycle/disposal/idempotency, EOF current clearing, missing ordinal failure, `CheckConstraints` defaulting, metadata-based enum conversion, invalid merge action combinations, AOT enum smoke, public bulk AOT reachability, staged-DML rollback/cancellation, staged-mutation `UseTransaction = false` rejection, insert non-atomic opt-out documentation/tests, rollback-on-cancellation, rollback-failure primary-error preservation, non-cancelable final commit, redacted general-error mapping, and polymorphic merge-option validation are covered by tests or explicit static gates,
 - AOT verification passes with no new Lib.Db warnings,
 - official release verification passes,
+- durable release-verification log is captured, non-empty, post-scanned, ignored/untracked, and remains secret-safe,
 - docs are updated,
 - a final security/code review finds no blocking issue.
+
+## Scope Reduction Gate
+
+The approved v2.4.0 bulk scope is insert/update/delete/upsert/merge. If any
+implementation constraint forces removing an approved operation, narrowing the
+public API, or postponing part of the bulk suite to v2.5.0, stop before
+continuing. Update this bulk sub-plan, the bulk sub-spec, the integrated spec and
+plan, and public docs/history/API promises; rerun review on the reduced scope;
+and obtain explicit user approval for the new v2.4.0 scope.
