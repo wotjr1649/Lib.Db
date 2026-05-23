@@ -1,0 +1,85 @@
+name: Release Verification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-verification:
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_PID: Developer
+          MSSQL_SA_PASSWORD: ${{ secrets.LIBDB_TEST_SQL_PASSWORD }}
+        ports:
+          - 1433:1433
+    env:
+      DOTNET_NOLOGO: true
+      LIBDB_TEST_SQL_PASSWORD: ${{ secrets.LIBDB_TEST_SQL_PASSWORD }}
+      LIBDB_BENCHMARK_CONNECTION: Server=127.0.0.1;Database=LIBDB_BENCH_TEST;User ID=SA;Password=${{ secrets.LIBDB_TEST_SQL_PASSWORD }};Encrypt=False;TrustServerCertificate=True;MultipleActiveResultSets=True;
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Verify required secrets
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${LIBDB_TEST_SQL_PASSWORD}" ]]; then
+          echo "ERROR: LIBDB_TEST_SQL_PASSWORD secret is required for release verification." >&2
+          exit 1
+        fi
+
+    - name: Wait for SQL Server
+      shell: bash
+      run: |
+        set -euo pipefail
+        container_id="$(docker ps --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest --format '{{.ID}}' | head -n 1)"
+        if [[ -z "$container_id" ]]; then
+          echo "ERROR: SQL Server service container was not found." >&2
+          docker ps
+          exit 1
+        fi
+
+        sqlcmd_path="$(docker exec "$container_id" bash -lc 'if [[ -x /opt/mssql-tools18/bin/sqlcmd ]]; then echo /opt/mssql-tools18/bin/sqlcmd; elif [[ -x /opt/mssql-tools/bin/sqlcmd ]]; then echo /opt/mssql-tools/bin/sqlcmd; else exit 2; fi')"
+        for attempt in {1..60}; do
+          if docker exec -e SQLCMDPASSWORD="$LIBDB_TEST_SQL_PASSWORD" "$container_id" "$sqlcmd_path" -S localhost -U sa -C -Q "SELECT 1" >/dev/null 2>&1; then
+            echo "SQL Server is ready."
+            exit 0
+          fi
+          sleep 2
+        done
+
+        echo "ERROR: SQL Server did not become ready in time." >&2
+        docker logs "$container_id" --tail 80
+        exit 1
+
+    - name: Restore dependencies
+      run: dotnet restore Lib.Db.slnx
+
+    - name: Restore local tools
+      run: dotnet tool restore
+
+    - name: Run v2.4.0 release gate
+      shell: pwsh
+      run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
+
+    - name: Upload verification artifacts
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: verification-artifacts-${{ github.run_id }}
+        path: Verification/artifacts/**
+        if-no-files-found: warn
+        retention-days: 7

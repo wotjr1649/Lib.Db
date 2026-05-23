@@ -79,16 +79,18 @@ if (result.IsSuccess)
 ## Multiple Result Sets
 
 ```csharp
-DbResult<IMultipleResultReader> result = await db.Default
+using Lib.Db.Extensions;
+
+DbResult<DbMultiple<OrderDto, OrderSummaryDto>> result = await db.Default
     .Procedure("dbo.usp_GetDashboard")
     .With(new { CustomerId = customerId })
-    .QueryMultipleAsync(ct);
+    .QueryMultipleAsync(ct)
+    .ReadMultipleAsync<OrderDto, OrderSummaryDto>(ct);
 
 if (result.IsSuccess)
 {
-    await using IMultipleResultReader grid = result.Value!;
-    List<OrderDto> orders = await grid.ReadAsync<OrderDto>(ct);
-    OrderSummaryDto? summary = await grid.ReadSingleAsync<OrderSummaryDto>(ct);
+    List<OrderDto> orders = result.Value.First;
+    OrderSummaryDto? summary = result.Value.Second.SingleOrDefault();
 }
 ```
 
@@ -141,20 +143,31 @@ DbResult<int> result = await db.Default
 ## Bulk Insert
 
 ```csharp
+using System.Data;
+
+BulkShape<OrderImportRow> shape = BulkShape.For<OrderImportRow>()
+    .Key("OrderId", SqlDbType.Int, static row => row.OrderId)
+    .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64)
+    .Column("Quantity", SqlDbType.Int, static row => row.Quantity)
+    .Build();
+
 DbResult<long> result = await db.BulkInsertAsync(
     "Default",
     "[dbo].[OrderImport]",
     records,
-    new BulkInsertOptions { BatchSize = 10_000, CheckConstraints = true },
+    shape,
+    new BulkWriteOptions { BatchSize = 10_000, CheckConstraints = true },
     ct);
 ```
 
 ## Cache-Aside
 
 ```csharp
+string userProfileCacheKey = cacheKeys.UserProfile(userId); // opaque app-owned label, not the raw identifier
+
 DbResult<UserDto?> result = await QueryCacheExtensions.GetOrQueryAsync(
     cache,
-    $"user:{userId}",
+    userProfileCacheKey,
     TimeSpan.FromMinutes(5),
     () => db.Default
         .Procedure("dbo.usp_GetUser")

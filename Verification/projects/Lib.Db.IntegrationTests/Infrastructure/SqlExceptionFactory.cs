@@ -8,7 +8,7 @@
 
 using System.Collections;
 using System.Reflection;
-using System.Runtime.Serialization;
+using System.Runtime.CompilerServices;
 using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.Infrastructure;
@@ -16,7 +16,7 @@ namespace Lib.Db.IntegrationTests.Infrastructure;
 /// <summary>
 /// [Warning] 테스트 전용 UNSAFE Factory
 /// <para>
-/// SqlException(Sealed)을 Reflection/FormatterServices로 강제 생성합니다.<br/>
+/// SqlException(Sealed)을 Reflection/RuntimeHelpers로 강제 생성합니다.<br/>
 /// 목적: Deadlock(1205) 등 특정 SQL 에러 상황을 결정론적으로 시뮬레이션.<br/>
 /// 주의: Microsoft.Data.SqlClient 내부 구현 변경 시 깨질 수 있음. (Preflight Test 필수)
 /// </para>
@@ -50,7 +50,7 @@ internal static class SqlExceptionFactory
             return ctor.Invoke(null);
         }
 
-        return FormatterServices.GetUninitializedObject(type);
+        return RuntimeHelpers.GetUninitializedObject(type);
     }
 
     private static object CreateSqlError(int number, string message)
@@ -117,7 +117,7 @@ internal static class SqlExceptionFactory
             return (SqlException)factoryMethod.Invoke(null, [errorCollection, "10.0.0"])!;
         }
 
-        SqlException ex = (SqlException)FormatterServices.GetUninitializedObject(type);
+        SqlException ex = (SqlException)RuntimeHelpers.GetUninitializedObject(type);
 
         FieldInfo? field = type.GetField("_errors", BindingFlags.Instance | BindingFlags.NonPublic)
                  ?? type.GetField("errors", BindingFlags.Instance | BindingFlags.NonPublic);

@@ -9,7 +9,7 @@ namespace Lib.Db.IntegrationTests.Unit;
 public sealed class ConsumerSkillTests
 {
     [Theory]
-    [InlineData(".agent")]
+    [InlineData(".agents")]
     [InlineData(".claude")]
     public void ConsumerSkill_ShouldDocumentRuntimeTvpMigrationWithoutInternalVerificationWorkflows(string skillRootName)
     {

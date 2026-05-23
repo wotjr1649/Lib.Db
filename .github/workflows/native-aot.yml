@@ -1,0 +1,98 @@
+name: Native AOT Verification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/native-aot.yml'
+      - 'Lib.Db/**'
+      - 'Verification/baselines/aot-warnings.json'
+      - 'Verification/projects/Lib.Db.AotVerification/**'
+      - 'Verification/scripts/Invoke-Aot.ps1'
+
+permissions:
+  contents: read
+
+jobs:
+  native-aot:
+    if: github.ref != 'refs/heads/main'
+    name: native-aot-${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            rid: win-x64
+          - os: ubuntu-24.04
+            rid: linux-x64
+          - os: macos-15-intel
+            rid: osx-x64
+    env:
+      DOTNET_NOLOGO: true
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Verify Windows Native AOT prerequisites
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+        $vswhere = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vswhere.exe'
+        if (-not (Test-Path -LiteralPath $vswhere)) {
+          throw "vswhere.exe was not found on the Windows runner."
+        }
+
+        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Workload.NativeDesktop -property installationPath
+        if ([string]::IsNullOrWhiteSpace($installPath)) {
+          throw "Visual Studio Desktop development with C++ workload was not found."
+        }
+
+        $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
+        if (-not (Test-Path -LiteralPath $vcvars)) {
+          throw "vcvars64.bat was not found under the Visual Studio installation."
+        }
+
+        cmd /c "`"$vcvars`" >nul && where cl.exe && where link.exe"
+
+    - name: Install Linux Native AOT prerequisites
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y clang zlib1g-dev
+        clang --version
+
+    - name: Verify macOS Native AOT prerequisites
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        xcode-select -p
+        clang --version
+
+    - name: Restore dependencies
+      run: dotnet restore Lib.Db.slnx
+
+    - name: Run Native AOT gate
+      shell: pwsh
+      run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Aot.ps1 -ArtifactsDirectory "Verification/artifacts/aot-${{ matrix.rid }}"
+
+    - name: Upload Native AOT artifacts
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: native-aot-${{ matrix.rid }}-${{ github.run_id }}
+        path: Verification/artifacts/aot-${{ matrix.rid }}/**
+        if-no-files-found: warn
+        retention-days: 7

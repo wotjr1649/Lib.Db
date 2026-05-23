@@ -8,6 +8,7 @@
 
 using System.Text.Json;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using Lib.Db.Contracts.Core;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Hybrid;
@@ -29,11 +30,13 @@ namespace Lib.Db.Extensions;
 /// <para>
 /// <b>[사용 예시]</b><br/>
 /// <code>
+/// string userProfileCacheKey = cacheKeys.UserProfile(userId);
+///
 /// DbResult&lt;UserDto?&gt; result = await _db
 ///     .Procedure("sp_GetUser")
-///     .With(new { UserId = 1 })
+///     .With(new { UserId = userId })
 ///     .QuerySingleAsync&lt;UserDto&gt;()
-///     .WithCacheAsync(cache, "user:1", TimeSpan.FromMinutes(5));
+///     .WithCacheAsync(cache, userProfileCacheKey, TimeSpan.FromMinutes(5));
 /// </code>
 /// </para>
 /// </summary>
@@ -44,6 +47,8 @@ public static class QueryCacheExtensions
 
     private const string JsonCacheRequiresDynamicCodeMessage =
         "JSON cache convenience overloads can require runtime code generation. Use source-generated JsonTypeInfo overloads for Native AOT.";
+
+    private const int MaxHybridCacheTagsPerEntry = 32;
 
     #region IDistributedCache 기반 캐싱
 
@@ -232,12 +237,57 @@ public static class QueryCacheExtensions
     /// <param name="duration">캐시 유효 시간</param>
     /// <param name="ct">취소 토큰</param>
     /// <returns>캐시된 또는 새로 조회된 결과</returns>
-    public static async Task<DbResult<T?>> WithHybridCacheAsync<T>(
+    /// <remarks>
+    /// 이 overload는 이미 생성된 <see cref="Task{TResult}"/>를 받습니다. 캐시 히트여도 호출자가 만든 DB Task의
+    /// 생성, 부작용, 이후 fault를 막는 lazy factory API가 아닙니다.
+    /// </remarks>
+    [OverloadResolutionPriority(1)]
+    public static Task<DbResult<T?>> WithHybridCacheAsync<T>(
         this Task<DbResult<T?>> resultTask,
         HybridCache hybridCache,
         string cacheKey,
         TimeSpan duration,
         CancellationToken ct = default)
+        => WithHybridCacheCoreAsync(resultTask, hybridCache, cacheKey, duration, tags: null, ct);
+
+    /// <summary>
+    /// DB 쿼리 결과를 HybridCache에 태그와 함께 캐시합니다.
+    /// </summary>
+    /// <typeparam name="T">결과 타입</typeparam>
+    /// <param name="resultTask">원본 DB 쿼리 Task</param>
+    /// <param name="hybridCache">HybridCache 인스턴스</param>
+    /// <param name="cacheKey">캐시 키</param>
+    /// <param name="duration">캐시 유효 시간</param>
+    /// <param name="tags">캐시 엔트리에 연결할 태그. null은 태그 없음을 의미합니다.</param>
+    /// <param name="ct">취소 토큰</param>
+    /// <returns>캐시된 또는 새로 조회된 결과</returns>
+    /// <remarks>
+    /// 태그는 null/빈 값/공백/앞뒤 공백/예약 wildcard 값("*")을 포함할 수 없으며, ordinal 중복 제거 후
+    /// 엔트리당 최대 32개까지 허용됩니다. 이 overload는 이미 생성된 <see cref="Task{TResult}"/>를 받으므로
+    /// 캐시 히트여도 DB Task 생성, 부작용, 이후 fault를 막는 lazy factory API가 아닙니다.
+    /// </remarks>
+    public static Task<DbResult<T?>> WithHybridCacheAsync<T>(
+        this Task<DbResult<T?>> resultTask,
+        HybridCache hybridCache,
+        string cacheKey,
+        TimeSpan duration,
+        IEnumerable<string>? tags,
+        CancellationToken ct = default)
+        => WithHybridCacheCoreAsync(
+            resultTask,
+            hybridCache,
+            cacheKey,
+            duration,
+            NormalizeHybridCacheTags(tags),
+            ct);
+
+    private static async Task<DbResult<T?>> WithHybridCacheCoreAsync<T>(
+        Task<DbResult<T?>> resultTask,
+        HybridCache hybridCache,
+        string cacheKey,
+        TimeSpan duration,
+        IEnumerable<string>? tags,
+        CancellationToken ct)
     {
         HybridCacheEntryOptions entryOptions = new()
         {
@@ -245,23 +295,83 @@ public static class QueryCacheExtensions
             LocalCacheExpiration = duration
         };
 
-        // HybridCache.GetOrCreateAsync: 캐시 미스 시 팩토리 실행
-        // 단, 팩토리에서 예외 발생 시 캐시되지 않음
-        T? cachedValue = await hybridCache.GetOrCreateAsync(
-            cacheKey,
-            async (token) =>
-            {
-                DbResult<T?> result = await resultTask.ConfigureAwait(false);
-                if (!result.IsSuccess)
-                    throw new InvalidOperationException(result.Error?.Message ?? "DB 쿼리 실패");
+        T? cachedValue;
+        try
+        {
+            cachedValue = await hybridCache.GetOrCreateAsync(
+                cacheKey,
+                async (token) =>
+                {
+                    DbResult<T?> result;
+                    try
+                    {
+                        result = await resultTask.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        throw CreateHybridCacheFactoryFailure();
+                    }
 
-                return result.Value;
-            },
-            entryOptions,
-            cancellationToken: ct).ConfigureAwait(false);
+                    if (!result.IsSuccess)
+                        throw CreateHybridCacheFactoryFailure();
+
+                    return result.Value;
+                },
+                entryOptions,
+                tags,
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw CreateHybridCacheFactoryFailure();
+        }
 
         return DbResult<T?>.Ok(cachedValue);
     }
+
+    private static string[] NormalizeHybridCacheTags(IEnumerable<string>? tags)
+    {
+        if (tags is null)
+            return [];
+
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        List<string> normalized = [];
+        foreach (string? rawTag in tags)
+        {
+            if (rawTag is null)
+                throw new ArgumentException("HybridCache tags cannot contain null values.", nameof(tags));
+
+            string trimmed = rawTag.Trim();
+            if (trimmed.Length == 0)
+                throw new ArgumentException("HybridCache tags cannot be empty or whitespace.", nameof(tags));
+
+            if (!string.Equals(rawTag, trimmed, StringComparison.Ordinal))
+                throw new ArgumentException("HybridCache tags cannot have leading or trailing whitespace.", nameof(tags));
+
+            if (rawTag == "*")
+                throw new ArgumentException("HybridCache tag '*' is reserved for wildcard invalidation and cannot be assigned to entries.", nameof(tags));
+
+            if (seen.Add(rawTag))
+            {
+                normalized.Add(rawTag);
+                if (normalized.Count > MaxHybridCacheTagsPerEntry)
+                    throw new ArgumentException($"HybridCache entries cannot have more than {MaxHybridCacheTagsPerEntry} distinct tags.", nameof(tags));
+            }
+        }
+
+        return [.. normalized];
+    }
+
+    private static InvalidOperationException CreateHybridCacheFactoryFailure()
+        => new("DB query failed.");
 
     #endregion
 

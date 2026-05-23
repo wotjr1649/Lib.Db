@@ -15,8 +15,8 @@ using Microsoft.Extensions.Logging;
 namespace Lib.Db.Schema;
 
 /// <summary>
-///  Epoch 기반 분산 스키마 캐시 무효화 서비스.
-/// <para>프로세스 간 Epoch 동기화로 분산 환경에서 스키마 일관성을 보장합니다.</para>
+/// SharedMemoryCache opt-in 환경에서 Epoch 기반 스키마 캐시 무효화를 수행하는 서비스입니다.
+/// <para>동일 호스트 프로세스 간 Epoch 동기화로 로컬 shared-memory 캐시 일관성을 보조합니다.</para>
 /// </summary>
 public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
 {
@@ -248,10 +248,15 @@ public sealed class EpochWatcherService : BackgroundService
         ArgumentNullException.ThrowIfNull(options);
 
         _checkInterval = TimeSpan.FromSeconds(options.EpochCheckIntervalSeconds);
-        bool enableSharedMemory = options.EnableSharedMemoryCache
-            ?? System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                System.Runtime.InteropServices.OSPlatform.Windows);
-        bool enableEpoch = options.EnableEpochCoordination ?? enableSharedMemory;
+        bool enableSharedMemory = options.EnableSharedMemoryCache is true;
+        if (options.EnableEpochCoordination is true && !enableSharedMemory)
+        {
+            throw new InvalidOperationException(
+                "Lib.Db: EnableEpochCoordination=true requires explicit shared-memory cache opt-in. " +
+                "Call services.AddLibDbSharedMemoryCache(), or disable EnableEpochCoordination.");
+        }
+
+        bool enableEpoch = options.EnableEpochCoordination.GetValueOrDefault(enableSharedMemory);
 
         if (!enableEpoch)
         {

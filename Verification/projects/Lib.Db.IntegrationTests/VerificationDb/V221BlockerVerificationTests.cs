@@ -23,10 +23,10 @@ public sealed class V221BlockerVerificationTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<V221SuspendRow>> result = await _db
             .Procedure("verify.usp_GetSuspendRows")
             .With(new { ScanDate = VerificationDate })
-            .QueryAsync<V221SuspendRow>();
+            .QueryAsync<V221SuspendRow>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
-        List<V221SuspendRow> rows = await result.Value!.ToListAsync();
+        List<V221SuspendRow> rows = await result.Value!.ToListAsync(TestContext.Current.CancellationToken);
 
         rows.Should().ContainSingle();
         rows[0].CellNo.Should().Be(17);
@@ -39,10 +39,10 @@ public sealed class V221BlockerVerificationTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<V221GeneratedVerificationRow>> result = await _db
             .Procedure("verify.usp_GetGeneratedRows")
             .With(new { ScanDate = VerificationDate })
-            .QueryAsync<V221GeneratedVerificationRow>();
+            .QueryAsync<V221GeneratedVerificationRow>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
-        List<V221GeneratedVerificationRow> rows = await result.Value!.ToListAsync();
+        List<V221GeneratedVerificationRow> rows = await result.Value!.ToListAsync(TestContext.Current.CancellationToken);
 
         rows.Should().ContainSingle();
         rows[0].UserId.Should().Be(1001);
@@ -61,7 +61,7 @@ public sealed class V221BlockerVerificationTests(MultiDbFixture fixture)
                 WHERE [SCAN_DATE] = @ScanDate
                 """)
             .With(new { ScanDate = VerificationDate })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(1);
@@ -77,7 +77,7 @@ public sealed class V221BlockerVerificationTests(MultiDbFixture fixture)
                 WHERE object_id = OBJECT_ID(N'[verify].[QuotedIdentifierRows]')
                   AND name = N'IX_QuotedIdentifierRows_NormalizedCode'
                 """)
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(1);

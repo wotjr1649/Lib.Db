@@ -3,10 +3,17 @@ param(
     [string] $Target = 'Solution',
     [string] $Configuration = 'Debug',
     [string] $Filter,
+    [string] $FilterClass,
+    [string] $FilterMethod,
+    [string] $FilterTrait,
+    [string] $FilterQuery,
     [string] $Logger,
+    [switch] $ReportTrx,
+    [string] $TrxFileName,
     [string] $ResultsDirectory,
     [switch] $NoRestore,
     [switch] $NoBuild,
+    [switch] $SkipTestEnvGuard,
     [ValidateSet('quiet', 'minimal', 'normal', 'detailed', 'diagnostic')]
     [string] $Verbosity = 'minimal',
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -60,9 +67,108 @@ function Write-SecretSafeEnvironmentSummary {
     }
 }
 
+function Add-MinimumExpectedTests {
+    param([Parameter(Mandatory = $true)] [System.Collections.Generic.List[string]] $Arguments)
+
+    if (-not $Arguments.Contains('--minimum-expected-tests')) {
+        $Arguments.Add('--minimum-expected-tests')
+        $Arguments.Add('1')
+    }
+}
+
+function Add-MtpFilterArguments {
+    param(
+        [Parameter(Mandatory = $true)] [System.Collections.Generic.List[string]] $Arguments,
+        [string] $Filter,
+        [string] $FilterClass,
+        [string] $FilterMethod,
+        [string] $FilterTrait,
+        [string] $FilterQuery
+    )
+
+    $hasNativeFilter = -not [string]::IsNullOrWhiteSpace($FilterClass) -or
+        -not [string]::IsNullOrWhiteSpace($FilterMethod) -or
+        -not [string]::IsNullOrWhiteSpace($FilterTrait) -or
+        -not [string]::IsNullOrWhiteSpace($FilterQuery)
+
+    if ($hasNativeFilter -and -not [string]::IsNullOrWhiteSpace($Filter)) {
+        throw 'Use either -Filter for simple FullyQualifiedName~ClassName compatibility or native MTP filter parameters, not both.'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Filter)) {
+        if ($Filter -match '^FullyQualifiedName~(?<class>[A-Za-z0-9_.+]+)$') {
+            $className = $Matches['class'].Split('.')[-1]
+            $Arguments.Add('--filter-class')
+            $Arguments.Add("*$className*")
+            Add-MinimumExpectedTests -Arguments $Arguments
+            return
+        }
+
+        throw 'MTP does not support arbitrary VSTest --filter syntax for xUnit v3. Use -FilterClass, -FilterMethod, -FilterTrait, or -FilterQuery.'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($FilterClass)) {
+        $Arguments.Add('--filter-class')
+        $Arguments.Add($FilterClass)
+        Add-MinimumExpectedTests -Arguments $Arguments
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($FilterMethod)) {
+        $Arguments.Add('--filter-method')
+        $Arguments.Add($FilterMethod)
+        Add-MinimumExpectedTests -Arguments $Arguments
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($FilterTrait)) {
+        $Arguments.Add('--filter-trait')
+        $Arguments.Add($FilterTrait)
+        Add-MinimumExpectedTests -Arguments $Arguments
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($FilterQuery)) {
+        $Arguments.Add('--filter-query')
+        $Arguments.Add($FilterQuery)
+        Add-MinimumExpectedTests -Arguments $Arguments
+    }
+}
+
+function Add-MtpReportArguments {
+    param(
+        [Parameter(Mandatory = $true)] [System.Collections.Generic.List[string]] $Arguments,
+        [string] $Logger,
+        [bool] $ReportTrx,
+        [string] $TrxFileName
+    )
+
+    $shouldReportTrx = $ReportTrx
+    $effectiveTrxFileName = $TrxFileName
+
+    if (-not [string]::IsNullOrWhiteSpace($Logger)) {
+        if ($Logger -notlike 'trx*') {
+            throw 'MTP only supports -Logger trx compatibility in Invoke-Tests.ps1. Use native MTP report options for other formats.'
+        }
+
+        $shouldReportTrx = $true
+        if ([string]::IsNullOrWhiteSpace($effectiveTrxFileName) -and $Logger -match '(?i)(^|;)LogFileName=(?<name>[^;]+)') {
+            $effectiveTrxFileName = $Matches['name']
+        }
+    }
+
+    if ($shouldReportTrx) {
+        $Arguments.Add('--report-trx')
+        if (-not [string]::IsNullOrWhiteSpace($effectiveTrxFileName)) {
+            $Arguments.Add('--report-trx-filename')
+            $Arguments.Add($effectiveTrxFileName)
+        }
+    }
+}
+
 $testTarget = if ($Target -eq 'IntegrationTests') { $integrationProject } else { $solution }
 $dotnetArguments = [System.Collections.Generic.List[string]]::new()
 $dotnetArguments.Add('test')
+if ($Target -eq 'IntegrationTests') {
+    $dotnetArguments.Add('--project')
+}
 $dotnetArguments.Add($testTarget)
 $dotnetArguments.Add('-c')
 $dotnetArguments.Add($Configuration)
@@ -75,15 +181,19 @@ if ($NoBuild) {
     $dotnetArguments.Add('--no-build')
 }
 
-if (-not [string]::IsNullOrWhiteSpace($Filter)) {
-    $dotnetArguments.Add('--filter')
-    $dotnetArguments.Add($Filter)
-}
+Add-MtpFilterArguments `
+    -Arguments $dotnetArguments `
+    -Filter $Filter `
+    -FilterClass $FilterClass `
+    -FilterMethod $FilterMethod `
+    -FilterTrait $FilterTrait `
+    -FilterQuery $FilterQuery
 
-if (-not [string]::IsNullOrWhiteSpace($Logger)) {
-    $dotnetArguments.Add('--logger')
-    $dotnetArguments.Add($Logger)
-}
+Add-MtpReportArguments `
+    -Arguments $dotnetArguments `
+    -Logger $Logger `
+    -ReportTrx $ReportTrx.IsPresent `
+    -TrxFileName $TrxFileName
 
 if (-not [string]::IsNullOrWhiteSpace($ResultsDirectory)) {
     $dotnetArguments.Add('--results-directory')
@@ -99,10 +209,35 @@ foreach ($argument in $AdditionalArguments) {
 Write-Host 'Lib.Db test run started.'
 Write-Host "Target=$Target"
 Write-Host "Configuration=$Configuration"
+Write-Host "SkipTestEnvGuard=$($SkipTestEnvGuard.IsPresent)"
 if (-not [string]::IsNullOrWhiteSpace($Filter)) {
     Write-Host "Filter=$Filter"
 }
+if (-not [string]::IsNullOrWhiteSpace($FilterClass)) {
+    Write-Host "FilterClass=$FilterClass"
+}
+if (-not [string]::IsNullOrWhiteSpace($FilterMethod)) {
+    Write-Host "FilterMethod=$FilterMethod"
+}
+if (-not [string]::IsNullOrWhiteSpace($FilterTrait)) {
+    Write-Host "FilterTrait=$FilterTrait"
+}
+if (-not [string]::IsNullOrWhiteSpace($FilterQuery)) {
+    Write-Host "FilterQuery=$FilterQuery"
+}
 
-Write-SecretSafeEnvironmentSummary
-Invoke-Checked 'dotnet' $dotnetArguments.ToArray()
+$savedSkipGuard = [Environment]::GetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD')
+if ($SkipTestEnvGuard) {
+    [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')
+}
+
+try {
+    Write-SecretSafeEnvironmentSummary
+    Invoke-Checked 'dotnet' $dotnetArguments.ToArray()
+}
+finally {
+    if ($SkipTestEnvGuard) {
+        [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', $savedSkipGuard)
+    }
+}
 Write-Host 'Lib.Db test run completed.'

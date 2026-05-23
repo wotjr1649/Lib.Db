@@ -4,8 +4,12 @@ using System.Runtime.CompilerServices;
 using Lib.Db;
 using Lib.Db.Caching;
 using Lib.Db.Configuration;
+using Lib.Db.Contracts.Core;
+using Lib.Db.Contracts.Entry;
+using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
+using Lib.Db.Execution.Bulk;
 using Lib.Db.Execution.Binding;
 using Lib.Db.Execution.Tvp;
 using Microsoft.Extensions.Caching.Hybrid;
@@ -20,6 +24,8 @@ try
     RunStep("ExplicitStaticTvpShape", VerifyExplicitStaticTvpShape);
     RunStep("RegisteredStaticTvpShape", VerifyRegisteredStaticTvpShape);
     RunStep("GeneratedMapperAndReflectionParameterMapper", VerifyGeneratedMapperAndReflectionParameterMapper);
+    RunStep("AotSafeBulkShape", VerifyAotSafeBulkShape);
+    RunStep("AotSafeBulkPublicApiReachability", VerifyAotSafeBulkPublicApiReachability);
 
     Console.WriteLine("Lib.Db AOT verification passed.");
     return 0;
@@ -40,6 +46,7 @@ static void RunStep(string name, Action action)
     try
     {
         action();
+        Console.WriteLine($"AOT verification step '{name}' completed.");
     }
     catch (Exception ex)
     {
@@ -170,6 +177,119 @@ static void VerifyGeneratedMapperAndReflectionParameterMapper()
     AssertEqual(99, dto.OutValue, "output parameter");
 }
 
+static void VerifyAotSafeBulkShape()
+{
+    BulkShape<AotBulkRow> shape = CreateBulkShape();
+
+    using BulkShapeDataReader<AotBulkRow> reader = new(
+        [new AotBulkRow(1, "AOT-SKU", 3, AotBulkStatus.Active)],
+        shape);
+
+    if (!reader.Read())
+        throw new InvalidOperationException("AOT bulk reader did not read the smoke row.");
+
+    if (!Equals(reader.GetValue(1), "AOT-SKU"))
+        throw new InvalidOperationException("AOT bulk reader returned an unexpected value.");
+
+    if (!Equals(reader.GetValue(3), 1))
+        throw new InvalidOperationException("AOT bulk reader did not normalize enum values through shape metadata.");
+}
+
+static void VerifyAotSafeBulkPublicApiReachability()
+{
+    BulkShape<AotBulkRow> shape = CreateBulkShape();
+    BulkWriteOptions writeOptions = new();
+    BulkMergeOptions mergeOptions = new();
+    mergeOptions.Validate();
+
+    Func<IDbSession, CancellationToken, Task<DbResult<long>>> insert =
+        (session, token) => session.BulkInsertAsync("Default", "dbo.AotBulk", Array.Empty<AotBulkRow>(), shape, writeOptions, token);
+    Func<IDbSession, CancellationToken, Task<DbResult<long>>> update =
+        (session, token) => session.BulkUpdateAsync("Default", "dbo.AotBulk", Array.Empty<AotBulkRow>(), shape, writeOptions, token);
+    Func<IDbSession, CancellationToken, Task<DbResult<long>>> delete =
+        (session, token) => session.BulkDeleteAsync("Default", "dbo.AotBulk", Array.Empty<AotBulkRow>(), shape, writeOptions, token);
+    Func<IDbSession, CancellationToken, Task<DbResult<BulkUpsertResult>>> upsert =
+        (session, token) => session.BulkUpsertAsync("Default", "dbo.AotBulk", Array.Empty<AotBulkRow>(), shape, writeOptions, token);
+    Func<IDbSession, CancellationToken, Task<DbResult<BulkMergeResult>>> merge =
+        (session, token) => session.BulkMergeAsync("Default", "dbo.AotBulk", Array.Empty<AotBulkRow>(), shape, mergeOptions, token);
+
+    GC.KeepAlive(insert);
+    GC.KeepAlive(update);
+    GC.KeepAlive(delete);
+    GC.KeepAlive(upsert);
+    GC.KeepAlive(merge);
+
+    VerifyAotSafeBulkConcreteExecutorReachability(shape, writeOptions, mergeOptions);
+}
+
+static void VerifyAotSafeBulkConcreteExecutorReachability(
+    BulkShape<AotBulkRow> shape,
+    BulkWriteOptions writeOptions,
+    BulkMergeOptions mergeOptions)
+{
+    AotNoDbConnectionFactory connectionFactory = new();
+    BulkWriteExecutor executor = new(connectionFactory);
+
+    DbResult<long> insert = executor.BulkInsertAsync(
+        "Default",
+        "dbo.AotBulk",
+        Array.Empty<AotBulkRow>(),
+        shape,
+        writeOptions,
+        CancellationToken.None).GetAwaiter().GetResult();
+    AssertSuccessfulCount(insert, 0, "bulk insert no-DB reachability");
+
+    DbResult<long> update = executor.BulkUpdateAsync(
+        "Default",
+        "dbo.AotBulk",
+        Array.Empty<AotBulkRow>(),
+        shape,
+        writeOptions,
+        CancellationToken.None).GetAwaiter().GetResult();
+    AssertSuccessfulCount(update, 0, "bulk update no-DB reachability");
+
+    DbResult<long> delete = executor.BulkDeleteAsync(
+        "Default",
+        "dbo.AotBulk",
+        Array.Empty<AotBulkRow>(),
+        shape,
+        writeOptions,
+        CancellationToken.None).GetAwaiter().GetResult();
+    AssertSuccessfulCount(delete, 0, "bulk delete no-DB reachability");
+
+    DbResult<BulkUpsertResult> upsert = executor.BulkUpsertAsync(
+        "Default",
+        "dbo.AotBulk",
+        Array.Empty<AotBulkRow>(),
+        shape,
+        writeOptions,
+        CancellationToken.None).GetAwaiter().GetResult();
+    AssertSuccessful(upsert, "bulk upsert no-DB reachability");
+    AssertEqual(0, upsert.Value.TotalAffected, "bulk upsert no-DB reachability");
+
+    DbResult<BulkMergeResult> merge = executor.BulkMergeAsync(
+        "Default",
+        "dbo.AotBulk",
+        Array.Empty<AotBulkRow>(),
+        shape,
+        mergeOptions,
+        CancellationToken.None).GetAwaiter().GetResult();
+    AssertSuccessful(merge, "bulk merge no-DB reachability");
+    AssertEqual(0, merge.Value.TotalAffected, "bulk merge no-DB reachability");
+
+    DbResult<BulkMergeResult> invalidMerge = executor.BulkMergeAsync(
+        "Default",
+        "dbo.AotBulk",
+        [new AotBulkRow(1, "AOT-SKU", 3, AotBulkStatus.Active)],
+        shape,
+        new BulkMergeOptions { Actions = (BulkMergeActions)16 },
+        CancellationToken.None).GetAwaiter().GetResult();
+    if (invalidMerge.IsSuccess)
+        throw new InvalidOperationException("Expected invalid merge actions to fail before opening a connection.");
+
+    AssertEqual(0, connectionFactory.OpenAttempts, "bulk no-DB connection open attempts");
+}
+
 static AotOrderItem[] CreateRows()
     => [new(1, "A100", 2)];
 
@@ -178,6 +298,14 @@ static TvpShape<AotOrderItem> CreateShape()
         .Column("Id", SqlDbType.Int, static row => row.Id)
         .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64)
         .Column("Qty", SqlDbType.Int, static row => row.Qty)
+        .Build();
+
+static BulkShape<AotBulkRow> CreateBulkShape()
+    => BulkShape.For<AotBulkRow>()
+        .Key("Id", SqlDbType.Int, static row => row.Id)
+        .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64, nullable: false)
+        .Column("Qty", SqlDbType.Int, static row => row.Qty)
+        .Column("Status", SqlDbType.Int, static row => row.Status)
         .Build();
 
 static void VerifyStructuredRows(SqlCommand command, string parameterName)
@@ -213,6 +341,18 @@ static void AssertEqual<T>(T expected, T actual, string name)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
         throw new InvalidOperationException($"{name}: expected '{expected}', actual '{actual}'.");
+}
+
+static void AssertSuccessfulCount(DbResult<long> result, long expected, string name)
+{
+    AssertSuccessful(result, name);
+    AssertEqual(expected, result.Value, name);
+}
+
+static void AssertSuccessful<T>(DbResult<T> result, string name)
+{
+    if (!result.IsSuccess)
+        throw new InvalidOperationException($"{name}: expected success.");
 }
 
 static SqlParameter GetParameter(SqlCommand command, string name)
@@ -259,6 +399,14 @@ static SpParameterMetadata Param(
 
 internal readonly record struct AotOrderItem(int Id, string Sku, int Qty);
 
+internal enum AotBulkStatus
+{
+    Inactive = 0,
+    Active = 1
+}
+
+internal readonly record struct AotBulkRow(int Id, string Sku, int Qty, AotBulkStatus Status);
+
 internal sealed class AotGeneratedRow : IMapableResult<AotGeneratedRow>
 {
     public int Id { get; init; }
@@ -283,4 +431,25 @@ internal sealed class AotParameterDto
     public string Name { get; set; } = "";
 
     public int OutValue { get; set; }
+}
+
+internal sealed class AotNoDbConnectionFactory : IDbConnectionFactory
+{
+    private int _openAttempts;
+
+    public int OpenAttempts => _openAttempts;
+
+    public Task<SqlConnection> CreateConnectionAsync(string instanceHash, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _openAttempts);
+        throw new InvalidOperationException("AOT no-DB bulk probe attempted to open a SQL connection.");
+    }
+
+    public void RegisterAdHocInstance(string instanceName, string connectionString)
+    {
+    }
+
+    public void UnregisterAdHocInstance(string instanceName)
+    {
+    }
 }

@@ -19,6 +19,7 @@ using Lib.Db.Hosting;
 using Lib.Db.Schema;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -198,6 +199,49 @@ public static class LibDbServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Lib.Db의 내장 SharedMemoryCache를 명시적으로 L2 캐시 provider로 등록합니다.
+    /// </summary>
+    /// <remarks>
+    /// 기본 <see cref="AddLibDb(IServiceCollection, Action{LibDbOptions})"/> 경로는
+    /// <see cref="Microsoft.Extensions.Caching.Distributed.IDistributedCache"/>를 등록하지 않습니다.
+    /// Redis, SQL Server, Postgres 등 외부 provider-backed L2를 사용할 경우 이 메서드를 호출하지 말고
+    /// 해당 provider를 애플리케이션에서 직접 등록하세요.
+    /// </remarks>
+    public static IServiceCollection AddLibDbSharedMemoryCache(
+        this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        ServiceRegistrationHelpers.RegisterSharedMemoryCacheOptIn(services);
+        return services;
+    }
+
+    /// <summary>
+    /// Host-owned custom <see cref="IDistributedCache"/> provider를 Lib.Db L2 topology에서 검증된 provider로 표시합니다.
+    /// </summary>
+    /// <remarks>
+    /// 이 메서드는 provider를 등록하거나 생성하지 않습니다. 애플리케이션이 이미 등록한 외부 L2 provider를
+    /// 명시적으로 신뢰할 때만 호출하세요. 기본값은 unknown provider를 검증되지 않은 L2로 취급하는 fail-closed 동작입니다.
+    /// </remarks>
+    public static IServiceCollection AddLibDbTrustedDistributedCacheProvider<TProvider>(
+        this IServiceCollection services)
+        where TProvider : class, IDistributedCache
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        string providerTypeName = GetProviderTypeName(typeof(TProvider));
+        if (!services.Any(descriptor =>
+                descriptor.ServiceType == typeof(LibDbTrustedDistributedCacheProvider) &&
+                descriptor.ImplementationInstance is LibDbTrustedDistributedCacheProvider trustedProvider &&
+                string.Equals(trustedProvider.ProviderTypeName, providerTypeName, StringComparison.Ordinal)))
+        {
+            services.AddSingleton(new LibDbTrustedDistributedCacheProvider(providerTypeName));
+        }
+
+        return services;
+    }
+
+    /// <summary>
     /// Polly Resilience 파이프라인을 등록합니다.
     /// <para>
     /// CircuitBreaker + Retry + Timeout 조합으로 DB 연결 안정성을 확보합니다.
@@ -236,12 +280,12 @@ public static class LibDbServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Epoch 기반 분산 스키마 캐시 조정 서비스를 등록합니다.
+    /// Epoch 기반 스키마 캐시 조정 서비스를 등록합니다.
     /// <para>
-    /// <b>[플랫폼 자동 감지]</b><br/>
+    /// <b>[Provider-neutral 기본값]</b><br/>
     /// <see cref="LibDbOptions.EnableEpochCoordination"/>가 <c>null</c>이면:<br/>
-    /// - <see cref="LibDbOptions.EnableSharedMemoryCache"/>와 동일하게 설정<br/>
-    /// - Windows 공유 메모리 ON이면 Epoch도 ON, 그외 OFF
+    /// - <see cref="LibDbOptions.EnableSharedMemoryCache"/>가 <c>true</c>일 때만 활성화<br/>
+    /// - OS에 따라 자동 활성화하지 않음
     /// </para>
     /// <para>
     /// <b>[등록 서비스]</b><br/>
@@ -254,10 +298,10 @@ public static class LibDbServiceCollectionExtensions
     /// <param name="epochBasePath">Epoch 파일 저장 경로 (기본값: %TEMP%/Lib.Db.Epochs)</param>
     /// <returns>체이닝을 위한 IServiceCollection</returns>
     /// <remarks>
-    /// <b>경고 조건:</b><br/>
-    /// <see cref="LibDbOptions.EnableSharedMemoryCache"/> = <c>false</c>인데<br/>
+    /// <b>오류 조건:</b><br/>
+    /// <see cref="LibDbOptions.EnableSharedMemoryCache"/>가 <c>true</c>가 아닌데<br/>
     /// <see cref="LibDbOptions.EnableEpochCoordination"/> = <c>true</c>인 경우:<br/>
-    /// Epoch 파일 기반 동기화는 되지만 실제 캐시는 프로세스마다 독립적이므로 비효율적.
+    /// 조정할 shared-memory 캐시가 없으므로 fail-fast합니다.
     /// </remarks>
     public static IServiceCollection AddSchemaFlushCoordination(
         this IServiceCollection services,
@@ -269,12 +313,15 @@ public static class LibDbServiceCollectionExtensions
         {
             LibDbOptions options = sp.GetRequiredService<LibDbOptions>();
 
-            // 플랫폼 자동 감지: 옵션이 null이면 공유 메모리와 동일한 값으로 설정
-            bool enableSharedMemory = options.EnableSharedMemoryCache
-                ?? System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                    System.Runtime.InteropServices.OSPlatform.Windows);
+            bool enableSharedMemory = options.EnableSharedMemoryCache is true;
+            if (options.EnableEpochCoordination is true && !enableSharedMemory)
+            {
+                throw new InvalidOperationException(
+                    "Lib.Db: EnableEpochCoordination=true requires explicit shared-memory cache opt-in. " +
+                    "Call services.AddLibDbSharedMemoryCache(), or disable EnableEpochCoordination.");
+            }
 
-            bool enableEpoch = options.EnableEpochCoordination ?? enableSharedMemory;
+            bool enableEpoch = options.EnableEpochCoordination.GetValueOrDefault(enableSharedMemory);
 
             ILogger<EpochStore> logger = sp.GetRequiredService<ILogger<EpochStore>>();
 
@@ -282,16 +329,9 @@ public static class LibDbServiceCollectionExtensions
             {
                 logger.LogInformation(
                     "[Epoch] 비활성화됨 - EpochStore를 파일 시스템 없는 Noop 모드로 생성합니다 (명시적 설정: {ExplicitSetting})",
-                    options.EnableEpochCoordination?.ToString() ?? "null (auto-detect)");
+                    options.EnableEpochCoordination?.ToString() ?? "null (provider-neutral default)");
 
                 return EpochStore.Disabled(logger);
-            }
-            else if (!enableSharedMemory)
-            {
-                logger.LogWarning(
-                    "[Epoch] 경고: 공유 메모리 비활성화 상태에서 Epoch 사용 - " +
-                    "프로세스 간 스키마 동기화 불가. " +
-                    "권장: EnableSharedMemoryCache=true 또는 EnableEpochCoordination=false");
             }
 
             string basePath = epochBasePath ?? Path.Combine(
@@ -355,6 +395,13 @@ public static class LibDbServiceCollectionExtensions
             // 일부 제한된 환경에서는 설정 불가 (무시)
         }
     }
+
+    private static string GetProviderTypeName(Type providerType)
+        => string.IsNullOrWhiteSpace(providerType.AssemblyQualifiedName)
+            ? string.IsNullOrWhiteSpace(providerType.FullName)
+                ? providerType.Name
+                : providerType.FullName!
+            : providerType.AssemblyQualifiedName!;
 
     #endregion
 }

@@ -221,8 +221,8 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `Tvp` | `TvpOptions` | `new()` | Runtime TVP 바인딩 옵션과 row type registry |
 | `EnableResilience` | `bool` | `false` | Polly 회복 탄력성 |
 | `Resilience` | `ResilienceOptions` | (내부 기본값) | 재시도/Circuit Breaker 설정 |
-| `EnableSharedMemoryCache` | `bool?` | `null` (자동) | L2 공유 메모리 캐시 |
-| `EnableEpochCoordination` | `bool?` | `null` | 프로세스 간 Epoch 동기화 |
+| `EnableSharedMemoryCache` | `bool?` | `null` | 내장 SharedMemoryCache opt-in 플래그. `null`은 Lib.Db가 `IDistributedCache`를 등록하지 않음을 의미 |
+| `EnableEpochCoordination` | `bool?` | `null` | SharedMemoryCache opt-in이 있을 때만 기본 활성화되는 epoch 동기화 |
 | `EnableDryRun` | `bool` | `false` | 모의 실행 모드 |
 | `EnableObservability` | `bool` | `false` | ActivitySource/Meter 기반 tracing/metrics 활성화 스위치. 일반 ILogger 로그는 별도 로깅 설정을 따름 |
 | `EnableOpenTelemetry` | `bool` | `false` | ⚠️ **Deprecated** — `EnableObservability`를 사용하세요. 향후 breaking release에서 제거 예정입니다. |
@@ -265,6 +265,8 @@ DB 오류 분류 열거형입니다 (16개 값).
 
 `ReadAsync`와 `ReadSingleAsync`는 SP가 반환하는 ResultSet 순서대로 호출합니다. 호출부가 읽지 않는 뒤쪽 추가 ResultSet은 허용됩니다. 반대로 호출부가 다음 ResultSet을 기대했는데 SP/배치가 더 이상 ResultSet을 반환하지 않으면 계약 오류로 `InvalidOperationException`이 발생합니다. 실제 ResultSet이 존재하지만 행이 0개인 경우에는 `ReadAsync<T>`는 빈 리스트, `ReadSingleAsync<T>`는 `default`를 반환합니다.
 
+`Lib.Db.Extensions`의 `ReadMultipleAsync<T1,T2>()`, `ReadMultipleAsync<T1,T2,T3>()`, `ReadMultipleAsync<T1,T2,T3,T4>()` helper는 `QueryMultipleAsync()` 결과를 stored-procedure ResultSet 순서대로 읽고 `DbMultiple<...>` 값으로 반환합니다. Helper는 reader를 dispose하며, missing ResultSet 또는 read failure는 raw SQL/provider exception을 노출하지 않는 redacted `DbResult<T>` 실패로 매핑합니다.
+
 ---
 
 ## 11. Extension Methods
@@ -276,8 +278,9 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `RegisterLibDbCoreServices()` | `IServiceCollection` | 핵심 서비스만 등록 (테스트용) |
 | `AddLibDbResilience()` | `IServiceCollection` | Polly 파이프라인 등록 |
 | `AddLibDbHostedServices()` | `IServiceCollection` | 워밍업 Hosted Service 등록 |
-| `AddSchemaFlushCoordination(string?)` | `IServiceCollection` | Epoch 기반 분산 스키마 캐시 조정 |
+| `AddSchemaFlushCoordination(string?)` | `IServiceCollection` | SharedMemoryCache opt-in용 Epoch 기반 스키마 캐시 조정 |
 | `AddLibDbInterceptor<T>()` | `IServiceCollection` | 쿼리 인터셉터 등록 (다중 가능) |
+| `ReadMultipleAsync<T1,T2>` / `T1,T2,T3` / `T1,T2,T3,T4` | `Task<DbResult<IMultipleResultReader>>` | ResultSet 2/3/4개를 순서대로 읽어 `DbMultiple<...>`로 반환하고 reader를 해제 |
 
 ---
 
@@ -321,7 +324,12 @@ DB 명령 실행 전후를 가로채는 사용자 수준 인터셉터입니다.
 | `WithCacheAsync<T>` | `Task<DbResult<T?>> WithCacheAsync<T>(this Task<DbResult<T?>> resultTask, IDistributedCache cache, string cacheKey, TimeSpan duration, JsonSerializerOptions? jsonOptions, CancellationToken ct)` | 단건 결과 캐싱 |
 | `WithCacheListAsync<T>` | `Task<DbResult<List<T>>> WithCacheListAsync<T>(this Task<DbResult<IAsyncEnumerable<T>>> resultTask, IDistributedCache cache, string cacheKey, TimeSpan duration, JsonSerializerOptions? jsonOptions, CancellationToken ct)` | 다건 스트림 -> List 캐싱 |
 | `WithHybridCacheAsync<T>` | `Task<DbResult<T?>> WithHybridCacheAsync<T>(this Task<DbResult<T?>> resultTask, HybridCache hybridCache, string cacheKey, TimeSpan duration, CancellationToken ct)` | HybridCache L1+L2 캐싱 |
+| `WithHybridCacheAsync<T>` | `Task<DbResult<T?>> WithHybridCacheAsync<T>(this Task<DbResult<T?>> resultTask, HybridCache hybridCache, string cacheKey, TimeSpan duration, IEnumerable<string>? tags, CancellationToken ct)` | HybridCache L1+L2 캐싱 및 태그 연결 |
 | `InvalidateCacheAsync` | `Task InvalidateCacheAsync(this IDistributedCache cache, string cacheKey, CancellationToken ct)` | 캐시 무효화 |
+
+HybridCache `tags`는 `RemoveByTagAsync` 논리 invalidation용 애플리케이션 소유 라벨입니다. Null element, 빈 문자열/공백, 앞뒤 공백, entry tag wildcard `*`, 중복 제거 후 32개 초과는 거부됩니다. Dedupe는 ordinal comparison을 사용합니다. Cache key/tag에는 tenant/user identifier, 토큰, 연결 문자열, SQL text, row value, cache payload 값을 넣지 마세요.
+
+Provider-backed L2가 있으면 현재 서버와 secondary cache의 가시성은 바뀔 수 있지만, 다른 서버의 in-memory L1 entry가 현재 서버의 tag invalidation만으로 물리적으로 지워진다고 가정하지 마세요. Native AOT/trimming 배포에서는 HybridCache payload serializer도 source-generated metadata 등 AOT-compatible 구성을 사용해야 합니다.
 
 ---
 
@@ -336,9 +344,20 @@ DB 명령 실행 전후를 가로채는 사용자 수준 인터셉터입니다.
 
 ---
 
-## 15. BulkInsertOptions
+## 15. Bulk APIs and Options
 
-SqlBulkCopy 기반 대량 INSERT 옵션 클래스입니다.
+Legacy `BulkInsertAsync<T>(..., BulkInsertOptions?)`는 reflection 기반 compatibility API입니다. AOT-safe bulk path는 `BulkShape<T>`를 명시하고 insert/update/delete/upsert/merge-like mutation을 수행합니다.
+
+| API | 반환 | 설명 |
+|---|---|---|
+| `BulkShape.For<T>()` | `BulkShapeBuilder<T>` | AOT-safe column shape builder |
+| `BulkShapeBuilder<T>.Key<TValue>(string, SqlDbType, Func<T,TValue>, ...)` | `BulkShapeBuilder<T>` | Non-null mutation key column 추가 |
+| `BulkShapeBuilder<T>.Column<TValue>(string, SqlDbType, Func<T,TValue>, ...)` | `BulkShapeBuilder<T>` | Insert/update 대상 writable column 추가 |
+| `BulkInsertAsync<T>(..., BulkShape<T>, BulkWriteOptions?)` | `DbResult<long>` | AOT-safe direct bulk insert |
+| `BulkUpdateAsync<T>(..., BulkShape<T>, BulkWriteOptions?)` | `DbResult<long>` | Stage 후 target update |
+| `BulkDeleteAsync<T>(..., BulkShape<T>, BulkWriteOptions?)` | `DbResult<long>` | Key-only stage 후 target delete |
+| `BulkUpsertAsync<T>(..., BulkShape<T>, BulkWriteOptions?)` | `DbResult<BulkUpsertResult>` | SQL Server `MERGE` 없이 update 후 missing insert |
+| `BulkMergeAsync<T>(..., BulkShape<T>, BulkMergeOptions?)` | `DbResult<BulkMergeResult>` | 선택한 staged action 실행 |
 
 | 속성 | 타입 | 기본값 | 설명 |
 |---|---|---|---|
@@ -346,8 +365,14 @@ SqlBulkCopy 기반 대량 INSERT 옵션 클래스입니다.
 | `TimeoutSeconds` | `int` | 600 | 명령 타임아웃 (초) |
 | `EnableStreaming` | `bool` | `true` | 스트리밍 활성화 |
 | `FireTriggers` | `bool` | `false` | INSERT 트리거 실행 여부 |
-| `CheckConstraints` | `bool` | `false` | 제약 조건 검사 여부 |
+| `CheckConstraints` | `bool` | legacy `false`, AOT-safe `true` | 제약 조건 검사 여부 |
 | `KeepIdentity` | `bool` | `false` | IDENTITY 값 유지 여부 |
+| `UseTransaction` | `bool` | AOT-safe `true` | AOT-safe bulk 작업의 로컬 트랜잭션 사용 여부 |
+| `BulkMergeOptions.Actions` | `BulkMergeActions` | `UpdateMatched | InsertMissing` | merge-like staged action 선택 |
+
+`BulkShape<T>`는 destination identifier, decimal precision/scale, string/binary size, temporal scale, CLR value type과 `SqlDbType` compatibility, enum underlying type alignment, stage-key metadata(32 key columns 이하, `max` key 금지, 900-byte portability limit)를 shape construction 시점에 검증합니다.
+
+Direct AOT-safe insert에서 `UseTransaction = false`는 non-atomic opt-out입니다. Staged update/delete/upsert/merge는 v2.4.0에서 `UseTransaction = false`, `FireTriggers = true`, `KeepIdentity = true`, `CheckConstraints = false`를 connection open 전에 거부합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 v2.4.0 bulk merge에서 지원하지 않는 action으로 거부됩니다. Bulk failure는 rollback 후 generic/redacted `DbResult<T>` failure로 반환되며 public `DbError.InnerException`에 provider exception을 노출하지 않습니다.
 
 ---
 

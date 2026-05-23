@@ -21,10 +21,10 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
         List<Task<DbResult<int>>> tasks = [];
         for (int i = 0; i < 50; i++)
         {
-            tasks.Add(_verification.Sql("SELECT 1").ExecuteScalarAsync<int>());
+            tasks.Add(_verification.Sql("SELECT 1").ExecuteScalarAsync<int>(TestContext.Current.CancellationToken));
         }
 
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
         results.Should().AllSatisfy(r => r.IsSuccess.Should().BeTrue());
     }
 
@@ -38,10 +38,10 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
             tasks.Add(_sorter
                 .Procedure("IF_SP_CHUTE_BTN_LOG")
                 .With(new { V_CHUTE_NO = $"{idx:D3}", V_STATUS = "TEST" })
-                .ExecuteAsync());
+                .ExecuteAsync(TestContext.Current.CancellationToken));
         }
 
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
         int successCount = results.Count(r => r.IsSuccess);
         successCount.Should().BeGreaterThan(0);
     }
@@ -52,11 +52,11 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
         List<Task<DbResult<int>>> tasks = [];
         for (int i = 0; i < 25; i++)
         {
-            tasks.Add(_verification.Sql("SELECT 1").ExecuteScalarAsync<int>());
-            tasks.Add(_sorter.Sql("SELECT 1").ExecuteScalarAsync<int>());
+            tasks.Add(_verification.Sql("SELECT 1").ExecuteScalarAsync<int>(TestContext.Current.CancellationToken));
+            tasks.Add(_sorter.Sql("SELECT 1").ExecuteScalarAsync<int>(TestContext.Current.CancellationToken));
         }
 
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
         results.Should().AllSatisfy(r => r.IsSuccess.Should().BeTrue());
     }
 
@@ -71,18 +71,18 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
             emails[i] = $"stress_{Guid.NewGuid():N}@test.com";
             string userName = $"StressUser_{i}";
             string email = emails[i];
-            await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification");
+            await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification", TestContext.Current.CancellationToken);
 
             // FormattableString SQL 사용 (SP 대신, 트랜잭션 내 직접 INSERT)
             DbResult<int> insertResult = await tx
                 .Sql((FormattableString)$"INSERT INTO core.Users (UserName, Email, Age) VALUES ({userName}, {email}, {20 + i})")
-                .ExecuteAsync();
+                .ExecuteAsync(TestContext.Current.CancellationToken);
             insertResult.IsSuccess.Should().BeTrue();
 
             if (i % 2 == 0)
-                await tx.CommitAsync();
+                await tx.CommitAsync(TestContext.Current.CancellationToken);
             else
-                await tx.RollbackAsync();
+                await tx.RollbackAsync(TestContext.Current.CancellationToken);
         }
 
         // Assert — 커밋된 이메일(짝수: 0,2,4)만 존재, 롤백된 이메일(홀수: 1,3)은 미존재
@@ -90,7 +90,7 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
         {
             DbResult<int> countResult = await _verification
                 .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {emails[i]}")
-                .ExecuteScalarAsync<int>();
+                .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
             countResult.IsSuccess.Should().BeTrue();
 
             if (i % 2 == 0)
@@ -105,17 +105,17 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
     {
         Task<DbResult<int>> vTask = _verification
             .Sql("SELECT COUNT(*) FROM core.Users")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         Task<DbResult<int>> sTask = _sorter
             .Sql("SELECT COUNT(*) FROM IF_CHUTE_INFO")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
-        await Task.WhenAll(vTask, sTask).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(vTask, sTask);
 
-        vTask.Result.IsSuccess.Should().BeTrue();
-        sTask.Result.IsSuccess.Should().BeTrue();
-        vTask.Result.Value.Should().BeGreaterThan(0);
-        sTask.Result.Value.Should().BeGreaterThan(0);
+        results[0].IsSuccess.Should().BeTrue();
+        results[1].IsSuccess.Should().BeTrue();
+        results[0].Value.Should().BeGreaterThan(0);
+        results[1].Value.Should().BeGreaterThan(0);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public sealed class ConcurrentQueryTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _session.Default
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(1);
     }

@@ -34,7 +34,7 @@ public sealed class AdvancedErrorTests(MultiDbFixture fixture)
         // Act
         DbResult<int> result = await _db
             .Procedure("test.usp_Exception_QuerySyntax")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -58,7 +58,7 @@ public sealed class AdvancedErrorTests(MultiDbFixture fixture)
         // Act — Sql 텍스트 모드로 존재하지 않는 파라미터를 직접 전달
         DbResult<int> result = await _db
             .Sql("EXEC core.usp_Core_Get_User @UserId = 1, @FakeParam = 'extra'")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -79,13 +79,13 @@ public sealed class AdvancedErrorTests(MultiDbFixture fixture)
     public async Task AE03_TransactionAborted_TryCatch_ShouldPropagateError()
     {
         // Arrange — 이전 테스트의 고정 Email 데이터 정리 (UNIQUE 충돌 방지)
-        await _db.Sql("DELETE FROM [core].[Users] WHERE Email = 'txtest@test.com'").ExecuteAsync();
+        await _db.Sql("DELETE FROM [core].[Users] WHERE Email = 'txtest@test.com'").ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Act
         DbResult<int> result = await _db
             .Procedure("test.usp_Error_TryCatch_Rollback")
             .With(new { ShouldFail = true })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -107,22 +107,22 @@ public sealed class AdvancedErrorTests(MultiDbFixture fixture)
     public async Task AE04_TransactionAborted_Success_ShouldCommit()
     {
         // Arrange — 이전 테스트의 고정 Email 데이터 정리 (UNIQUE 충돌 방지)
-        await _db.Sql("DELETE FROM [core].[Users] WHERE Email = 'txtest@test.com'").ExecuteAsync();
+        await _db.Sql("DELETE FROM [core].[Users] WHERE Email = 'txtest@test.com'").ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Act
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("test.usp_Error_TryCatch_Rollback")
             .With(new { ShouldFail = false })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
-        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync();
+        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync(TestContext.Current.CancellationToken);
         rows.Should().NotBeEmpty();
         rows[0]["Result"].Should().Be("COMMITTED");
 
         // Cleanup — 성공 시 삽입된 데이터 정리
-        await _db.Sql("DELETE FROM [core].[Users] WHERE Email = 'txtest@test.com'").ExecuteAsync();
+        await _db.Sql("DELETE FROM [core].[Users] WHERE Email = 'txtest@test.com'").ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -138,7 +138,7 @@ public sealed class AdvancedErrorTests(MultiDbFixture fixture)
         // Act
         DbResult<int> result = await _db
             .Procedure("test.usp_Error_NotNull_Violation")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -159,7 +159,7 @@ public sealed class AdvancedErrorTests(MultiDbFixture fixture)
         // Act
         DbResult<string?> result = await _db
             .Procedure("test.usp_Core_Get_NullScalar")
-            .ExecuteScalarAsync<string?>();
+            .ExecuteScalarAsync<string?>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -179,11 +179,11 @@ public sealed class AdvancedErrorTests(MultiDbFixture fixture)
         // Act
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("test.usp_Core_Get_Empty")
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
-        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync();
+        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync(TestContext.Current.CancellationToken);
         rows.Should().BeEmpty("WHERE 1=0 조건이므로 결과가 없어야 합니다.");
     }
 

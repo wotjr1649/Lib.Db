@@ -31,7 +31,7 @@ Exact-name index for validation and routing: consumer-facing `IDbInterceptor`; i
 - `DbResult<T>`, `DbError`, failure handling: `references/result-handling.md`
 - DTO mapping, JSON helpers, generated result mapper contracts: `references/mapping-contracts.md`
 - Runtime TVP APIs, old TvpGen migration, static shapes: `references/tvp-source-generation.md`
-- `BulkInsertAsync<T>` and `BulkInsertOptions`: `references/bulk-insert.md`
+- `BulkInsertAsync<T>`, `BulkShape<T>`, and bulk mutation options/results: `references/bulk-insert.md`
 - `db.Schema`, `UseSchema`, schema cache flush: `references/schema-maintenance.md`
 - Query cache, HybridCache, shared-memory cache: `references/caching.md`
 - Transactions and rollback rules: `references/transactions.md`
@@ -58,8 +58,12 @@ Exact-name index for validation and routing: consumer-facing `IDbInterceptor`; i
 - `QueryAsync<T>()` returns `DbResult<IAsyncEnumerable<T>>`.
 - `QuerySingleAsync<T>()` and `ExecuteScalarAsync<T>()` return nullable value payloads.
 - `QueryMultipleAsync()` returns `DbResult<IMultipleResultReader>`.
+- `Lib.Db.Extensions.ReadMultipleAsync<...>()` reads two, three, or four sequential result sets into `DbMultiple<...>` and disposes the reader.
 - `ExecuteAsync()` returns `DbResult<int>`.
 - `BulkInsertAsync<T>()` returns `DbResult<long>`.
+- Prefer `BulkShape<T>` overloads for AOT-safe bulk insert, update, delete, upsert, and merge-like mutation. Treat bulk mutation keys as non-null unique database keys backed by application-owned `PRIMARY KEY` or `UNIQUE` schema constraints.
+- Use HybridCache tag overloads for grouped logical invalidation. Tags are app-owned non-sensitive labels; do not use wildcard `*` as an entry tag and do not put tenant/user identifiers, tokens, connection strings, SQL text, row values, or cache payloads in keys or tags.
+- Generator, migration/contract tooling, and SQL Server Change Tracking adapter work is roadmap-only for v2.5.0 or later; do not write examples as if those features are implemented in v2.4.0.
 - Result mapping tries exact case-insensitive column/property matches first, then underscore-insensitive normalized matches.
 - `DateOnly` binds as SQL `date`; `TimeOnly` binds as SQL `time`.
 

@@ -1,6 +1,6 @@
 -- ============================================================================
 -- File: setup-libdb-verification-test.sql
--- Purpose: Functional integration database for Lib.Db v2.3.0.
+-- Purpose: Functional integration database for Lib.Db verification.
 -- Target DB: LIBDB_VERIFICATION_TEST
 -- Secret: set SQLCMDPASSWORD in the environment before running sqlcmd.
 -- Run: sqlcmd -S localhost -U SA -N o -i setup-libdb-verification-test.sql -f 65001

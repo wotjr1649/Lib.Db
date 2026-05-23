@@ -36,11 +36,11 @@ public sealed class MultiSchemaPreloadTests
         {
             await _fixture.Verification.Sql($@"
                 CREATE OR ALTER PROCEDURE {dboSp} AS SELECT 1;
-            ").ExecuteAsync();
+            ").ExecuteAsync(TestContext.Current.CancellationToken);
 
             await _fixture.Verification.Sql($@"
                 CREATE OR ALTER PROCEDURE {coreSp} AS SELECT 1;
-            ").ExecuteAsync();
+            ").ExecuteAsync(TestContext.Current.CancellationToken);
 
             using IServiceScope scope = _fixture.Services.CreateScope();
             ISchemaService schemaService = scope.ServiceProvider.GetRequiredService<ISchemaService>();
@@ -99,8 +99,8 @@ public sealed class MultiSchemaPreloadTests
         }
         finally
         {
-            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {dboSp}").ExecuteAsync();
-            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {coreSp}").ExecuteAsync();
+            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {dboSp}").ExecuteAsync(TestContext.Current.CancellationToken);
+            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {coreSp}").ExecuteAsync(TestContext.Current.CancellationToken);
         }
     }
 
@@ -115,7 +115,7 @@ public sealed class MultiSchemaPreloadTests
         {
             await _fixture.Verification.Sql($@"
                 CREATE OR ALTER PROCEDURE {spName} AS SELECT 1;
-            ").ExecuteAsync();
+            ").ExecuteAsync(TestContext.Current.CancellationToken);
 
             using IServiceScope scope = _fixture.Services.CreateScope();
             ISchemaService schemaService = scope.ServiceProvider.GetRequiredService<ISchemaService>();
@@ -142,7 +142,7 @@ public sealed class MultiSchemaPreloadTests
         }
         finally
         {
-            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {spName}").ExecuteAsync();
+            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {spName}").ExecuteAsync(TestContext.Current.CancellationToken);
         }
     }
 }

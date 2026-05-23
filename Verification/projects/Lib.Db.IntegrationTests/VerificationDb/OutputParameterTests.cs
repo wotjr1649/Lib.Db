@@ -39,7 +39,7 @@ public sealed class OutputParameterTests(MultiDbFixture fixture)
         // Act — FormattableString SQL로 OUTPUT 파라미터 값을 SELECT로 반환
         DbResult<Dictionary<string, object?>?> result = await _db
             .Sql((FormattableString)$"DECLARE @out INT, @inout INT = {inOutVal}; EXEC adv.usp_Adv_OutputParameters @InputVal = {inputVal}, @OutputVal = @out OUTPUT, @InOutVal = @inout OUTPUT; SELECT @out AS OutputVal, @inout AS InOutVal;")
-            .QuerySingleAsync<Dictionary<string, object?>>();
+            .QuerySingleAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -64,7 +64,7 @@ public sealed class OutputParameterTests(MultiDbFixture fixture)
             .Procedure("resilience.usp_Resilience_Simulate_Delay")
             .WithTimeout(10)
             .With(new { DelaySeconds = 1 })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert — 성공하고 결과 열거 가능
         result.IsSuccess.Should().BeTrue();

@@ -72,9 +72,27 @@ LibDb.Tvp("dbo.OrderLineTvp", rows, shape);
 
 Convenience JSON helpers use `JsonSerializerOptions` and may require runtime metadata. For strict AOT apps, use source-generated `JsonSerializerContext` or application-owned serializers.
 
-## Bulk Insert
+## AOT-Safe Bulk Mutations
 
-`BulkInsertAsync<T>` uses reflection over public properties. Avoid it in Native AOT or create an application-owned alternative.
+Prefer `BulkShape<T>` overloads for bulk insert, update, delete, upsert, and merge-like mutations:
+
+```csharp
+BulkShape<OrderImportRow> shape = BulkShape.For<OrderImportRow>()
+    .Key("OrderId", SqlDbType.Int, static row => row.OrderId)
+    .Column("Sku", SqlDbType.NVarChar, static row => row.Sku, size: 64)
+    .Column("Quantity", SqlDbType.Int, static row => row.Quantity)
+    .Build();
+
+DbResult<long> result = await db.BulkInsertAsync(
+    "Default",
+    "[dbo].[OrderImport]",
+    rows,
+    shape,
+    new BulkWriteOptions { BatchSize = 10_000 },
+    ct);
+```
+
+The legacy `BulkInsertAsync<T>(..., BulkInsertOptions?)` overload uses reflection over public properties. Avoid that legacy overload in Native AOT.
 
 ## Host Hook And Legacy TVP
 

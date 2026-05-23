@@ -294,6 +294,131 @@ public sealed class BulkInsertOptions
 
 #endregion
 
+#region AOT-safe Bulk 옵션/결과 정의
+
+/// <summary>
+/// AOT-safe 벌크 쓰기 작업의 공통 옵션입니다.
+/// </summary>
+public class BulkWriteOptions
+{
+    /// <summary>배치당 행 수 (기본: 5,000)</summary>
+    public int BatchSize { get; init; } = 5_000;
+
+    /// <summary>명령 타임아웃 (초, 기본: 600)</summary>
+    public int TimeoutSeconds { get; init; } = 600;
+
+    /// <summary>스트리밍 활성화 (기본: true)</summary>
+    public bool EnableStreaming { get; init; } = true;
+
+    /// <summary>로컬 트랜잭션 사용 여부 (기본: true)</summary>
+    public bool UseTransaction { get; init; } = true;
+
+    /// <summary>INSERT 트리거 실행 여부</summary>
+    public bool FireTriggers { get; init; }
+
+    /// <summary>제약 조건 검사 여부</summary>
+    public bool CheckConstraints { get; init; } = true;
+
+    /// <summary>IDENTITY 값 유지 여부</summary>
+    public bool KeepIdentity { get; init; }
+
+    /// <summary>
+    /// 작업 종류와 무관한 스칼라 옵션 범위만 검증합니다.
+    /// </summary>
+    public virtual void Validate()
+    {
+        if (BatchSize <= 0)
+            throw new InvalidOperationException("Bulk batch size must be greater than zero.");
+
+        if (TimeoutSeconds <= 0)
+            throw new InvalidOperationException("Bulk timeout seconds must be greater than zero.");
+    }
+}
+
+/// <summary>
+/// API-level 벌크 merge에서 수행할 staged action 플래그입니다.
+/// </summary>
+[Flags]
+public enum BulkMergeActions
+{
+    /// <summary>선택된 action 없음</summary>
+    None = 0,
+
+    /// <summary>대상에 존재하는 key를 update</summary>
+    UpdateMatched = 1,
+
+    /// <summary>대상에 없는 key를 insert</summary>
+    InsertMissing = 2,
+
+    /// <summary>대상에 존재하는 key를 delete</summary>
+    DeleteMatched = 4,
+
+    /// <summary>소스에 없는 대상 행을 delete (v2.4.0 미지원)</summary>
+    DeleteNotMatchedBySource = 8
+}
+
+/// <summary>
+/// AOT-safe 벌크 merge 옵션입니다.
+/// </summary>
+public sealed class BulkMergeOptions : BulkWriteOptions
+{
+    private const BulkMergeActions KnownActions =
+        BulkMergeActions.UpdateMatched
+        | BulkMergeActions.InsertMissing
+        | BulkMergeActions.DeleteMatched
+        | BulkMergeActions.DeleteNotMatchedBySource;
+
+    /// <summary>수행할 merge action입니다. 기본값은 update matched + insert missing입니다.</summary>
+    public BulkMergeActions Actions { get; init; } =
+        BulkMergeActions.UpdateMatched | BulkMergeActions.InsertMissing;
+
+    /// <inheritdoc />
+    public override void Validate()
+    {
+        base.Validate();
+
+        if ((Actions & ~KnownActions) != 0)
+            throw new InvalidOperationException("Bulk merge options contain an unknown merge action.");
+
+        if (Actions == BulkMergeActions.None)
+            throw new InvalidOperationException("Bulk merge actions cannot be empty.");
+
+        if ((Actions & BulkMergeActions.DeleteNotMatchedBySource) != 0)
+            throw new InvalidOperationException("DeleteNotMatchedBySource is not supported by Lib.Db v2.4.0 bulk merge.");
+
+        if ((Actions & BulkMergeActions.DeleteMatched) != 0
+            && Actions != BulkMergeActions.DeleteMatched)
+        {
+            throw new InvalidOperationException("DeleteMatched is exclusive in Lib.Db v2.4.0 bulk merge.");
+        }
+    }
+}
+
+/// <summary>
+/// 벌크 upsert 결과 카운트입니다.
+/// </summary>
+/// <param name="Inserted">삽입된 행 수</param>
+/// <param name="Updated">수정된 행 수</param>
+public readonly record struct BulkUpsertResult(long Inserted, long Updated)
+{
+    /// <summary>총 영향 행 수입니다.</summary>
+    public long TotalAffected => Inserted + Updated;
+}
+
+/// <summary>
+/// 벌크 merge 결과 카운트입니다.
+/// </summary>
+/// <param name="Inserted">삽입된 행 수</param>
+/// <param name="Updated">수정된 행 수</param>
+/// <param name="Deleted">삭제된 행 수</param>
+public readonly record struct BulkMergeResult(long Inserted, long Updated, long Deleted)
+{
+    /// <summary>총 영향 행 수입니다.</summary>
+    public long TotalAffected => Inserted + Updated + Deleted;
+}
+
+#endregion
+
 #region JSON 컬럼 어트리뷰트 정의
 
 /// <summary>

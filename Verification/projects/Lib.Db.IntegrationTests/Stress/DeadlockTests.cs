@@ -37,13 +37,13 @@ public sealed class DeadlockTests(MultiDbFixture fixture)
         // Act — 두 SP를 동시에 실행하여 교착 상태 유발
         Task<DbResult<int>> taskA = _db
             .Procedure("test.usp_Deadlock_TableA")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         Task<DbResult<int>> taskB = _db
             .Procedure("test.usp_Deadlock_TableB")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
-        DbResult<int>[] results = await Task.WhenAll(taskA, taskB).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(taskA, taskB);
 
         // Assert — 둘 중 최소 하나가 Deadlock(1205)이어야 함
         bool anyDeadlock = results.Any(r =>

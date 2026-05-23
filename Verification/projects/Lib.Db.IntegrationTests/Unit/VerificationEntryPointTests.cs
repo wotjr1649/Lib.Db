@@ -38,6 +38,8 @@ public sealed class VerificationEntryPointTests
         testScript.Should().Contain("'dotnet'");
         testScript.Should().Contain("'test'");
         testScript.Should().Contain("Write-SecretSafeEnvironmentSummary");
+        testScript.Should().Contain("SkipTestEnvGuard");
+        testScript.Should().Contain("[Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')");
     }
 
     [Fact]
@@ -210,6 +212,9 @@ public sealed class VerificationEntryPointTests
         script.Should().Contain("AllowUnsigned");
         script.Should().Contain("Test-OnlyAcceptedUnsignedNuGetFailure");
         script.Should().Contain("Package repository commit does not match HEAD");
+        script.Should().Contain("Assert-RepositoryStatusClean");
+        script.Should().Contain("status");
+        script.Should().Contain("--porcelain=v1");
         script.Should().Contain("must resolve under Verification artifacts");
         script.Should().Contain("Scan-VerificationArtifacts.ps1");
         script.Should().Contain("finally");
@@ -252,6 +257,8 @@ public sealed class VerificationEntryPointTests
         combined.Should().Contain("RejectsNu3004WithUnrelatedFatalText");
         combined.Should().Contain("RejectsShortRepositoryCommit");
         combined.Should().Contain("RejectsDifferentRepositoryCommit");
+        combined.Should().Contain("AcceptsCleanRepositoryStatus");
+        combined.Should().Contain("RejectsDirtyRepositoryStatus");
         combined.Should().Contain("RejectsArtifactDirectoryOutsideVerificationArtifacts");
         combined.Should().Contain("RejectsVerificationArtifactsRootAsArtifactDirectory");
     }
@@ -459,6 +466,8 @@ public sealed class VerificationEntryPointTests
         project.Should().Contain("LIBDB_TEST_SQL_PASSWORD");
         project.Should().Contain("Invoke-Tests.ps1");
         project.Should().Contain("LIBDB_SKIP_TEST_ENV_GUARD");
+        project.Should().Contain("-SkipTestEnvGuard");
+        project.Should().NotContain("-p:LIBDB_SKIP_TEST_ENV_GUARD=true");
     }
 
     [Fact]
@@ -486,6 +495,12 @@ public sealed class VerificationEntryPointTests
         combined.Should().Contain("Invoke-Verification.ps1");
         combined.Should().Contain("LIBDB_TEST_SQL_PASSWORD");
         combined.Should().NotContain("dotnet test");
+        combined.Should().Contain("id-token: write");
+        combined.Should().Contain("NuGet/login@v1");
+        combined.Should().Contain("secrets.NUGET_USER");
+        combined.Should().Contain("--api-key \"$NUGET_API_KEY\"");
+        combined.Should().NotContain("--api-key ${{ secrets.NUGET_API_KEY }}");
+        combined.Should().NotContain("secrets.NUGET_API_KEY");
     }
 
     private static DirectoryInfo FindRepoRoot()
@@ -504,7 +519,7 @@ public sealed class VerificationEntryPointTests
 
     private static IEnumerable<string> EnumerateActiveSkillFiles(DirectoryInfo repoRoot)
     {
-        foreach (string skillRootName in new[] { ".agent", ".claude" })
+        foreach (string skillRootName in new[] { ".agents", ".claude" })
         {
             string skillRoot = Path.Combine(repoRoot.FullName, skillRootName, "skills", "lib-db");
             Directory.Exists(skillRoot).Should().BeTrue($"active Lib.Db skill guidance must exist under {skillRootName}");

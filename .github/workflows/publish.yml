@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   build-and-publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     services:
       sqlserver:
@@ -27,25 +28,51 @@ jobs:
       LIBDB_BENCHMARK_CONNECTION: Server=127.0.0.1;Database=LIBDB_BENCH_TEST;User ID=SA;Password=${{ secrets.LIBDB_TEST_SQL_PASSWORD }};Encrypt=False;TrustServerCertificate=True;MultipleActiveResultSets=True;
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Enforce main tag release
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+          echo "ERROR: NuGet publish workflow must be triggered by a tag ref." >&2
+          exit 1
+        fi
+        if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "ERROR: NuGet publish tag '${GITHUB_REF_NAME}' is not a supported v-prefixed SemVer tag." >&2
+          exit 1
+        fi
+
+        git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+        tag_target="$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+        if ! git merge-base --is-ancestor "${tag_target}" origin/main; then
+          echo "ERROR: NuGet publish is allowed only for tags whose target commit is contained in origin/main." >&2
+          echo "Tag: ${GITHUB_REF_NAME}" >&2
+          echo "Tag target: ${tag_target}" >&2
+          exit 1
+        fi
+
+        echo "NuGet release tag ${GITHUB_REF_NAME} is on origin/main."
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '10.0.x'
 
     - name: Verify required secrets
       shell: bash
       env:
-        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        NUGET_USER: ${{ secrets.NUGET_USER }}
       run: |
         set -euo pipefail
         if [[ -z "${LIBDB_TEST_SQL_PASSWORD}" ]]; then
           echo "ERROR: LIBDB_TEST_SQL_PASSWORD secret is required for release verification." >&2
           exit 1
         fi
-        if [[ -z "${NUGET_API_KEY}" ]]; then
-          echo "ERROR: NUGET_API_KEY secret is required for package publishing." >&2
+        if [[ -z "${NUGET_USER}" ]]; then
+          echo "ERROR: NUGET_USER secret is required for NuGet Trusted Publishing." >&2
           exit 1
         fi
 
@@ -98,9 +125,18 @@ jobs:
     - name: Restore local tools
       run: dotnet tool restore
 
-    - name: Run v2.3.0 release gate
+    - name: Run v2.4.0 release gate
       shell: pwsh
       run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
+
+    - name: Upload verification artifacts
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: verification-artifacts-${{ github.run_id }}
+        path: Verification/artifacts/**
+        if-no-files-found: warn
+        retention-days: 7
 
     # 2) Pack 시 태그 버전을 강제 주입
     - name: Pack (tag version)
@@ -112,5 +148,19 @@ jobs:
           -p:PackageVersion=${{ steps.version.outputs.version }} \
           -p:Version=${{ steps.version.outputs.version }}
 
+    - name: NuGet login
+      uses: NuGet/login@v1
+      id: nuget-login
+      with:
+        user: ${{ secrets.NUGET_USER }}
+
     - name: Push to NuGet
-      run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      shell: bash
+      env:
+        NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+      run: |
+        set -euo pipefail
+        dotnet nuget push ./nupkgs/*.nupkg \
+          --api-key "$NUGET_API_KEY" \
+          --source https://api.nuget.org/v3/index.json \
+          --skip-duplicate

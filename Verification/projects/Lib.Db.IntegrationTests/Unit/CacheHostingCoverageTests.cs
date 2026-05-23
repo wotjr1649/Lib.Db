@@ -13,6 +13,7 @@ using Lib.Db.Hosting;
 using Lib.Db.Infrastructure;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Hybrid;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using System.Reflection;
 
@@ -197,6 +198,103 @@ public sealed class CacheHostingCoverageTests
     }
 
     [Fact]
+    public void CacheTopologyDetector_ShouldReportMissingDistributedCacheAsLocalOnly()
+    {
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache: null);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.LocalOnly);
+        state.HasVerifiedProviderBackedL2.Should().BeFalse();
+        state.ProviderTypeName.Should().BeNull();
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportMemoryDistributedCacheAsLocalMemory()
+    {
+        var cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.LocalMemoryDistributedCache);
+        state.HasVerifiedProviderBackedL2.Should().BeFalse();
+        state.ProviderTypeName.Should().Contain(nameof(MemoryDistributedCache));
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportSharedMemoryCacheAsSharedMemoryOptIn()
+    {
+        string basePath = CreateTempDirectory();
+        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));
+        using var cache = new SharedMemoryCache(
+            Options.Create(new SharedMemoryCacheOptions { BasePath = basePath }),
+            loggerFactory.CreateLogger<SharedMemoryCache>());
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.SharedMemoryOptIn);
+        state.HasVerifiedProviderBackedL2.Should().BeFalse();
+        state.ProviderTypeName.Should().Contain(nameof(SharedMemoryCache));
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportUnknownDistributedCacheAsUnverified()
+    {
+        var cache = new RecordingDistributedCache();
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.UnverifiedDistributedCache);
+        state.HasVerifiedProviderBackedL2.Should().BeFalse();
+        state.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldReportTrustedCustomProviderAsVerifiedL2()
+    {
+        var cache = new RecordingDistributedCache();
+        LibDbCacheTopologyOptions options = new();
+        options.TrustedProviderTypeNames.Add(cache.GetType().FullName!);
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(cache, options);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.VerifiedProviderBackedL2);
+        state.HasVerifiedProviderBackedL2.Should().BeTrue();
+        state.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
+    }
+
+    [Fact]
+    public void CacheTopologyDetector_ShouldUseTrustedProviderOptionsFromServiceProvider()
+    {
+        var cache = new RecordingDistributedCache();
+        LibDbCacheTopologyOptions options = new();
+        options.TrustedProviderTypeNames.Add(cache.GetType().FullName!);
+        using ServiceProvider provider = new ServiceCollection()
+            .AddSingleton<IDistributedCache>(cache)
+            .AddSingleton(options)
+            .BuildServiceProvider();
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(provider);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.VerifiedProviderBackedL2);
+        state.HasVerifiedProviderBackedL2.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AddLibDbTrustedDistributedCacheProvider_ShouldMarkCustomProviderAsVerifiedL2()
+    {
+        var cache = new RecordingDistributedCache();
+        using ServiceProvider provider = new ServiceCollection()
+            .AddSingleton<IDistributedCache>(cache)
+            .AddLibDbTrustedDistributedCacheProvider<RecordingDistributedCache>()
+            .BuildServiceProvider();
+
+        LibDbCacheTopologyState state = LibDbCacheTopologyDetector.Detect(provider);
+
+        state.Kind.Should().Be(LibDbCacheTopologyKind.VerifiedProviderBackedL2);
+        state.HasVerifiedProviderBackedL2.Should().BeTrue();
+        state.ProviderTypeName.Should().Contain(nameof(RecordingDistributedCache));
+    }
+
+    [Fact]
     public async Task LibDbAotHybridCache_ShouldInvalidateOnlyExistingTaggedEntries()
     {
         var cache = new LibDbAotHybridCache();
@@ -212,31 +310,179 @@ public sealed class CacheHostingCoverageTests
             "schema",
             "first",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
         string firstHit = await cache.GetOrCreateAsync(
             "schema",
             "unexpected",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
 
-        await cache.RemoveByTagAsync("instance");
+        await cache.RemoveByTagAsync("instance", TestContext.Current.CancellationToken);
 
         string second = await cache.GetOrCreateAsync(
             "schema",
             "second",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
         string secondHit = await cache.GetOrCreateAsync(
             "schema",
             "third",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
 
         first.Should().Be("first");
         firstHit.Should().Be("first");
         second.Should().Be("second");
         secondHit.Should().Be("second");
         factoryCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task LibDbAotHybridCache_ShouldCoalesceConcurrentMissesForSameKey()
+    {
+        var cache = new LibDbAotHybridCache();
+        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        TaskCompletionSource firstFactoryStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFactory = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int factoryCalls = 0;
+
+        async ValueTask<string> Factory(string value, CancellationToken token)
+        {
+            int call = Interlocked.Increment(ref factoryCalls);
+            if (call == 1)
+            {
+                firstFactoryStarted.SetResult();
+            }
+
+            await releaseFactory.Task.WaitAsync(token);
+            return value;
+        }
+
+        Task<string>[] requests = Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(async () => await cache.GetOrCreateAsync(
+                "schema",
+                "value",
+                Factory,
+                tags: ["instance"],
+                cancellationToken: cts.Token), cts.Token))
+            .ToArray();
+
+        await firstFactoryStarted.Task.WaitAsync(cts.Token);
+        await Task.Delay(50, cts.Token);
+        releaseFactory.SetResult();
+        string[] results = await Task.WhenAll(requests);
+
+        results.Should().OnlyContain(result => result == "value");
+        factoryCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task LibDbAotHybridCache_ShouldNotCancelSharedProducerWhenOriginalCallerCancels()
+    {
+        var cache = new LibDbAotHybridCache();
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        using CancellationTokenSource firstCaller = new();
+        TaskCompletionSource factoryStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFactory = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int factoryCalls = 0;
+
+        async ValueTask<string> Factory(string value, CancellationToken token)
+        {
+            Interlocked.Increment(ref factoryCalls);
+            factoryStarted.SetResult();
+            await releaseFactory.Task.WaitAsync(token);
+            return value;
+        }
+
+        Task<string> first = cache.GetOrCreateAsync(
+            "schema",
+            "value",
+            Factory,
+            tags: ["instance"],
+            cancellationToken: firstCaller.Token).AsTask();
+
+        await factoryStarted.Task.WaitAsync(timeout.Token);
+
+        Task<string> second = cache.GetOrCreateAsync(
+            "schema",
+            "value",
+            Factory,
+            tags: ["instance"],
+            cancellationToken: timeout.Token).AsTask();
+
+        await firstCaller.CancelAsync();
+        releaseFactory.SetResult();
+
+        await first.Awaiting(task => task)
+            .Should()
+            .ThrowAsync<OperationCanceledException>();
+        string result = await second;
+
+        result.Should().Be("value");
+        factoryCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task LibDbAotHybridCache_ShouldCancelSharedProducerWhenAllCallersCancel()
+    {
+        var cache = new LibDbAotHybridCache();
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        using CancellationTokenSource firstCaller = new();
+        using CancellationTokenSource secondCaller = new();
+        TaskCompletionSource factoryStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource producerCancelled = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async ValueTask<string> Factory(string value, CancellationToken token)
+        {
+            factoryStarted.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return value;
+            }
+            catch (OperationCanceledException)
+            {
+                producerCancelled.SetResult();
+                throw;
+            }
+        }
+
+        Task<string> first = cache.GetOrCreateAsync(
+            "schema",
+            "value",
+            Factory,
+            tags: ["instance"],
+            cancellationToken: firstCaller.Token).AsTask();
+
+        await factoryStarted.Task.WaitAsync(timeout.Token);
+
+        Task<string> second = cache.GetOrCreateAsync(
+            "schema",
+            "value",
+            Factory,
+            tags: ["instance"],
+            cancellationToken: secondCaller.Token).AsTask();
+
+        await firstCaller.CancelAsync();
+        first.IsCanceled.Should().BeTrue();
+        producerCancelled.Task.IsCompleted.Should().BeFalse();
+
+        await secondCaller.CancelAsync();
+        await producerCancelled.Task.WaitAsync(timeout.Token);
+
+        second.IsCanceled.Should().BeTrue();
     }
 
     [Fact]
@@ -251,19 +497,19 @@ public sealed class CacheHostingCoverageTests
             return ValueTask.FromResult(value);
         }
 
-        await cache.SetAsync("schema", "before", tags: ["instance"]);
-        await cache.RemoveByTagAsync("*");
+        await cache.SetAsync("schema", "before", tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
+        await cache.RemoveByTagAsync("*", TestContext.Current.CancellationToken);
 
         string after = await cache.GetOrCreateAsync(
             "schema",
             "after",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
         string afterHit = await cache.GetOrCreateAsync(
             "schema",
             "miss",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
 
         after.Should().Be("after");
         afterHit.Should().Be("after");
@@ -279,7 +525,7 @@ public sealed class CacheHostingCoverageTests
         ValueTask<string> Factory(string value, CancellationToken _)
         {
             factoryCalls++;
-            cache.RemoveByTagAsync("instance").GetAwaiter().GetResult();
+            cache.RemoveByTagAsync("instance", TestContext.Current.CancellationToken).GetAwaiter().GetResult();
             return ValueTask.FromResult(value);
         }
 
@@ -287,12 +533,12 @@ public sealed class CacheHostingCoverageTests
             "schema",
             "first",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
         string second = await cache.GetOrCreateAsync(
             "schema",
             "second",
             Factory,
-            tags: ["instance"]);
+            tags: ["instance"], cancellationToken: TestContext.Current.CancellationToken);
 
         first.Should().Be("first");
         second.Should().Be("second");
@@ -317,9 +563,9 @@ public sealed class CacheHostingCoverageTests
             return ValueTask.FromResult(value);
         }
 
-        string first = await cache.GetOrCreateAsync("schema", "first", Factory);
+        string first = await cache.GetOrCreateAsync("schema", "first", Factory, cancellationToken: TestContext.Current.CancellationToken);
         await Task.Delay(20, TestContext.Current.CancellationToken);
-        string second = await cache.GetOrCreateAsync("schema", "second", Factory);
+        string second = await cache.GetOrCreateAsync("schema", "second", Factory, cancellationToken: TestContext.Current.CancellationToken);
 
         first.Should().Be("first");
         second.Should().Be("second");
@@ -349,10 +595,10 @@ public sealed class CacheHostingCoverageTests
             return ValueTask.FromResult(value);
         }
 
-        string longKeyFirst = await cache.GetOrCreateAsync("schema", "first", LongKeyFactory);
-        string longKeySecond = await cache.GetOrCreateAsync("schema", "second", LongKeyFactory);
-        string payloadFirst = await cache.GetOrCreateAsync("key", "large", LargePayloadFactory);
-        string payloadSecond = await cache.GetOrCreateAsync("key", "tiny", LargePayloadFactory);
+        string longKeyFirst = await cache.GetOrCreateAsync("schema", "first", LongKeyFactory, cancellationToken: TestContext.Current.CancellationToken);
+        string longKeySecond = await cache.GetOrCreateAsync("schema", "second", LongKeyFactory, cancellationToken: TestContext.Current.CancellationToken);
+        string payloadFirst = await cache.GetOrCreateAsync("key", "large", LargePayloadFactory, cancellationToken: TestContext.Current.CancellationToken);
+        string payloadSecond = await cache.GetOrCreateAsync("key", "tiny", LargePayloadFactory, cancellationToken: TestContext.Current.CancellationToken);
 
         longKeyFirst.Should().Be("first");
         longKeySecond.Should().Be("second");
@@ -374,8 +620,8 @@ public sealed class CacheHostingCoverageTests
             return ValueTask.FromResult<object>(new object());
         }
 
-        object first = await cache.GetOrCreateAsync("schema", 1, Factory);
-        object second = await cache.GetOrCreateAsync("schema", 2, Factory);
+        object first = await cache.GetOrCreateAsync("schema", 1, Factory, cancellationToken: TestContext.Current.CancellationToken);
+        object second = await cache.GetOrCreateAsync("schema", 2, Factory, cancellationToken: TestContext.Current.CancellationToken);
 
         first.Should().NotBeSameAs(second);
         factoryCalls.Should().Be(2);
@@ -421,10 +667,10 @@ public sealed class CacheHostingCoverageTests
             });
         }
 
-        SpSchema spFirst = await cache.GetOrCreateAsync("sp", 0, SpFactory);
-        SpSchema spSecond = await cache.GetOrCreateAsync("sp", 0, SpFactory);
-        TvpSchema tvpFirst = await cache.GetOrCreateAsync("tvp", 0, TvpFactory);
-        TvpSchema tvpSecond = await cache.GetOrCreateAsync("tvp", 0, TvpFactory);
+        SpSchema spFirst = await cache.GetOrCreateAsync("sp", 0, SpFactory, cancellationToken: TestContext.Current.CancellationToken);
+        SpSchema spSecond = await cache.GetOrCreateAsync("sp", 0, SpFactory, cancellationToken: TestContext.Current.CancellationToken);
+        TvpSchema tvpFirst = await cache.GetOrCreateAsync("tvp", 0, TvpFactory, cancellationToken: TestContext.Current.CancellationToken);
+        TvpSchema tvpSecond = await cache.GetOrCreateAsync("tvp", 0, TvpFactory, cancellationToken: TestContext.Current.CancellationToken);
 
         spFirst.Should().NotBeSameAs(spSecond);
         tvpFirst.Should().NotBeSameAs(tvpSecond);
@@ -692,5 +938,55 @@ public sealed class CacheHostingCoverageTests
     {
         public IServiceScope CreateScope()
             => throw new InvalidOperationException("scope failure");
+    }
+
+    private sealed class RecordingDistributedCache : IDistributedCache
+    {
+        private readonly Dictionary<string, byte[]> _values = new(StringComparer.Ordinal);
+
+        public byte[]? Get(string key)
+        {
+            return _values.TryGetValue(key, out byte[]? value) ? value : null;
+        }
+
+        public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
+        {
+            return Task.FromResult(Get(key));
+        }
+
+        public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
+        {
+            _values[key] = value;
+        }
+
+        public Task SetAsync(
+            string key,
+            byte[] value,
+            DistributedCacheEntryOptions options,
+            CancellationToken token = default)
+        {
+            Set(key, value, options);
+            return Task.CompletedTask;
+        }
+
+        public void Refresh(string key)
+        {
+        }
+
+        public Task RefreshAsync(string key, CancellationToken token = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Remove(string key)
+        {
+            _values.Remove(key);
+        }
+
+        public Task RemoveAsync(string key, CancellationToken token = default)
+        {
+            Remove(key);
+            return Task.CompletedTask;
+        }
     }
 }

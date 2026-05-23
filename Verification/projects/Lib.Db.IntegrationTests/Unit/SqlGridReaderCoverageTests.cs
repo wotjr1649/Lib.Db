@@ -25,10 +25,10 @@ public sealed class SqlGridReaderCoverageTests
             []);
         var grid = new SqlGridReader(reader, new ValueMapperFactory());
 
-        List<int> first = await grid.ReadAsync<int>();
-        string? second = await grid.ReadSingleAsync<string>();
-        int emptySingle = await grid.ReadSingleAsync<int>();
-        Func<Task> afterLast = () => grid.ReadAsync<int>();
+        List<int> first = await grid.ReadAsync<int>(TestContext.Current.CancellationToken);
+        string? second = await grid.ReadSingleAsync<string>(TestContext.Current.CancellationToken);
+        int emptySingle = await grid.ReadSingleAsync<int>(TestContext.Current.CancellationToken);
+        Func<Task> afterLast = () => grid.ReadAsync<int>(TestContext.Current.CancellationToken);
 
         first.Should().Equal(1, 2);
         second.Should().Be("second");
@@ -47,8 +47,8 @@ public sealed class SqlGridReaderCoverageTests
         var reader = new SequenceDbDataReader([[1]]);
         var grid = new SqlGridReader(reader, new ValueMapperFactory());
 
-        int first = await grid.ReadSingleAsync<int>();
-        Func<Task> missingSecond = () => grid.ReadSingleAsync<string>();
+        int first = await grid.ReadSingleAsync<int>(TestContext.Current.CancellationToken);
+        Func<Task> missingSecond = () => grid.ReadSingleAsync<string>(TestContext.Current.CancellationToken);
 
         first.Should().Be(1);
         await missingSecond.Should()
@@ -61,8 +61,8 @@ public sealed class SqlGridReaderCoverageTests
     {
         var reader = new EmptyGridReader();
 
-        List<int> rows = await reader.ReadAsync<int>();
-        string? single = await reader.ReadSingleAsync<string>();
+        List<int> rows = await reader.ReadAsync<int>(TestContext.Current.CancellationToken);
+        string? single = await reader.ReadSingleAsync<string>(TestContext.Current.CancellationToken);
         await reader.DisposeAsync();
 
         rows.Should().BeEmpty();

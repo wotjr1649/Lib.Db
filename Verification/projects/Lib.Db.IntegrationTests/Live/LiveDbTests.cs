@@ -31,7 +31,7 @@ public sealed class LiveDbTests : IClassFixture<LiveDbFixture>
         DbResult<int> result = await new DbRequestBuilder(_executor, "Default")
             .Procedure("perf.usp_Perf_Bulk_Insert")
             .With(new { Items = items })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(1000);
@@ -53,7 +53,7 @@ public sealed class LiveDbTests : IClassFixture<LiveDbFixture>
         DbResult<int> result = await new DbRequestBuilder(_executor, "Default")
             .Procedure("tvp.usp_Tvp_Bulk_Insert_AllTypes")
             .With(new { Items = list })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue(result.Error?.Message);
         result.Value.Should().Be(1);

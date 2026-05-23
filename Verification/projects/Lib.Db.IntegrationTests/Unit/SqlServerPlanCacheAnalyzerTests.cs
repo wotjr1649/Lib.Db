@@ -23,7 +23,8 @@ public sealed class SqlServerPlanCacheAnalyzerTests
             new("SELECT 1", 3, 30, 90, 30, 40, new DateTime(2026, 5, 18)),
             new("SELECT 2", 2, 20, 50, 25, 30, new DateTime(2026, 5, 18, 1, 0, 0))
         ];
-        using CancellationTokenSource cts = new();
+        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
         Mock<IDbExecutor> executor = new();
         executor
             .Setup(x => x.QueryAsync<object, QueryPerformanceInfo>(
@@ -55,11 +56,12 @@ public sealed class SqlServerPlanCacheAnalyzerTests
                 It.IsAny<CommandType>(),
                 It.IsAny<DbExecutionOptions>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(ToAsyncEnumerable(Array.Empty<QueryPerformanceInfo>()));
+            .Returns(ToAsyncEnumerable(Array.Empty<QueryPerformanceInfo>(), TestContext.Current.CancellationToken));
 
         var analyzer = new SqlServerPlanCacheAnalyzer(executor.Object);
 
-        IEnumerable<QueryPerformanceInfo> result = await analyzer.AnalyzeSlowQueriesAsync();
+        IEnumerable<QueryPerformanceInfo> result = await analyzer.AnalyzeSlowQueriesAsync(
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.Should().BeEmpty();
     }

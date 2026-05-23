@@ -32,13 +32,13 @@ public sealed class IsolationLevelTests(MultiDbFixture fixture)
     public async Task IL01_ReadCommitted_Default_ShouldWork()
     {
         // Arrange & Act — 기존 오버로드 사용 (IsolationLevel 파라미터 없음)
-        await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification");
+        await using IDbTransactionScope tx = await _session.BeginTransactionAsync("Verification", TestContext.Current.CancellationToken);
 
         DbResult<int> result = await tx
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
-        DbResult<bool> commitResult = await tx.CommitAsync();
+        DbResult<bool> commitResult = await tx.CommitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("기존 오버로드(ReadCommitted 기본값)로 SELECT 1 실행이 성공해야 합니다.");
@@ -61,11 +61,11 @@ public sealed class IsolationLevelTests(MultiDbFixture fixture)
         // Arrange — ReadUncommitted 트랜잭션에서 INSERT (커밋하지 않음)
         await using IDbTransactionScope txInsert = await _session.BeginTransactionAsync(
             "Verification",
-            IsolationLevel.ReadUncommitted);
+            IsolationLevel.ReadUncommitted, TestContext.Current.CancellationToken);
 
         DbResult<int> insertResult = await txInsert
             .Sql((FormattableString)$"INSERT INTO core.Users (UserName, Email, Age) VALUES ('IsoTest', {uniqueEmail}, 25)")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue("INSERT가 성공해야 합니다.");
 
         // Act — 별도 세션에서 ReadUncommitted로 Dirty Read 시도
@@ -73,14 +73,14 @@ public sealed class IsolationLevelTests(MultiDbFixture fixture)
         // 참고: 같은 트랜잭션 내에서 자체 읽기는 항상 가능
         DbResult<int> readResult = await txInsert
             .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {uniqueEmail}")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert
         readResult.IsSuccess.Should().BeTrue("ReadUncommitted 트랜잭션 내 읽기가 성공해야 합니다.");
         readResult.Value.Should().BeGreaterThan(0, "트랜잭션 내 자체 INSERT 데이터를 읽을 수 있어야 합니다.");
 
         // Cleanup — 롤백하여 테스트 데이터 제거
-        DbResult<bool> rollbackResult = await txInsert.RollbackAsync();
+        DbResult<bool> rollbackResult = await txInsert.RollbackAsync(TestContext.Current.CancellationToken);
         rollbackResult.IsSuccess.Should().BeTrue("롤백이 성공해야 합니다.");
     }
 
@@ -97,13 +97,13 @@ public sealed class IsolationLevelTests(MultiDbFixture fixture)
         // Arrange & Act
         await using IDbTransactionScope tx = await _session.BeginTransactionAsync(
             "Verification",
-            IsolationLevel.Serializable);
+            IsolationLevel.Serializable, TestContext.Current.CancellationToken);
 
         DbResult<int> result = await tx
             .Sql("SELECT COUNT(*) FROM core.Users")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
-        DbResult<bool> commitResult = await tx.CommitAsync();
+        DbResult<bool> commitResult = await tx.CommitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("Serializable 격리 수준에서 SELECT가 성공해야 합니다.");
@@ -124,13 +124,13 @@ public sealed class IsolationLevelTests(MultiDbFixture fixture)
         // Arrange & Act
         await using IDbTransactionScope tx = await _session.BeginTransactionAsync(
             "Verification",
-            IsolationLevel.RepeatableRead);
+            IsolationLevel.RepeatableRead, TestContext.Current.CancellationToken);
 
         DbResult<int> result = await tx
             .Sql("SELECT COUNT(*) FROM core.Users")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
-        DbResult<bool> commitResult = await tx.CommitAsync();
+        DbResult<bool> commitResult = await tx.CommitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("RepeatableRead 격리 수준에서 SELECT가 성공해야 합니다.");

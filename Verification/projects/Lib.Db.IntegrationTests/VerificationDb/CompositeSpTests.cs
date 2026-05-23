@@ -41,7 +41,7 @@ public sealed class CompositeSpTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("test.usp_Composite_InsertAndValidate")
             .With(new { UserName = "CompositeUser", Email = uniqueEmail, NewUserId = 0 })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert — SP 내부에서 SCOPE_IDENTITY() NULL로 인해 50020 에러 또는 성공
         if (result.IsSuccess)
@@ -49,7 +49,7 @@ public sealed class CompositeSpTests(MultiDbFixture fixture)
             // 성공 시: 유저가 실제로 존재하는지 확인
             DbResult<int> countResult = await _db
                 .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {uniqueEmail}")
-                .ExecuteScalarAsync<int>();
+                .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
             countResult.IsSuccess.Should().BeTrue();
             countResult.Value.Should().BeGreaterThan(0);
         }
@@ -80,7 +80,7 @@ public sealed class CompositeSpTests(MultiDbFixture fixture)
         int inputId = 99999;
         DbResult<int> result = await _db
             .Sql((FormattableString)$"DECLARE @OutName NVARCHAR(100), @OutAge INT; EXEC test.usp_Output_With_Error @InputId = {inputId}, @OutputName = @OutName OUTPUT, @OutputAge = @OutAge OUTPUT;")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -104,7 +104,7 @@ public sealed class CompositeSpTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("test.usp_Output_With_Error")
             .With(new { InputId = 1, OutputName = "", OutputAge = 0 })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert — SP가 성공적으로 실행됨 (OUTPUT 값은 내부적으로 매핑)
         result.IsSuccess.Should().BeTrue();
@@ -129,7 +129,7 @@ public sealed class CompositeSpTests(MultiDbFixture fixture)
         // Act — FormattableString SQL로 SP 호출; SP 내부에서 SELECT UserId 결과 반환
         DbResult<Dictionary<string, object?>?> result = await _db
             .Sql((FormattableString)$"DECLARE @id INT; EXEC test.usp_Composite_V2 @UserName = N'CompositeV2User', @Email = {email}, @NewUserId = @id OUTPUT; SELECT @id AS NewUserId;")
-            .QuerySingleAsync<Dictionary<string, object?>>();
+            .QuerySingleAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert — SP 내부의 첫 번째 SELECT (UserId, UserName, Email, Age, CreatedAt) 또는
         // 외부의 SELECT @id AS NewUserId가 반환됨

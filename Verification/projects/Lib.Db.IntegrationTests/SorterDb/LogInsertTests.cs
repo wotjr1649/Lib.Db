@@ -19,7 +19,7 @@ public sealed class LogInsertTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("IF_SP_TILT_LOG")
             .With(new { V_PLC_SEQ = 99999, V_CHUTE_NO = 999, V_TRAY_NO = 9999 })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
     }
 
@@ -29,7 +29,7 @@ public sealed class LogInsertTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("IF_SP_CHUTE_BTN_LOG")
             .With(new { V_CHUTE_NO = "999", V_STATUS = "TEST" })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
     }
 
@@ -39,7 +39,7 @@ public sealed class LogInsertTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("IF_SP_EMR_LOG")
             .With(new { V_EMR_NO = 999 })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
     }
 
@@ -59,7 +59,7 @@ public sealed class LogInsertTests(MultiDbFixture fixture)
                 V_SOURCE = "LIBDB_TEST",
                 V_PLCSEQ = 99999L
             })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
         // TS_ERROR_LOG 테이블이 존재하면 성공, 없으면 SchemaNotFound 오류 허용
         if (!result.IsSuccess)
         {

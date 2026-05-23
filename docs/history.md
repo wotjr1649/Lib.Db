@@ -2,6 +2,38 @@
 
 Current usage docs are intended to stay version-neutral and describe the current API. This file owns version-specific history: release changes, verification summaries, migration notes, and archived report summaries that should not remain scattered through active guides.
 
+## 2.4.0 Summary
+
+### Added
+
+- Added HybridCache tag overloads for grouped logical invalidation. Tags are app-owned non-sensitive labels, reject invalid values, reserve wildcard `*`, and enforce a 32 distinct tag ceiling after ordinal dedupe.
+- Added typed `ReadMultipleAsync<...>` helpers in `Lib.Db.Extensions` for common two-, three-, and four-ResultSet stored procedure patterns. The helpers dispose readers and map read failures to redacted `DbResult<T>` failures.
+- Added AOT-safe `BulkShape<T>` bulk mutation APIs for insert, update, delete, upsert, and merge. These overloads avoid reflection and use `SqlBulkCopy` plus staged set-based DML. Existing reflection-based `BulkInsertAsync<T>` remains for compatibility.
+- Documented generator, migration/contract tooling, and SQL Server Change Tracking adapter as v2.5.0-or-later roadmap items. v2.4.0 keeps these out of the core runtime implementation.
+
+### Changed
+
+- `AddLibDb()` is provider-neutral by default. It no longer registers the shared-memory `IDistributedCache` implementation implicitly.
+- Host applications that need L2 cache behavior now own the `IDistributedCache` provider choice, such as Redis, SQL Server, PostgreSQL, NCache, or another cross-platform provider.
+- `AddLibDbSharedMemoryCache()` remains available as an explicit local-host opt-in for deployments that intentionally want the legacy shared-memory path.
+- Lib.Db diagnostics now report the detected cache topology so maintainers can distinguish local-only behavior, host-owned L2, and explicit shared-memory opt-in.
+- Bulk write docs now distinguish direct `SqlBulkCopy` destination flags from staged target DML behavior and document direct insert `UseTransaction = false` as a non-atomic opt-out.
+
+### Verification
+
+- The release gate includes provider-neutral caching checks: existing host-owned `IDistributedCache` providers are preserved, shared-memory opt-in rejects pre-existing providers, and providers added after shared-memory opt-in fail Generic Host startup.
+- Verification assets, script banners, package metadata, and CI gate labels were updated for v2.4.0.
+- Native AOT GitHub Actions verification now runs as a Windows/Linux/macOS x64 matrix from PRs and non-main manual dispatches, while direct `main` branch execution is blocked.
+- Repository-local consumer guidance moved from `.agent/skills/lib-db` to `.agents/skills/lib-db`.
+- Release verification includes AOT-safe bulk shape/reader/SQL builder/mutation coverage, HybridCache tag behavior, typed QueryMultiple helper behavior, Native AOT reachability for the concrete bulk path, artifact scanning, and generated artifact tracking.
+
+### Security
+
+- Cache memory and L2 provider ownership moved out of the default library registration path. This reduces implicit OS-specific behavior and makes provider credentials, durability, eviction, and network exposure the host application's responsibility.
+- Lib.Db does not treat provider-name detection as a security boundary. Cache topology detection is diagnostic-only and must not be used to grant trust or weaken validation.
+- Public failure paths for cache, typed multi-result reads, and AOT-safe bulk writes use generic/redacted errors rather than exposing raw SQL, provider exceptions, row values, cache payloads, tenant/user identifiers, connection string values, or public `InnerException` details.
+- Release artifact scanning is required to cover connection strings, passwords, tokens, API keys, client secrets, bearer/SAS markers, SQL parameter values, row values, cache payload values, and tenant/user identifier markers while printing only file paths and marker/key names.
+
 ## 2.3.0 Summary
 
 ### Added

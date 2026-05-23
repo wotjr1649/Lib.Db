@@ -218,7 +218,7 @@ public sealed class OptionsValidationTests
         ValidateOptionsResult result = validator.Validate(null, options);
 
         result.Failed.Should().BeTrue();
-        string message = string.Join(";", result.Failures);
+        string message = JoinFailures(result);
         message.Should().Contain("[redacted]");
         message.Should().NotContain("Password=placeholder");
         message.Should().NotContain("User Id=app_user");
@@ -238,7 +238,7 @@ public sealed class OptionsValidationTests
         ValidateOptionsResult result = validator.Validate(null, options);
 
         result.Failed.Should().BeTrue();
-        string message = string.Join(";", result.Failures);
+        string message = JoinFailures(result);
         message.Should().Contain("[redacted]");
         message.Should().NotContain("Password=placeholder");
         message.Should().NotContain("User Id=app_user");
@@ -260,7 +260,7 @@ public sealed class OptionsValidationTests
         ValidateOptionsResult result = validator.Validate(null, options);
 
         result.Failed.Should().BeTrue();
-        string message = string.Join(";", result.Failures);
+        string message = JoinFailures(result);
         message.Should().Contain("[redacted]");
         message.Should().NotContain("Password=placeholder");
         message.Should().NotContain("User Id=sa");
@@ -311,7 +311,7 @@ public sealed class OptionsValidationTests
         ValidateOptionsResult result = validator.Validate(null, options);
 
         result.Failed.Should().BeTrue();
-        AssertMalformedSecretFragmentsRedacted(string.Join(";", result.Failures));
+        AssertMalformedSecretFragmentsRedacted(JoinFailures(result));
     }
 
     [Fact]
@@ -327,7 +327,7 @@ public sealed class OptionsValidationTests
         ValidateOptionsResult result = validator.Validate(null, options);
 
         result.Failed.Should().BeTrue();
-        AssertMalformedSecretFragmentsRedacted(string.Join(";", result.Failures));
+        AssertMalformedSecretFragmentsRedacted(JoinFailures(result));
     }
 
     [Fact]
@@ -344,7 +344,7 @@ public sealed class OptionsValidationTests
         ValidateOptionsResult result = validator.Validate(null, options);
 
         result.Failed.Should().BeTrue();
-        AssertMalformedSecretFragmentsRedacted(string.Join(";", result.Failures));
+        AssertMalformedSecretFragmentsRedacted(JoinFailures(result));
     }
 
     [Fact]
@@ -430,7 +430,7 @@ public sealed class OptionsValidationTests
         ValidateOptionsResult result = validator.Validate(null, options);
 
         result.Failed.Should().BeTrue();
-        AssertMalformedSecretFragmentsRedacted(string.Join(";", result.Failures));
+        AssertMalformedSecretFragmentsRedacted(JoinFailures(result));
     }
 
     [Fact]
@@ -638,6 +638,9 @@ public sealed class OptionsValidationTests
 
         Assert.Equal("Admin", options.ConnectionStringNames[0]);
     }
+
+    private static string JoinFailures(ValidateOptionsResult result)
+        => string.Join(";", result.Failures ?? []);
 
     private static void AssertMalformedSecretFragmentsRedacted(string message)
     {

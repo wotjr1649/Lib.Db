@@ -61,7 +61,7 @@ function Write-SecretSafeEnvironmentSummary {
     }
 }
 
-Write-Host 'Lib.Db v2.3.0 verification started.'
+Write-Host 'Lib.Db v2.4.0 verification started.'
 Write-SecretSafeEnvironmentSummary
 
 Invoke-Checked 'dotnet' @('build', $integrationProject, '--no-restore', '-v:minimal')
@@ -74,13 +74,23 @@ if (-not $SkipMatrixDbTests) {
 
     Invoke-Checked 'dotnet' @(
         'test',
-        $integrationProject,
+        '--project', $integrationProject,
         '--no-build',
-        '--filter', 'FullyQualifiedName~Lib.Db.IntegrationTests.V230Matrix.V230TvpMatrixTests',
-        '--logger', 'trx;LogFileName=v230-matrix.trx',
+        '--filter-class', '*V230TvpMatrixTests*',
+        '--minimum-expected-tests', '1',
+        '--report-trx',
+        '--report-trx-filename', 'v230-matrix.trx',
         '--results-directory', $matrixResultsDirectory,
         '-v:minimal'
     )
+
+    $matrixTrx = Get-ChildItem -LiteralPath $matrixResultsDirectory -Recurse -Filter 'v230-matrix.trx' -File |
+        Select-Object -First 1
+    if ($null -eq $matrixTrx) {
+        throw 'MTP matrix test gate did not produce v230-matrix.trx.'
+    }
+
+    Write-Host "MatrixTrx=$($matrixTrx.FullName)"
 }
 else {
     $skippedGates.Add('matrix-db-tests')
@@ -126,6 +136,11 @@ else {
     $skippedGates.Add('benchmark')
 }
 
+& pwsh -NoProfile -File $artifactScanner -SelfTest
+if ($LASTEXITCODE -ne 0) {
+    throw "Verification artifact secret scan self-test failed with exit code $LASTEXITCODE."
+}
+
 & pwsh -NoProfile -File $artifactScanner
 if ($LASTEXITCODE -ne 0) {
     throw "Verification artifact secret scan failed with exit code $LASTEXITCODE."
@@ -137,11 +152,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($skippedGates.Count -gt 0) {
-    Write-Warning "Lib.Db v2.3.0 verification completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade evidence."
+    Write-Warning "Lib.Db v2.4.0 verification completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade evidence."
     if (-not $AllowPartial) {
         throw "Partial verification runs require -AllowPartial so CI cannot mistake them for release-grade evidence."
     }
 }
 else {
-    Write-Host 'Lib.Db v2.3.0 release-grade verification completed.'
+    Write-Host 'Lib.Db v2.4.0 release-grade verification completed.'
 }

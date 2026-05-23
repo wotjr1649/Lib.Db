@@ -109,5 +109,5 @@ SELECT N'LIBDB_BENCH_TEST memory-optimized TVP opt-in verification passed.' AS [
            FROM sys.table_types
            WHERE [is_memory_optimized] = 1
        ) AS [MemoryOptimizedTableTypes],
-       N'Default v2.3.0 verification intentionally excludes this opt-in file.' AS [BoundaryNote];
+       N'Default verification intentionally excludes this opt-in file.' AS [BoundaryNote];
 GO

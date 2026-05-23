@@ -7,15 +7,14 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <IsTestingPlatformApplication>false</IsTestingPlatformApplication>
+    <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
     <TestingPlatformDotnetTestSupport>false</TestingPlatformDotnetTestSupport>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
     <BuildInParallel>false</BuildInParallel>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="10.0.1">
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.6.2" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.2.2" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageReference Include="FluentAssertions" Version="8.10.0" />
@@ -27,7 +26,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.8" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" PrivateAssets="all" />
-    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\Lib.Db\Lib.Db.csproj" />
@@ -51,10 +50,10 @@
       '$(LibDbExplicitConnectionStringsConfigured)' == 'true' or
       '$(LibDbAliasConnectionStringsConfigured)' == 'true'">true</LibDbVerificationEnvironmentConfigured>
   </PropertyGroup>
-  <Target Name="GuardLibDbVerificationTestEnvironment" BeforeTargets="VSTest">
+  <Target Name="GuardLibDbVerificationTestEnvironment" BeforeTargets="VSTest;InvokeTestingPlatform">
     <Error
       Condition="'$(LIBDB_SKIP_TEST_ENV_GUARD)' != 'true' and '$(LibDbVerificationEnvironmentConfigured)' != 'true'"
-      Text="Lib.Db integration tests require the verification environment before dotnet test starts. Use pwsh -NoProfile -File .\Verification\scripts\Invoke-Tests.ps1 so Set-LibDbVerificationEnvironment.local.ps1 is loaded first, or set LIBDB_TEST_SQL_PASSWORD / all LIBDB_TEST_CONNECTION_* / all ConnectionStrings__* values in the current process. For non-database-only local runs, pass -p:LIBDB_SKIP_TEST_ENV_GUARD=true explicitly." />
+      Text="Lib.Db integration tests require the verification environment before dotnet test starts. Use pwsh -NoProfile -File .\Verification\scripts\Invoke-Tests.ps1 so Set-LibDbVerificationEnvironment.local.ps1 is loaded first, or set LIBDB_TEST_SQL_PASSWORD / all LIBDB_TEST_CONNECTION_* / all ConnectionStrings__* values in the current process. For non-database-only local runs, set LIBDB_SKIP_TEST_ENV_GUARD=true in the current process or pass -SkipTestEnvGuard to Verification/scripts/Invoke-Tests.ps1." />
   </Target>
   <ItemGroup>
     <None Remove="TestResults/**" />

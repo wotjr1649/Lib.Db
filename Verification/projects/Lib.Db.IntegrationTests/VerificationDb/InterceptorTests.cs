@@ -66,7 +66,7 @@ public sealed class InterceptorTests(MultiDbFixture fixture)
         // Act — 인터셉터 없이 기존 fixture 사용
         DbResult<int> result = await _db
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue();

@@ -1,6 +1,6 @@
 # Lib.Db Verification
 
-This directory is the canonical root for Lib.Db v2.3.0 verification assets.
+This directory is the canonical root for Lib.Db v2.4.0 verification assets.
 
 ## Environment Variable Names
 

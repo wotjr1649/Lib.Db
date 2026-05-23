@@ -48,6 +48,19 @@ public sealed class PackageGraphTests
         }
     }
 
+    [Fact]
+    public void LibDbProject_ShouldAvoidPackageAndGeneratedFileChurnOnNormalBuilds()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string project = File.ReadAllText(Path.Combine(repoRoot.FullName, "Lib.Db", "Lib.Db.csproj"));
+
+        project.Should().Contain("<GeneratePackageOnBuild>false</GeneratePackageOnBuild>");
+        project.Should().NotContain("<GeneratePackageOnBuild>true</GeneratePackageOnBuild>");
+        project.Should().Contain("<EmitCompilerGeneratedFiles Condition=\"'$(EmitLibDbCompilerGeneratedFiles)' == 'true'\">true</EmitCompilerGeneratedFiles>");
+        project.Should().NotContain("구색만 갖춤");
+        project.Should().NotContain("PackageIcon");
+    }
+
     private static DirectoryInfo FindRepoRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);

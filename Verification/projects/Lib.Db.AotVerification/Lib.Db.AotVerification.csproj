@@ -8,7 +8,7 @@
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
-    <!-- Keep Lib.Db actionable IL warnings as errors; provider-owned IL2104/IL3053 warnings are tracked in docs/v2.3.0-verification.md. -->
+    <!-- Keep Lib.Db actionable IL warnings as errors; provider-owned IL2104/IL3053 warnings are tracked in docs/verification.md. -->
     <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2104;IL3053</WarningsNotAsErrors>
     <IsPackable>false</IsPackable>
     <WarningsAsErrors>$(WarningsAsErrors);IL2026;IL3050;IL2060;IL2070;IL2072;IL2067;IL2065;IL2090;IL2091</WarningsAsErrors>

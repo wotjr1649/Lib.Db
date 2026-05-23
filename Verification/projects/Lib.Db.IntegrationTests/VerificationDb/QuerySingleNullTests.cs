@@ -35,7 +35,7 @@ public sealed class QuerySingleNullTests(MultiDbFixture fixture)
         DbResult<Dictionary<string, object?>?> result = await _db
             .Procedure("core.usp_Core_Get_User")
             .With(new { UserId = 99999 })
-            .QuerySingleAsync<Dictionary<string, object?>>();
+            .QuerySingleAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert — 0행이면 IsSuccess=true, Value=null
         result.IsSuccess.Should().BeTrue();

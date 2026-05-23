@@ -53,7 +53,7 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<int> result = await _db
             .Procedure("perf.usp_Perf_Bulk_Insert")
             .With(new { Items = items })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         sw.Stop();
 
         // Assert
@@ -68,7 +68,7 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         // Cleanup
         await _db
             .Sql($"DELETE FROM [perf].[BulkTest] WHERE BatchNumber = {batchNumber}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -85,11 +85,11 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("gap.usp_IsolationLevel_ReadUncommitted")
             .With(new { TargetId = 1 })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("READ UNCOMMITTED 격리 수준 SP가 성공해야 합니다.");
-        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync();
+        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync(TestContext.Current.CancellationToken);
         rows.Should().NotBeEmpty("시드 데이터(UserId=1)가 존재해야 합니다.");
         rows[0].Should().ContainKey("UserName");
     }
@@ -108,11 +108,11 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("gap.usp_IsolationLevel_Serializable")
             .With(new { TargetId = 1 })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("SERIALIZABLE 격리 수준 SP가 성공해야 합니다.");
-        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync();
+        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync(TestContext.Current.CancellationToken);
         rows.Should().NotBeEmpty("시드 데이터(UserId=1)가 존재해야 합니다.");
     }
 
@@ -131,7 +131,7 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<int> insertResult = await _db
             .Procedure("gap.usp_Json_Insert")
             .With(new { JsonPayload = jsonPayload })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         insertResult.IsSuccess.Should().BeTrue("JSON 삽입이 성공해야 합니다.");
         int newId = insertResult.Value;
@@ -141,18 +141,18 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<IAsyncEnumerable<GapJsonQueryResult>> queryResult = await _db
             .Procedure("gap.usp_Json_Query")
             .With(new { Key = "name" })
-            .QueryAsync<GapJsonQueryResult>();
+            .QueryAsync<GapJsonQueryResult>(TestContext.Current.CancellationToken);
 
         // Assert
         queryResult.IsSuccess.Should().BeTrue("JSON 쿼리가 성공해야 합니다.");
-        List<GapJsonQueryResult> rows = await queryResult.Value!.ToListAsync();
+        List<GapJsonQueryResult> rows = await queryResult.Value!.ToListAsync(TestContext.Current.CancellationToken);
         rows.Should().Contain(r => r.Id == newId && r.ExtractedValue == "test",
             "JSON_VALUE로 추출한 값이 'test'여야 합니다.");
 
         // Cleanup
         await _db
             .Sql($"DELETE FROM [gap].[JsonData] WHERE Id = {newId}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -172,10 +172,10 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<IAsyncEnumerable<GapMergeResult>> insertResult = await _db
             .Procedure("gap.usp_Merge_Upsert")
             .With(new { Id = testId, Name = "First" })
-            .QueryAsync<GapMergeResult>();
+            .QueryAsync<GapMergeResult>(TestContext.Current.CancellationToken);
 
         insertResult.IsSuccess.Should().BeTrue("첫 MERGE 호출이 성공해야 합니다.");
-        List<GapMergeResult> insertRows = await insertResult.Value!.ToListAsync();
+        List<GapMergeResult> insertRows = await insertResult.Value!.ToListAsync(TestContext.Current.CancellationToken);
         insertRows.Should().ContainSingle();
         insertRows[0].MergeAction.Should().Be("INSERT",
             "존재하지 않는 행에 대한 MERGE는 INSERT여야 합니다.");
@@ -184,10 +184,10 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<IAsyncEnumerable<GapMergeResult>> updateResult = await _db
             .Procedure("gap.usp_Merge_Upsert")
             .With(new { Id = testId, Name = "Updated" })
-            .QueryAsync<GapMergeResult>();
+            .QueryAsync<GapMergeResult>(TestContext.Current.CancellationToken);
 
         updateResult.IsSuccess.Should().BeTrue("두 번째 MERGE 호출이 성공해야 합니다.");
-        List<GapMergeResult> updateRows = await updateResult.Value!.ToListAsync();
+        List<GapMergeResult> updateRows = await updateResult.Value!.ToListAsync(TestContext.Current.CancellationToken);
         updateRows.Should().ContainSingle();
         updateRows[0].MergeAction.Should().Be("UPDATE",
             "이미 존재하는 행에 대한 MERGE는 UPDATE여야 합니다.");
@@ -195,7 +195,7 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         // Cleanup
         await _db
             .Sql($"DELETE FROM [gap].[MergeTarget] WHERE Id = {testId}")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -212,11 +212,11 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<IAsyncEnumerable<GapPaginatedUser>> result = await _db
             .Procedure("gap.usp_Paginate")
             .With(new { PageNum = 1, PageSize = 2 })
-            .QueryAsync<GapPaginatedUser>();
+            .QueryAsync<GapPaginatedUser>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("페이지네이션 SP가 성공해야 합니다.");
-        List<GapPaginatedUser> page = await result.Value!.ToListAsync();
+        List<GapPaginatedUser> page = await result.Value!.ToListAsync(TestContext.Current.CancellationToken);
         page.Should().HaveCountLessThanOrEqualTo(2,
             "PageSize=2이므로 최대 2건이 반환되어야 합니다.");
         page.Should().NotBeEmpty("시드 데이터가 존재하므로 1건 이상이어야 합니다.");
@@ -249,11 +249,11 @@ public sealed class FeatureGapTests(MultiDbFixture fixture, ITestOutputHelper ou
         // Act
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("gap.usp_WindowFunction_RankUsers")
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("윈도우 함수 SP가 성공해야 합니다.");
-        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync();
+        List<Dictionary<string, object?>> rows = await result.Value!.ToListAsync(TestContext.Current.CancellationToken);
         rows.Should().NotBeEmpty("시드 데이터가 존재하므로 1건 이상이어야 합니다.");
 
         // 필수 컬럼 존재 확인

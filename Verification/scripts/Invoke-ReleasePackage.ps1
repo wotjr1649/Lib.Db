@@ -246,6 +246,32 @@ function Assert-PackageRepositoryCommitMatchesHead {
     }
 }
 
+function Assert-RepositoryStatusClean {
+    param(
+        [AllowEmptyCollection()]
+        [string[]] $StatusLines = @()
+    )
+
+    $changes = @($StatusLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($changes.Count -eq 0) {
+        return
+    }
+
+    $preview = @($changes | Select-Object -First 20)
+    $more = if ($changes.Count -gt $preview.Count) { " plus $($changes.Count - $preview.Count) more change(s)" } else { '' }
+    throw "Repository has uncommitted source changes. Commit or remove changes before release packaging:`n - $($preview -join "`n - ")$more"
+}
+
+function Get-RepositoryStatusLines {
+    $statusOutput = & git @('-C', $repoRoot, 'status', '--porcelain=v1', '--untracked-files=all') 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "git status failed with exit code $exitCode.`n$($statusOutput -join [Environment]::NewLine)"
+    }
+
+    return @($statusOutput | ForEach-Object { $_.ToString() })
+}
+
 function Assert-PackageDependenciesMatchProject {
     param(
         [Parameter(Mandatory = $true)]
@@ -464,22 +490,22 @@ function Invoke-SelfTest {
     Assert-SelfTestPass -Name 'AcceptsLocalizedUnsignedNu3004WithSignatureFailureSummary' -Assertion {
         Test-OnlyAcceptedUnsignedNuGetFailure -Output @(
             '',
-            'Lib.Db.2.3.0을 확인하고 있습니다.',
+            'Lib.Db.2.4.0을 확인하고 있습니다.',
             '콘텐츠 해시: abc',
-            "error: NU3004: Package 'Lib.Db 2.3.0': 패키지가 서명되어 있지 않습니다.",
+            "error: NU3004: Package 'Lib.Db 2.4.0': 패키지가 서명되어 있지 않습니다.",
             '',
             '패키지 시그니처 유효성 검증에 실패했습니다.')
     }
 
     Assert-SelfTestPass -Name 'RejectsMixedNu3004AndAnotherNuGetCode' -Assertion {
         -not (Test-OnlyAcceptedUnsignedNuGetFailure -Output @(
-                "error: NU3004: Package 'Lib.Db 2.3.0': The package is not signed.",
+                "error: NU3004: Package 'Lib.Db 2.4.0': The package is not signed.",
                 "error: NU3018: The author primary signature's certificate chain is invalid."))
     }
 
     Assert-SelfTestPass -Name 'RejectsNu3004WithUnrelatedFatalText' -Assertion {
         -not (Test-OnlyAcceptedUnsignedNuGetFailure -Output @(
-                "error: NU3004: Package 'Lib.Db 2.3.0': The package is not signed.",
+                "error: NU3004: Package 'Lib.Db 2.4.0': The package is not signed.",
                 'fatal: unrelated repository verification failure.'))
     }
 
@@ -500,6 +526,28 @@ function Invoke-SelfTest {
         }
         catch {
             return $_.Exception.Message.Contains('Package repository commit does not match HEAD', [System.StringComparison]::Ordinal)
+        }
+    }
+
+    Assert-SelfTestPass -Name 'AcceptsCleanRepositoryStatus' -Assertion {
+        try {
+            Assert-RepositoryStatusClean -StatusLines @()
+            return $true
+        }
+        catch {
+            return $false
+        }
+    }
+
+    Assert-SelfTestPass -Name 'RejectsDirtyRepositoryStatus' -Assertion {
+        try {
+            Assert-RepositoryStatusClean -StatusLines @(
+                ' M Lib.Db/Lib.Db.csproj',
+                '?? .agents/skills/lib-db/SKILL.md')
+            return $false
+        }
+        catch {
+            return $_.Exception.Message.Contains('uncommitted source changes', [System.StringComparison]::Ordinal)
         }
     }
 
@@ -529,6 +577,8 @@ if ($SelfTest) {
     Invoke-SelfTest
     return
 }
+
+Assert-RepositoryStatusClean -StatusLines (Get-RepositoryStatusLines)
 
 $artifactRoot = Resolve-RepoChildPath -ChildPath $ArtifactsDirectory
 Assert-PathUnderDirectory -PathValue $artifactRoot -Directory $verificationArtifactsRoot -Name 'ArtifactsDirectory'
@@ -561,6 +611,7 @@ if ($packages.Count -ne 1) {
 $expandedDirectory = Join-Path $artifactRoot 'expanded'
 try {
     Assert-PackageMetadata -Package $packages[0] -ExpandedDirectory $expandedDirectory -Head $head
+    Invoke-Checked 'pwsh' @('-NoProfile', '-File', $artifactScanner, '-SelfTest')
     Invoke-Checked 'pwsh' @('-NoProfile', '-File', $artifactScanner, '-Paths', $expandedDirectory)
 }
 finally {

@@ -19,7 +19,7 @@ public sealed class SmokeTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _verification
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(1);
@@ -30,7 +30,7 @@ public sealed class SmokeTests(MultiDbFixture fixture)
     {
         DbResult<int> result = await _sorter
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(1);
@@ -41,16 +41,15 @@ public sealed class SmokeTests(MultiDbFixture fixture)
     {
         Task<DbResult<int>> verificationTask = _verification
             .Sql("SELECT 42")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         Task<DbResult<int>> sorterTask = _sorter
             .Sql("SELECT 99")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
-        await Task.WhenAll(verificationTask, sorterTask).ConfigureAwait(false);
-
-        DbResult<int> vResult = verificationTask.Result;
-        DbResult<int> sResult = sorterTask.Result;
+        DbResult<int>[] results = await Task.WhenAll(verificationTask, sorterTask);
+        DbResult<int> vResult = results[0];
+        DbResult<int> sResult = results[1];
 
         vResult.IsSuccess.Should().BeTrue();
         vResult.Value.Should().Be(42);

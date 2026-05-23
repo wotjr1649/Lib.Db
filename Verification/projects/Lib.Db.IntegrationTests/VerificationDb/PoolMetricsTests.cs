@@ -37,7 +37,7 @@ public sealed class PoolMetricsTests(MultiDbFixture fixture)
         // Act
         DbResult<int> result = await _db
             .Sql("SELECT 1")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         // Assert — 메트릭 기록 코드가 에러 없이 실행되었으므로 쿼리 성공 확인
         result.IsSuccess.Should().BeTrue();
@@ -59,11 +59,11 @@ public sealed class PoolMetricsTests(MultiDbFixture fixture)
         List<Task<DbResult<int>>> tasks = [];
         for (int i = 0; i < 50; i++)
         {
-            tasks.Add(_db.Sql("SELECT 1 AS Val").ExecuteScalarAsync<int>());
+            tasks.Add(_db.Sql("SELECT 1 AS Val").ExecuteScalarAsync<int>(TestContext.Current.CancellationToken));
         }
 
         // Act
-        DbResult<int>[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        DbResult<int>[] results = await Task.WhenAll(tasks);
 
         // Assert — 모든 쿼리가 메트릭 예외 없이 성공
         results.Should().AllSatisfy(r =>
@@ -94,7 +94,7 @@ public sealed class PoolMetricsTests(MultiDbFixture fixture)
 
             DbResult<int> result = await _db
                 .Sql("SELECT 1")
-                .ExecuteScalarAsync<int>();
+                .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
             result.IsSuccess.Should().BeTrue();
             result.Value.Should().Be(1);

@@ -141,7 +141,17 @@ if (result.IsSuccess)
 }
 ```
 
-**결과 타입**: `DbResult<IMultipleResultReader>`
+`Lib.Db.Extensions`를 사용할 수 있으면 typed helper가 reader disposal과 redacted read-failure mapping을 대신 처리합니다.
+
+```csharp
+DbResult<DbMultiple<UserInfo, OrderInfo>> result = await session.Default
+    .Procedure("dbo.usp_GetUserWithOrders")
+    .With(new { UserId = 1 })
+    .QueryMultipleAsync()
+    .ReadMultipleAsync<UserInfo, OrderInfo>();
+```
+
+**결과 타입**: `DbResult<IMultipleResultReader>` 또는 typed helper 사용 시 `DbResult<DbMultiple<...>>`
 **주의사항**: `ReadAsync` / `ReadSingleAsync`는 반드시 SP가 반환하는 ResultSet 순서대로 호출해야 합니다. C#에서 읽지 않은 추가 ResultSet은 `IMultipleResultReader` dispose 시 정리되므로, SP가 뒤에 진단용 SELECT를 추가해도 호출부가 선언한 ResultSet만 읽을 수 있습니다. 반대로 호출부가 다음 ResultSet을 기대했는데 SP가 더 이상 ResultSet을 반환하지 않으면 `InvalidOperationException`이 발생합니다. ResultSet은 존재하지만 행이 0개인 경우에는 빈 리스트 또는 `default`를 반환합니다. `QueryMultipleAsync`는 MARS가 가능한 연결에서 사용하세요.
 
 ---
@@ -253,49 +263,100 @@ DbResult<IAsyncEnumerable<TenantConfig>> result = await session
 
 ---
 
-## 레시피 11: BulkInsertAsync (대량 INSERT)
+## 레시피 11: AOT-safe Bulk Mutations
 
-**상황**: 수만 건의 레코드를 SqlBulkCopy로 고속 삽입합니다.
+**상황**: 수만 건의 레코드를 AOT-safe shape로 삽입, 수정, 삭제, upsert, merge-like mutation 처리합니다.
 
 ```csharp
 public class SensorReading
 {
     public int SensorId { get; init; }
-    public double Value { get; init; }
+    public decimal Value { get; init; }
     public DateTime Timestamp { get; init; }
 }
+
+BulkShape<SensorReading> shape = BulkShape.For<SensorReading>()
+    .Key("SensorId", SqlDbType.Int, static row => row.SensorId)
+    .Column("Value", SqlDbType.Decimal, static row => row.Value, precision: 9, scale: 2)
+    .Column("Timestamp", SqlDbType.DateTime2, static row => row.Timestamp, scale: 7)
+    .Build();
 
 List<SensorReading> readings = Enumerable.Range(1, 50_000)
     .Select(i => new SensorReading
     {
-        SensorId = i % 100,
-        Value = Random.Shared.NextDouble() * 100,
-        Timestamp = DateTime.UtcNow
+        SensorId = i,
+        Value = decimal.Round((decimal)Random.Shared.NextDouble() * 100, 2),
+        Timestamp = DateTime.UtcNow.AddSeconds(i)
     })
     .ToList();
+```
 
-BulkInsertOptions options = new()
-{
-    BatchSize = 10_000,
-    TimeoutSeconds = 300,
-    EnableStreaming = true,
-    FireTriggers = false
-};
+### Insert
 
-DbResult<long> result = await session.BulkInsertAsync(
+```csharp
+DbResult<long> insertResult = await session.BulkInsertAsync(
     "Default",
     "[dbo].[SensorReadings]",
     readings,
-    options);
+    shape,
+    new BulkWriteOptions { BatchSize = 10_000 });
+```
 
-if (result.IsSuccess)
+### Update
+
+```csharp
+DbResult<long> updateResult = await session.BulkUpdateAsync(
+    "Default",
+    "[dbo].[SensorReadings]",
+    readings,
+    shape);
+```
+
+### Delete by key
+
+```csharp
+DbResult<long> deleteResult = await session.BulkDeleteAsync(
+    "Default",
+    "[dbo].[SensorReadings]",
+    readings,
+    shape);
+```
+
+`BulkDeleteAsync`는 key column만 staging합니다. Writable column getter가 있더라도 delete 대상 row value를 stage table에 올리지 않습니다.
+
+### Upsert
+
+```csharp
+DbResult<BulkUpsertResult> upsertResult = await session.BulkUpsertAsync(
+    "Default",
+    "[dbo].[SensorReadings]",
+    readings,
+    shape);
+
+if (upsertResult.IsSuccess)
 {
-    Console.WriteLine($"삽입 완료: {result.Value:N0}건");
+    Console.WriteLine($"inserted={upsertResult.Value.Inserted}, updated={upsertResult.Value.Updated}");
 }
 ```
 
-**결과 타입**: `DbResult<long>` (삽입된 행 수)
-**주의사항**: Reflection 기반이므로 AOT 환경에서는 사용할 수 없습니다. T의 public property 이름이 대상 테이블 컬럼 이름과 일치해야 합니다.
+### Merge delete matched
+
+```csharp
+DbResult<BulkMergeResult> mergeResult = await session.BulkMergeAsync(
+    "Default",
+    "[dbo].[SensorReadings]",
+    readings,
+    shape,
+    new BulkMergeOptions { Actions = BulkMergeActions.DeleteMatched });
+
+if (mergeResult.IsSuccess)
+{
+    Console.WriteLine($"deleted={mergeResult.Value.Deleted}");
+}
+```
+
+**결과 타입**: `DbResult<long>`, `DbResult<BulkUpsertResult>`, `DbResult<BulkMergeResult>`
+**주의사항**: Legacy `BulkInsertAsync<T>(..., BulkInsertOptions?)`는 여전히 사용할 수 있지만 reflection 기반이므로 AOT 환경에서는 `BulkShape<T>` overload를 사용하세요. Update/delete/upsert/merge는 SQL Server `MERGE` statement를 사용하지 않는 staged DML입니다. Duplicate source key는 target DML 전에 거부되고, target key는 애플리케이션 schema의 `PRIMARY KEY` 또는 `UNIQUE` 제약/인덱스로 보호되어야 합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 v2.4.0에서 지원하지 않는 action으로 거부됩니다. `CheckConstraints` 기본값은 AOT-safe insert에서 `true`입니다. Staged mutation은 `UseTransaction = false`, `FireTriggers = true`, `KeepIdentity = true`, `CheckConstraints = false`를 연결 open 전에 거부합니다. Direct insert에서 `UseTransaction = false`는 partial row가 남을 수 있는 non-atomic opt-out입니다.
 
 ---
 
@@ -463,13 +524,16 @@ if (!result.IsSuccess)
 **상황**: 자주 조회하지만 변경이 드문 데이터를 캐시합니다.
 
 ```csharp
-// DI: IDistributedCache cache (MemoryDistributedCache, Redis 등)
+// DI: IDistributedCache cache (Redis, SQL Server, Postgres 등 provider-backed L2)
+// MemoryDistributedCache는 프로세스 로컬 캐시이므로 운영 L2로 간주하지 않습니다.
+
+string userProfileCacheKey = cacheKeys.UserProfile(userId); // opaque app-owned label, not the raw identifier
 
 DbResult<UserDto?> result = await session.Default
     .Procedure("dbo.usp_GetUser")
-    .With(new { UserId = 1 })
+    .With(new { UserId = userId })
     .QuerySingleAsync<UserDto>()
-    .WithCacheAsync(cache, "user:1", TimeSpan.FromMinutes(5));
+    .WithCacheAsync(cache, userProfileCacheKey, TimeSpan.FromMinutes(5));
 
 if (result.IsSuccess)
 {
@@ -477,7 +541,7 @@ if (result.IsSuccess)
 }
 
 // 데이터 변경 후 캐시 무효화
-await cache.InvalidateCacheAsync("user:1");
+await cache.InvalidateCacheAsync(userProfileCacheKey);
 ```
 
 **결과 타입**: `DbResult<UserDto?>`
@@ -516,15 +580,21 @@ if (result.IsSuccess)
 ```csharp
 // DI: HybridCache hybridCache
 
+string productCacheKey = cacheKeys.Product(productId); // opaque app-owned label
+
 DbResult<ProductDto?> result = await session.Default
     .Procedure("dbo.usp_GetProduct")
-    .With(new { ProductId = 42 })
+    .With(new { ProductId = productId })
     .QuerySingleAsync<ProductDto>()
-    .WithHybridCacheAsync(hybridCache, "product:42", TimeSpan.FromMinutes(30));
+    .WithHybridCacheAsync(
+        hybridCache,
+        productCacheKey,
+        TimeSpan.FromMinutes(30),
+        tags: ["entity:product-catalog", "schema:product"]);
 ```
 
 **결과 타입**: `DbResult<ProductDto?>`
-**주의사항**: HybridCache 팩토리에서 예외 발생 시 캐시되지 않습니다. DB 쿼리 실패 시 `InvalidOperationException`이 발생합니다.
+**주의사항**: Tag는 `RemoveByTagAsync` 논리 invalidation용 애플리케이션 소유 라벨입니다. Null element, 빈 문자열/공백, 앞뒤 공백, wildcard `*`, 중복 제거 후 32개 초과는 거부됩니다. Cache key/tag에는 민감값을 넣지 마세요. Provider-backed L2가 있어도 current-server tag invalidation이 다른 서버의 in-memory L1 entry를 물리적으로 지우지는 않습니다. 이 overload는 이미 만들어진 DB task를 받으므로 cache hit가 DB task 생성 side effect나 이후 fault를 취소하지 않습니다. Native AOT/trimming 배포에서는 HybridCache payload serializer도 AOT-compatible하게 구성하세요. 실패는 generic `InvalidOperationException`으로 redaction됩니다.
 
 ---
 
@@ -670,9 +740,15 @@ result.LogIfFailed(logger, "주문 처리");
 ```csharp
 using Lib.Db;
 
+public interface ICacheKeyFactory
+{
+    string CustomerOrders(int customerId);
+}
+
 public sealed class OrderService(
     IDbSession session,
     IDistributedCache cache,
+    ICacheKeyFactory cacheKeys,
     ILogger<OrderService> logger)
 {
     public async Task<DbResult<long>> CreateOrderAsync(
@@ -729,7 +805,7 @@ public sealed class OrderService(
         }
 
         // 5. 캐시 무효화
-        await cache.InvalidateCacheAsync($"customer:{customerId}:orders");
+        await cache.InvalidateCacheAsync(cacheKeys.CustomerOrders(customerId));
 
         return DbResult<long>.Ok(orderId);
     }

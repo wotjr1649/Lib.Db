@@ -35,7 +35,7 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("test.usp_Error_Custom_50001")
             .With(new { OrderId = 99999, Action = "VALIDATE" })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -58,7 +58,7 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("test.usp_Error_Custom_50001")
             .With(new { OrderId = 1, Action = "RETRY" })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -81,7 +81,7 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("test.usp_Error_Custom_50001")
             .With(new { OrderId = 1, Action = "UNKNOWN" })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();
@@ -104,7 +104,7 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         DbResult<int> errorResult = await _db
             .Procedure("test.usp_Error_Custom_50001")
             .With(new { OrderId = 99999, Action = "VALIDATE" })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         errorResult.IsSuccess.Should().BeFalse();
         errorResult.Error!.Value.SqlErrorCode.Should().Be(50001);
@@ -114,7 +114,7 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         DbResult<int> insertUserResult = await _db
             .Procedure("core.usp_Core_Insert_User")
             .With(new { UserName = "RecoveryUser", Email = uniqueEmail, Age = (int?)30 })
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         insertUserResult.IsSuccess.Should().BeTrue();
         int newUserId = insertUserResult.Value;
@@ -122,7 +122,7 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         // Orders 테이블에 직접 주문 삽입
         DbResult<int> insertOrderResult = await _db
             .Sql($"INSERT INTO [core].[Orders] (UserId, ProductId, Quantity, TotalPrice) VALUES ({newUserId}, 1, 1, 100.00); SELECT CAST(SCOPE_IDENTITY() AS INT);")
-            .ExecuteScalarAsync<int>();
+            .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
 
         insertOrderResult.IsSuccess.Should().BeTrue();
         int newOrderId = insertOrderResult.Value;
@@ -131,13 +131,13 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> successResult = await _db
             .Procedure("test.usp_Error_Custom_50001")
             .With(new { OrderId = newOrderId, Action = "VALIDATE" })
-            .QueryAsync<Dictionary<string, object?>>();
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         successResult.IsSuccess.Should().BeTrue();
 
         // Cleanup
-        await _db.Sql($"DELETE FROM [core].[Orders] WHERE OrderId = {newOrderId}").ExecuteAsync();
-        await _db.Sql($"DELETE FROM [core].[Users] WHERE Email = '{uniqueEmail}'").ExecuteAsync();
+        await _db.Sql($"DELETE FROM [core].[Orders] WHERE OrderId = {newOrderId}").ExecuteAsync(TestContext.Current.CancellationToken);
+        await _db.Sql($"DELETE FROM [core].[Users] WHERE Email = '{uniqueEmail}'").ExecuteAsync(TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -156,7 +156,7 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         DbResult<int> result = await _db
             .Procedure("test.usp_Error_Custom_50001")
             .With(new { OrderId = 99999, Action = "VALIDATE" })
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeFalse();

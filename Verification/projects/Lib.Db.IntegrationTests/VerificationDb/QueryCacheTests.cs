@@ -44,8 +44,8 @@ public sealed class QueryCacheTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<CoreUser?> result = await _db
             .Procedure("core.usp_Core_Get_User")
             .With(new { UserId = 1 })
-            .QuerySingleAsync<CoreUser>()
-            .WithCacheAsync(cache, cacheKey, TimeSpan.FromMinutes(5));
+            .QuerySingleAsync<CoreUser>(TestContext.Current.CancellationToken)
+            .WithCacheAsync(cache, cacheKey, TimeSpan.FromMinutes(5), ct: TestContext.Current.CancellationToken);
 
         // Assert
         result.IsSuccess.Should().BeTrue("첫 호출은 DB에서 조회되어야 합니다.");
@@ -53,7 +53,7 @@ public sealed class QueryCacheTests(MultiDbFixture fixture, ITestOutputHelper ou
         result.Value!.UserName.Should().NotBeNullOrEmpty();
 
         // 캐시에 저장되었는지 확인
-        byte[]? cachedBytes = await cache.GetAsync(cacheKey);
+        byte[]? cachedBytes = await cache.GetAsync(cacheKey, TestContext.Current.CancellationToken);
         cachedBytes.Should().NotBeNull("결과가 캐시에 저장되어야 합니다.");
         cachedBytes!.Length.Should().BeGreaterThan(0);
 
@@ -83,8 +83,8 @@ public sealed class QueryCacheTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<CoreUser?> result1 = await _db
             .Procedure("core.usp_Core_Get_User")
             .With(new { UserId = 1 })
-            .QuerySingleAsync<CoreUser>()
-            .WithCacheAsync(cache, cacheKey, cacheDuration);
+            .QuerySingleAsync<CoreUser>(TestContext.Current.CancellationToken)
+            .WithCacheAsync(cache, cacheKey, cacheDuration, ct: TestContext.Current.CancellationToken);
         sw1.Stop();
 
         // Act 2 — 두 번째 호출: 캐시에서 반환 (캐시 히트)
@@ -94,8 +94,8 @@ public sealed class QueryCacheTests(MultiDbFixture fixture, ITestOutputHelper ou
         DbResult<CoreUser?> result2 = await _db
             .Procedure("core.usp_Core_Get_User")
             .With(new { UserId = 1 })
-            .QuerySingleAsync<CoreUser>()
-            .WithCacheAsync(cache, cacheKey, cacheDuration);
+            .QuerySingleAsync<CoreUser>(TestContext.Current.CancellationToken)
+            .WithCacheAsync(cache, cacheKey, cacheDuration, ct: TestContext.Current.CancellationToken);
         sw2.Stop();
 
         // Assert

@@ -198,9 +198,9 @@ Lib.Db는 options validation 단계에서 연결 문자열 이름, 키 매핑, �
 | 스테이징 | 60 (기본값) |
 | 프로덕션 | 300~600 (안정적 스키마) |
 
-### 6-2. SharedMemoryCache 스트라이프
+### 6-2. SharedMemoryCache opt-in 스트라이프
 
-128개 Mutex 스트라이프가 기본이며, 대부분의 워크로드에 적합합니다.
+`AddLibDbSharedMemoryCache()`로 명시 등록한 경우 128개 Mutex 스트라이프가 기본이며, 대부분의 동일 호스트 IPC 워크로드에 적합합니다.
 동시 프로세스 수가 매우 많은 경우 `BasePath` 격리를 확인하세요.
 
 ### 6-3. Polly 재시도 설정

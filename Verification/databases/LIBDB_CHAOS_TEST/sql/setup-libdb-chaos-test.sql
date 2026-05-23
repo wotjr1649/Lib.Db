@@ -1,6 +1,6 @@
 -- ============================================================================
 -- File: setup-libdb-chaos-test.sql
--- Purpose: Isolated chaos/fault-injection database for Lib.Db v2.3.0.
+-- Purpose: Isolated chaos/fault-injection database for Lib.Db verification.
 -- Target DB: LIBDB_CHAOS_TEST
 -- Secret: set SQLCMDPASSWORD in the environment before running sqlcmd.
 -- Run: sqlcmd -S localhost -U SA -N o -i setup-libdb-chaos-test.sql -f 65001

@@ -40,7 +40,7 @@ public sealed class TransactionAbortedTests(MultiDbFixture fixture)
         // Act — XACT_ABORT ON + NOT NULL 위반으로 DOOMED 트랜잭션 유발
         DbResult<int> result = await _db
             .Procedure("test.usp_Simulate_TransactionAborted")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert — 실패해야 함
         result.IsSuccess.Should().BeFalse();
@@ -65,7 +65,7 @@ public sealed class TransactionAbortedTests(MultiDbFixture fixture)
         // Act — IDENTITY 열에 명시적 값 삽입 (IDENTITY_INSERT OFF) → SQL 에러 544
         DbResult<int> result = await _db
             .Sql("INSERT INTO core.Users (UserId, UserName, Email) VALUES (999999, N'UnknownTest', N'unknown@test.com')")
-            .ExecuteAsync();
+            .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert — 실패하고 Kind가 Unknown (SQL 544는 매핑 안 됨)
         result.IsSuccess.Should().BeFalse();

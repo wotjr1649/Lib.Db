@@ -12,6 +12,20 @@ namespace Lib.Db.IntegrationTests.Unit;
 
 public sealed class TestConnectionStringsTests
 {
+    private static readonly string[] s_connectionEnvironmentVariables =
+    [
+        "ConnectionStrings__Verification",
+        "ConnectionStrings__Sorter",
+        "ConnectionStrings__Stress",
+        "ConnectionStrings__Chaos",
+        "ConnectionStrings__Benchmark",
+        "LIBDB_TEST_CONNECTION_VERIFICATION",
+        "LIBDB_TEST_CONNECTION_SORTER",
+        "LIBDB_TEST_CONNECTION_STRESS",
+        "LIBDB_TEST_CONNECTION_CHAOS",
+        "LIBDB_TEST_CONNECTION_BENCHMARK"
+    ];
+
     [Fact]
     public void TCS01_CreateConfiguration_ShouldNormalizeAliasEnvironmentVariables()
     {
@@ -106,7 +120,7 @@ public sealed class TestConnectionStringsTests
     public void TCS06_CreateConfiguration_ShouldGenerateLocalSqlConnectionFromAppsettingsWithoutFilePassword()
     {
         const string passwordEnvironmentVariable = "LIBDB_TEST_GENERATED_PASSWORD_UNIT";
-        WithEnvironmentVariable(passwordEnvironmentVariable, "unit-only-value", () =>
+        WithIsolatedConnectionEnvironment(() => WithEnvironmentVariable(passwordEnvironmentVariable, "unit-only-value", () =>
         {
             IConfigurationRoot configuration = TestConnectionStrings.CreateConfiguration(
                 configurationOverrides: LocalSqlOverrides(
@@ -122,14 +136,14 @@ public sealed class TestConnectionStringsTests
             builder.InitialCatalog.Should().Be("LIBDB_VERIFICATION_TEST");
             builder.UserID.Should().Be("SA");
             builder.Password.Should().NotBeNullOrWhiteSpace();
-        });
+        }));
     }
 
     [Fact]
     public void TCS07_CreateConfiguration_ShouldNotGenerateConnectionForRemoteDataSource()
     {
         const string passwordEnvironmentVariable = "LIBDB_TEST_GENERATED_PASSWORD_UNIT";
-        WithEnvironmentVariable(passwordEnvironmentVariable, "unit-only-value", () =>
+        WithIsolatedConnectionEnvironment(() => WithEnvironmentVariable(passwordEnvironmentVariable, "unit-only-value", () =>
         {
             IConfigurationRoot configuration = TestConnectionStrings.CreateConfiguration(
                 configurationOverrides: LocalSqlOverrides(
@@ -139,7 +153,7 @@ public sealed class TestConnectionStringsTests
             TestConnectionStrings.TryGet(configuration, TestConnectionStrings.Verification, out _)
                 .Should()
                 .BeFalse();
-        });
+        }));
     }
 
     [Fact]
@@ -150,7 +164,8 @@ public sealed class TestConnectionStringsTests
             dataSource: "127.0.0.1");
         overrides["LibDbTest:SqlServer:Password"] = "forbidden";
 
-        Action act = () => TestConnectionStrings.CreateConfiguration(configurationOverrides: overrides);
+        Action act = () => WithIsolatedConnectionEnvironment(() =>
+            TestConnectionStrings.CreateConfiguration(configurationOverrides: overrides));
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*LibDbTest:SqlServer:Password*PasswordEnvironmentVariable*");
@@ -312,6 +327,27 @@ public sealed class TestConnectionStringsTests
         finally
         {
             Environment.SetEnvironmentVariable(name, previous);
+        }
+    }
+
+    private static void WithIsolatedConnectionEnvironment(Action action)
+    {
+        Dictionary<string, string?> previous = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string name in s_connectionEnvironmentVariables)
+        {
+            previous[name] = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, null);
+        }
+
+        try
+        {
+            action();
+        }
+        finally
+        {
+            foreach ((string name, string? value) in previous)
+                Environment.SetEnvironmentVariable(name, value);
         }
     }
 }

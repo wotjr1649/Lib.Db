@@ -36,7 +36,7 @@ IProcedureStage → IParameterStage → IExecutionStage<T> → DbResult<T>
 | **Core** | 저수준 프리미티브 | DbSession, InterpolatedStringHandler |
 | **Infrastructure** | 바인딩/진단 | DbBinder, DiagnosticLogger |
 | **Execution** | SQL 실행 엔진 | SqlDbExecutor, DbConnectionFactory |
-| **Caching** | L1+L2 하이브리드 캐시 | SharedMemoryCache, GlobalCacheEpoch |
+| **Caching** | Provider-neutral local/L2 캐시 | HybridCache, optional IDistributedCache provider, SharedMemoryCache opt-in |
 
 ---
 
@@ -95,7 +95,6 @@ builder.Services.AddHighPerformanceDb(options =>
     options.ConnectionStrings["Main"] = "Server=...";
     options.ConnectionStringNames = ["Main"];
     options.DefaultCommandTimeoutSeconds = 60;
-    options.EnableSharedMemoryCache = false;
 });
 ```
 
