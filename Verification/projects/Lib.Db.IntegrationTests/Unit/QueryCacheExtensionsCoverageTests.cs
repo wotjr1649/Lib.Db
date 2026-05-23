@@ -406,6 +406,30 @@ public sealed class QueryCacheExtensionsCoverageTests
     }
 
     [Fact]
+    public async Task WithHybridCacheAsync_ShouldThrowGenericMessageWhenHybridCacheProviderFails()
+    {
+        HybridCache cache = new ThrowingHybridCache(
+            new InvalidOperationException("cache payload leak for UserId=123 in dbo.SecretTenant"));
+
+        Func<Task> act = () => Task
+            .FromResult(DbResult<CachedUser?>.Ok(new CachedUser(12, "provider-failure")))
+            .WithHybridCacheAsync(
+                cache,
+                "hybrid:provider-failure",
+                TimeSpan.FromMinutes(1),
+                TestContext.Current.CancellationToken);
+
+        InvalidOperationException exception = (await act.Should()
+            .ThrowAsync<InvalidOperationException>()).Which;
+
+        exception.Message.Should().Be("DB query failed.");
+        exception.InnerException.Should().BeNull();
+        exception.ToString().Should().NotContain("cache payload");
+        exception.ToString().Should().NotContain("UserId=123");
+        exception.ToString().Should().NotContain("SecretTenant");
+    }
+
+    [Fact]
     public async Task WithHybridCacheAsync_ShouldPreserveCancellationWhenResultTaskCancels()
     {
         var cache = new LibDbAotHybridCache();
@@ -472,6 +496,32 @@ public sealed class QueryCacheExtensionsCoverageTests
     }
 
     private sealed record CachedUser(int Id, string Name);
+
+    private sealed class ThrowingHybridCache(Exception exception) : HybridCache
+    {
+        public override ValueTask<T> GetOrCreateAsync<TState, T>(
+            string key,
+            TState state,
+            Func<TState, CancellationToken, ValueTask<T>> underlyingDataCallback,
+            HybridCacheEntryOptions? options = null,
+            IEnumerable<string>? tags = null,
+            CancellationToken cancellationToken = default)
+            => throw exception;
+
+        public override ValueTask SetAsync<T>(
+            string key,
+            T value,
+            HybridCacheEntryOptions? options = null,
+            IEnumerable<string>? tags = null,
+            CancellationToken cancellationToken = default)
+            => throw exception;
+
+        public override ValueTask RemoveAsync(string key, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public override ValueTask RemoveByTagAsync(string tag, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+    }
 
     private sealed class InMemoryDistributedCache : IDistributedCache
     {

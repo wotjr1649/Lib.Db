@@ -523,11 +523,13 @@ string serialized = info.ToJson();
 ### 9-1. IDistributedCache 단건 캐싱
 
 ```csharp
+string userProfileCacheKey = cacheKeys.UserProfile(userId); // opaque app-owned label, not the raw identifier
+
 DbResult<UserDto?> result = await session.Default
     .Procedure("dbo.usp_GetUser")
-    .With(new { UserId = 1 })
+    .With(new { UserId = userId })
     .QuerySingleAsync<UserDto>()
-    .WithCacheAsync(cache, "user:1", TimeSpan.FromMinutes(5));
+    .WithCacheAsync(cache, userProfileCacheKey, TimeSpan.FromMinutes(5));
 ```
 
 ### 9-2. IDistributedCache 다건 캐싱
@@ -544,15 +546,17 @@ DbResult<List<CategoryDto>> result = await session.Default
 ### 9-3. HybridCache (L1 + L2)
 
 ```csharp
+string productCacheKey = cacheKeys.Product(productId); // opaque app-owned label
+
 DbResult<ProductDto?> result = await session.Default
     .Procedure("dbo.usp_GetProduct")
-    .With(new { ProductId = 42 })
+    .With(new { ProductId = productId })
     .QuerySingleAsync<ProductDto>()
     .WithHybridCacheAsync(
         hybridCache,
-        "product:42",
+        productCacheKey,
         TimeSpan.FromMinutes(30),
-        tags: ["product", "schema:product"]);
+        tags: ["entity:product-catalog", "schema:product"]);
 ```
 
 `tags`는 `RemoveByTagAsync` 기반 논리 무효화를 위한 애플리케이션 소유 라벨입니다. null은 태그 없음을 의미하며, null 요소, 빈 문자열/공백, 앞뒤 공백, wildcard 예약값 `*`, 중복 제거 후 32개 초과 태그는 거부됩니다. 태그에는 사용자 ID, 전자메일, 토큰, 연결 문자열, SQL 원문 같은 민감값을 넣지 마세요.
@@ -566,8 +570,8 @@ Native AOT 또는 trimming 배포에서 provider-backed L2를 사용할 때는 H
 ### 9-4. 캐시 무효화
 
 ```csharp
-await cache.InvalidateCacheAsync("user:1");
-await hybridCache.RemoveByTagAsync("product");
+await cache.InvalidateCacheAsync(userProfileCacheKey);
+await hybridCache.RemoveByTagAsync("entity:product-catalog");
 ```
 
 `RemoveByTagAsync`는 태그에 연결된 entry의 논리 invalidation을 요청합니다. provider-backed L2가 없는 local-only 구성에서는 현재 프로세스의 HybridCache entry에만 의미가 있습니다. provider-backed L2가 있으면 current-server/L2 가시성은 바뀌지만, 다른 서버가 이미 들고 있는 in-memory L1 entry가 현재 서버 호출만으로 물리적으로 지워진다고 가정하면 안 됩니다.

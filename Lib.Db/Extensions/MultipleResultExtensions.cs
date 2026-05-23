@@ -76,7 +76,7 @@ public static class MultipleResultExtensions
         {
             DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
             if (!result.IsSuccess)
-                return DbResult<DbMultiple<T1, T2>>.Fail(result.Error!.Value);
+                return ToReadFailure<DbMultiple<T1, T2>>(result.Error);
 
             await using IMultipleResultReader reader = result.Value!;
             List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
@@ -111,7 +111,7 @@ public static class MultipleResultExtensions
         {
             DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
             if (!result.IsSuccess)
-                return DbResult<DbMultiple<T1, T2, T3>>.Fail(result.Error!.Value);
+                return ToReadFailure<DbMultiple<T1, T2, T3>>(result.Error);
 
             await using IMultipleResultReader reader = result.Value!;
             List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
@@ -148,7 +148,7 @@ public static class MultipleResultExtensions
         {
             DbResult<IMultipleResultReader> result = await readerTask.ConfigureAwait(false);
             if (!result.IsSuccess)
-                return DbResult<DbMultiple<T1, T2, T3, T4>>.Fail(result.Error!.Value);
+                return ToReadFailure<DbMultiple<T1, T2, T3, T4>>(result.Error);
 
             await using IMultipleResultReader reader = result.Value!;
             List<T1> first = await reader.ReadAsync<T1>(ct).ConfigureAwait(false);
@@ -172,6 +172,16 @@ public static class MultipleResultExtensions
         => DbResult<T>.Fail(new DbError
         {
             Kind = DbErrorKind.Unknown,
+            Message = ReadFailureMessage
+        });
+
+    private static DbResult<T> ToReadFailure<T>(DbError? source)
+        => DbResult<T>.Fail(new DbError
+        {
+            Kind = source?.Kind ?? DbErrorKind.Unknown,
+            SqlErrorCode = source?.SqlErrorCode ?? 0,
+            Severity = source?.Severity ?? 0,
+            IsTransient = source?.IsTransient ?? false,
             Message = ReadFailureMessage
         });
 }

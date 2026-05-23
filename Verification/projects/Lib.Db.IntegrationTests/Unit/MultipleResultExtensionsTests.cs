@@ -71,15 +71,17 @@ public sealed class MultipleResultExtensionsTests
     }
 
     [Fact]
-    public async Task ReadMultipleAsync_ShouldPropagateFailedDbResult()
+    public async Task ReadMultipleAsync_ShouldRedactFailedReaderResult()
     {
         DbError error = new()
         {
-            Kind = DbErrorKind.Unknown,
-            SqlErrorCode = 0,
-            Severity = 0,
-            IsTransient = false,
-            Message = "QueryMultiple failed"
+            Kind = DbErrorKind.Timeout,
+            SqlErrorCode = -2,
+            Severity = 12,
+            IsTransient = true,
+            Message = "QueryMultiple failed: SELECT * FROM dbo.SecretTenant WHERE UserId=123",
+            ObjectName = "dbo.SecretTenant",
+            InnerException = new InvalidOperationException("provider row value leak")
         };
 
         DbResult<DbMultiple<UserRow, OrderRow>> result = await Task
@@ -87,7 +89,15 @@ public sealed class MultipleResultExtensionsTests
             .ReadMultipleAsync<UserRow, OrderRow>(TestContext.Current.CancellationToken);
 
         result.IsSuccess.Should().BeFalse();
-        result.Error.Should().Be(error);
+        result.Error!.Value.Message.Should().Be("Reading multiple result sets failed.");
+        result.Error.Value.Kind.Should().Be(DbErrorKind.Timeout);
+        result.Error.Value.SqlErrorCode.Should().Be(-2);
+        result.Error.Value.Severity.Should().Be(12);
+        result.Error.Value.IsTransient.Should().BeTrue();
+        result.Error.Value.Message.Should().NotContain("SecretTenant");
+        result.Error.Value.Message.Should().NotContain("UserId=123");
+        result.Error.Value.ObjectName.Should().BeNull();
+        result.Error.Value.InnerException.Should().BeNull();
     }
 
     [Fact]

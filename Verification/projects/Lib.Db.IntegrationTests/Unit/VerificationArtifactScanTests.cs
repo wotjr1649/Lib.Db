@@ -174,6 +174,33 @@ public sealed class VerificationArtifactScanTests
     }
 
     [Fact]
+    public async Task Scanner_ShouldFlagShortNumericTenantAndUserIdentifiersWithoutEchoingValues()
+    {
+        using TemporaryArtifactRoot root = new();
+        string file = Path.Combine(root.Path, "numeric-identifiers.log");
+        string tenantId = "42";
+        string userId = "123";
+
+        await File.WriteAllLinesAsync(
+            file,
+            [
+                $"TenantId={tenantId}",
+                $"UserId = {userId}",
+                $"\"TenantId\": \"{tenantId}\"",
+                "EmailAddress: user@example.invalid"
+            ],
+            TestContext.Current.CancellationToken);
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Marker: TenantUserIdentifier");
+        result.Output.Should().NotContain(tenantId);
+        result.Output.Should().NotContain(userId);
+        result.Output.Should().NotContain("user@example.invalid");
+    }
+
+    [Fact]
     public async Task ScannerSelfTest_ShouldRunWithoutEchoingFixtureValues()
     {
         ProcessResult result = await RunScannerSelfTestAsync();

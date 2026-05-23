@@ -284,9 +284,9 @@ BulkShape<SensorReading> shape = BulkShape.For<SensorReading>()
 List<SensorReading> readings = Enumerable.Range(1, 50_000)
     .Select(i => new SensorReading
     {
-        SensorId = i % 100,
+        SensorId = i,
         Value = decimal.Round((decimal)Random.Shared.NextDouble() * 100, 2),
-        Timestamp = DateTime.UtcNow
+        Timestamp = DateTime.UtcNow.AddSeconds(i)
     })
     .ToList();
 ```
@@ -527,11 +527,13 @@ if (!result.IsSuccess)
 // DI: IDistributedCache cache (Redis, SQL Server, Postgres 등 provider-backed L2)
 // MemoryDistributedCache는 프로세스 로컬 캐시이므로 운영 L2로 간주하지 않습니다.
 
+string userProfileCacheKey = cacheKeys.UserProfile(userId); // opaque app-owned label, not the raw identifier
+
 DbResult<UserDto?> result = await session.Default
     .Procedure("dbo.usp_GetUser")
-    .With(new { UserId = 1 })
+    .With(new { UserId = userId })
     .QuerySingleAsync<UserDto>()
-    .WithCacheAsync(cache, "user:1", TimeSpan.FromMinutes(5));
+    .WithCacheAsync(cache, userProfileCacheKey, TimeSpan.FromMinutes(5));
 
 if (result.IsSuccess)
 {
@@ -539,7 +541,7 @@ if (result.IsSuccess)
 }
 
 // 데이터 변경 후 캐시 무효화
-await cache.InvalidateCacheAsync("user:1");
+await cache.InvalidateCacheAsync(userProfileCacheKey);
 ```
 
 **결과 타입**: `DbResult<UserDto?>`
@@ -578,15 +580,17 @@ if (result.IsSuccess)
 ```csharp
 // DI: HybridCache hybridCache
 
+string productCacheKey = cacheKeys.Product(productId); // opaque app-owned label
+
 DbResult<ProductDto?> result = await session.Default
     .Procedure("dbo.usp_GetProduct")
-    .With(new { ProductId = 42 })
+    .With(new { ProductId = productId })
     .QuerySingleAsync<ProductDto>()
     .WithHybridCacheAsync(
         hybridCache,
-        "product:42",
+        productCacheKey,
         TimeSpan.FromMinutes(30),
-        tags: ["product", "schema:product"]);
+        tags: ["entity:product-catalog", "schema:product"]);
 ```
 
 **결과 타입**: `DbResult<ProductDto?>`
@@ -736,9 +740,15 @@ result.LogIfFailed(logger, "주문 처리");
 ```csharp
 using Lib.Db;
 
+public interface ICacheKeyFactory
+{
+    string CustomerOrders(int customerId);
+}
+
 public sealed class OrderService(
     IDbSession session,
     IDistributedCache cache,
+    ICacheKeyFactory cacheKeys,
     ILogger<OrderService> logger)
 {
     public async Task<DbResult<long>> CreateOrderAsync(
@@ -795,7 +805,7 @@ public sealed class OrderService(
         }
 
         // 5. 캐시 무효화
-        await cache.InvalidateCacheAsync($"customer:{customerId}:orders");
+        await cache.InvalidateCacheAsync(cacheKeys.CustomerOrders(customerId));
 
         return DbResult<long>.Ok(orderId);
     }

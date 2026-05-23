@@ -551,11 +551,13 @@ else if (!result.IsSuccess)
 #### 단건 캐싱
 
 ```csharp
+string userProfileCacheKey = cacheKeys.UserProfile(userId); // opaque app-owned label, not the raw identifier
+
 DbResult<UserDto?> result = await session.Default
     .Procedure("dbo.usp_GetUser")
-    .With(new { UserId = 1 })
+    .With(new { UserId = userId })
     .QuerySingleAsync<UserDto>()
-    .WithCacheAsync(cache, "user:1", TimeSpan.FromMinutes(5));
+    .WithCacheAsync(cache, userProfileCacheKey, TimeSpan.FromMinutes(5));
 ```
 
 **시그니처:**
@@ -596,11 +598,13 @@ public static Task<DbResult<List<T>>> WithCacheListAsync<T>(
 L1(메모리) + L2(분산) 계층 캐시를 자동 적용합니다.
 
 ```csharp
+string userProfileCacheKey = cacheKeys.UserProfile(userId); // opaque app-owned label, not the raw identifier
+
 DbResult<UserDto?> result = await session.Default
     .Procedure("dbo.usp_GetUser")
-    .With(new { UserId = 1 })
+    .With(new { UserId = userId })
     .QuerySingleAsync<UserDto>()
-    .WithHybridCacheAsync(hybridCache, "user:1", TimeSpan.FromMinutes(10));
+    .WithHybridCacheAsync(hybridCache, userProfileCacheKey, TimeSpan.FromMinutes(10));
 ```
 
 **시그니처:**
@@ -617,15 +621,17 @@ public static Task<DbResult<T?>> WithHybridCacheAsync<T>(
 태그가 필요한 경우 `tags` overload를 사용합니다.
 
 ```csharp
+string userProfileCacheKey = cacheKeys.UserProfile(userId); // opaque app-owned label, not the raw identifier
+
 DbResult<UserDto?> result = await session.Default
     .Procedure("dbo.usp_GetUser")
-    .With(new { UserId = 1 })
+    .With(new { UserId = userId })
     .QuerySingleAsync<UserDto>()
     .WithHybridCacheAsync(
         hybridCache,
-        "user:1",
+        userProfileCacheKey,
         TimeSpan.FromMinutes(10),
-        tags: ["user", "schema:user"]);
+        tags: ["entity:user-profile", "schema:user-profile"]);
 ```
 
 `tags`는 `RemoveByTagAsync` 논리 invalidation용입니다. Null element, 빈 문자열/공백, 앞뒤 공백, wildcard `*`, 중복 제거 후 32개 초과는 거부됩니다. Cache key와 tag는 애플리케이션 소유의 비민감 차원으로만 구성하세요. Provider-backed L2가 있어도 current-server invalidation이 다른 서버의 in-memory L1 entry를 물리적으로 지우지는 않습니다.
@@ -637,8 +643,8 @@ Native AOT/trimming 배포에서는 HybridCache payload serializer를 source-gen
 ### 8-3. 캐시 무효화
 
 ```csharp
-await cache.InvalidateCacheAsync("user:1");
-await hybridCache.RemoveByTagAsync("user");
+await cache.InvalidateCacheAsync(userProfileCacheKey);
+await hybridCache.RemoveByTagAsync("entity:user-profile");
 ```
 
 **시그니처:**

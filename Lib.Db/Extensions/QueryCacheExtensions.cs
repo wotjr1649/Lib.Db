@@ -30,11 +30,13 @@ namespace Lib.Db.Extensions;
 /// <para>
 /// <b>[사용 예시]</b><br/>
 /// <code>
+/// string userProfileCacheKey = cacheKeys.UserProfile(userId);
+///
 /// DbResult&lt;UserDto?&gt; result = await _db
 ///     .Procedure("sp_GetUser")
-///     .With(new { UserId = 1 })
+///     .With(new { UserId = userId })
 ///     .QuerySingleAsync&lt;UserDto&gt;()
-///     .WithCacheAsync(cache, "user:1", TimeSpan.FromMinutes(5));
+///     .WithCacheAsync(cache, userProfileCacheKey, TimeSpan.FromMinutes(5));
 /// </code>
 /// </para>
 /// </summary>
@@ -293,34 +295,44 @@ public static class QueryCacheExtensions
             LocalCacheExpiration = duration
         };
 
-        // HybridCache.GetOrCreateAsync: 캐시 미스 시 팩토리 실행
-        // 단, 팩토리에서 예외 발생 시 캐시되지 않음
-        T? cachedValue = await hybridCache.GetOrCreateAsync(
-            cacheKey,
-            async (token) =>
-            {
-                DbResult<T?> result;
-                try
+        T? cachedValue;
+        try
+        {
+            cachedValue = await hybridCache.GetOrCreateAsync(
+                cacheKey,
+                async (token) =>
                 {
-                    result = await resultTask.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch
-                {
-                    throw CreateHybridCacheFactoryFailure();
-                }
+                    DbResult<T?> result;
+                    try
+                    {
+                        result = await resultTask.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        throw CreateHybridCacheFactoryFailure();
+                    }
 
-                if (!result.IsSuccess)
-                    throw CreateHybridCacheFactoryFailure();
+                    if (!result.IsSuccess)
+                        throw CreateHybridCacheFactoryFailure();
 
-                return result.Value;
-            },
-            entryOptions,
-            tags,
-            cancellationToken: ct).ConfigureAwait(false);
+                    return result.Value;
+                },
+                entryOptions,
+                tags,
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw CreateHybridCacheFactoryFailure();
+        }
 
         return DbResult<T?>.Ok(cachedValue);
     }

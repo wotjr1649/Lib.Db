@@ -75,7 +75,7 @@ $markerPatterns = @(
     },
     [pscustomobject]@{
         Marker = 'TenantUserIdentifier'
-        Pattern = '(?i)\b(tenant[_-]?id|user[_-]?id|email[_-]?address)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3}|0|1|42)\b)[^,"''\s;<>]{4,}'
+        Pattern = '(?i)\b(tenant[_-]?id|user[_-]?id|email[_-]?address)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3}|userId|tenantId|customerId|productId|currentUser\.Id|request\.|\{|\$)\b)[^,"''\s;<>]{1,}'
     }
 )
 
@@ -129,6 +129,26 @@ function Add-Hit {
     }
 }
 
+function Test-CodeLikeTenantUserIdentifierLine {
+    param([string] $Line)
+
+    $trimmed = $Line.Trim()
+    $codeLikePatterns = @(
+        '^\.(With|Sql|Procedure)\(',
+        '^(var|string|int|long|Guid)\s+\w+\s*=',
+        'new\s+\{[^}]*\b(tenant[_-]?id|user[_-]?id|email[_-]?address)\b\s*=',
+        '=>\s*.*\b(tenant[_-]?id|user[_-]?id|email[_-]?address)\b'
+    )
+
+    foreach ($pattern in $codeLikePatterns) {
+        if ([System.Text.RegularExpressions.Regex]::IsMatch($trimmed, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Read-ArtifactText {
     param([string] $Path)
 
@@ -170,6 +190,19 @@ function Find-VerificationArtifactSecretMarkers {
                 $content = Read-ArtifactText -Path $file
 
                 foreach ($markerPattern in $markerPatterns) {
+                    if ($markerPattern.Marker -eq 'TenantUserIdentifier') {
+                        $lines = $content -split '\r?\n'
+                        foreach ($line in $lines) {
+                            if ([System.Text.RegularExpressions.Regex]::IsMatch($line, $markerPattern.Pattern) -and
+                                -not (Test-CodeLikeTenantUserIdentifierLine -Line $line)) {
+                                Add-Hit -Keys $hitKeys -Hits $hits -Path $file -Marker $markerPattern.Marker
+                                break
+                            }
+                        }
+
+                        continue
+                    }
+
                     if ([System.Text.RegularExpressions.Regex]::IsMatch($content, $markerPattern.Pattern)) {
                         Add-Hit -Keys $hitKeys -Hits $hits -Path $file -Marker $markerPattern.Marker
                     }
