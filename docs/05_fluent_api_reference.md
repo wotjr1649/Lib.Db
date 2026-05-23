@@ -21,8 +21,13 @@ IDbSession (진입점, Scoped DI)
 |        +-- (Dispose 시 자동 롤백)
 +-- .BeginTransactionAsync("name", IsolationLevel)
 |   +--> IDbTransactionScope (격리 수준 지정)
-+-- .BulkInsertAsync<T>(...) -> Task<DbResult<long>>
-    (SqlBulkCopy, Reflection 기반, AOT 비호환)
++-- .BulkInsertAsync<T>(..., BulkInsertOptions?) -> Task<DbResult<long>>
+|   (legacy SqlBulkCopy, Reflection 기반, AOT 비호환)
++-- .BulkInsertAsync<T>(..., BulkShape<T>, BulkWriteOptions?) -> Task<DbResult<long>>
++-- .BulkUpdateAsync<T>(..., BulkShape<T>, BulkWriteOptions?) -> Task<DbResult<long>>
++-- .BulkDeleteAsync<T>(..., BulkShape<T>, BulkWriteOptions?) -> Task<DbResult<long>>
++-- .BulkUpsertAsync<T>(..., BulkShape<T>, BulkWriteOptions?) -> Task<DbResult<BulkUpsertResult>>
++-- .BulkMergeAsync<T>(..., BulkShape<T>, BulkMergeOptions?) -> Task<DbResult<BulkMergeResult>>
 
 IProcedureStage (1단계: 명령 선택)
 |
@@ -61,7 +66,7 @@ public interface IDbSession : IAsyncDisposable
     ISchemaMaintenanceStage Schema { get; }
     ISchemaMaintenanceStage UseSchema(string instanceName);
 
-    // 벌크 연산 (Reflection, AOT 비호환)
+    // 벌크 연산 (Reflection, AOT 비호환 legacy insert)
     [RequiresUnreferencedCode("...")]
     Task<DbResult<long>> BulkInsertAsync<T>(
         string instanceName,
@@ -69,6 +74,47 @@ public interface IDbSession : IAsyncDisposable
         IEnumerable<T> records,
         BulkInsertOptions? options = null,
         CancellationToken ct = default) where T : class;
+
+    // AOT-safe static-shape bulk mutations
+    Task<DbResult<long>> BulkInsertAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkWriteOptions? options = null,
+        CancellationToken ct = default) where T : notnull;
+
+    Task<DbResult<long>> BulkUpdateAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkWriteOptions? options = null,
+        CancellationToken ct = default) where T : notnull;
+
+    Task<DbResult<long>> BulkDeleteAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkWriteOptions? options = null,
+        CancellationToken ct = default) where T : notnull;
+
+    Task<DbResult<BulkUpsertResult>> BulkUpsertAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkWriteOptions? options = null,
+        CancellationToken ct = default) where T : notnull;
+
+    Task<DbResult<BulkMergeResult>> BulkMergeAsync<T>(
+        string instanceName,
+        string destinationTable,
+        IEnumerable<T> records,
+        BulkShape<T> shape,
+        BulkMergeOptions? options = null,
+        CancellationToken ct = default) where T : notnull;
 
     // 트랜잭션
     Task<IDbTransactionScope> BeginTransactionAsync(
@@ -568,10 +614,31 @@ public static Task<DbResult<T?>> WithHybridCacheAsync<T>(
     CancellationToken ct = default)
 ```
 
+태그가 필요한 경우 `tags` overload를 사용합니다.
+
+```csharp
+DbResult<UserDto?> result = await session.Default
+    .Procedure("dbo.usp_GetUser")
+    .With(new { UserId = 1 })
+    .QuerySingleAsync<UserDto>()
+    .WithHybridCacheAsync(
+        hybridCache,
+        "user:1",
+        TimeSpan.FromMinutes(10),
+        tags: ["user", "schema:user"]);
+```
+
+`tags`는 `RemoveByTagAsync` 논리 invalidation용입니다. Null element, 빈 문자열/공백, 앞뒤 공백, wildcard `*`, 중복 제거 후 32개 초과는 거부됩니다. Cache key와 tag는 애플리케이션 소유의 비민감 차원으로만 구성하세요. Provider-backed L2가 있어도 current-server invalidation이 다른 서버의 in-memory L1 entry를 물리적으로 지우지는 않습니다.
+
+이 확장은 caller-created `Task<DbResult<T?>>`를 받으므로 lazy factory가 아닙니다. Cache hit가 발생해도 이미 만들어진 DB task가 계속 실행되거나, 나중에 fault되거나, task creation side effect가 발생할 수 있습니다.
+
+Native AOT/trimming 배포에서는 HybridCache payload serializer를 source-generated metadata 등 AOT-compatible 방식으로 구성하세요. Query/cache failure는 raw SQL, row value, cache payload, tenant/user identifier, provider exception을 public error로 노출하지 않는 generic `InvalidOperationException`으로 매핑됩니다.
+
 ### 8-3. 캐시 무효화
 
 ```csharp
 await cache.InvalidateCacheAsync("user:1");
+await hybridCache.RemoveByTagAsync("user");
 ```
 
 **시그니처:**
@@ -583,7 +650,21 @@ public static Task InvalidateCacheAsync(
     CancellationToken ct = default)
 ```
 
-### 8-4. JSON 컬럼 매핑
+### 8-4. Typed QueryMultiple helper
+
+`Lib.Db.Extensions` namespace를 사용하면 다중 ResultSet reader를 typed container로 바로 읽을 수 있습니다.
+
+```csharp
+DbResult<DbMultiple<UserDto, OrderDto>> result = await session.Default
+    .Procedure("dbo.usp_UserDashboard")
+    .With(new { UserId = 1 })
+    .QueryMultipleAsync()
+    .ReadMultipleAsync<UserDto, OrderDto>();
+```
+
+`ReadMultipleAsync<T1,T2>()`, `ReadMultipleAsync<T1,T2,T3>()`, `ReadMultipleAsync<T1,T2,T3,T4>()`는 ResultSet을 stored-procedure order로 소비하고 reader를 dispose합니다. Missing ResultSet 또는 read failure는 `Reading multiple result sets failed.` 형태의 redacted `DbResult<T>` failure로 매핑합니다.
+
+### 8-5. JSON 컬럼 매핑
 
 DB에서 JSON 문자열로 저장된 컬럼을 C# 타입으로 역직렬화합니다.
 

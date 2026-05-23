@@ -559,12 +559,18 @@ DbResult<ProductDto?> result = await session.Default
 
 이 overload는 이미 생성된 `Task<DbResult<T?>>`를 받습니다. 따라서 캐시 히트여도 DB Task 생성, Task 생성 시점의 부작용, 이후 background fault 자체를 막는 lazy factory API가 아닙니다.
 
+Native AOT 또는 trimming 배포에서 provider-backed L2를 사용할 때는 HybridCache payload serializer도 AOT-compatible이어야 합니다. Runtime reflection serializer를 전제로 하지 말고 source-generated metadata 또는 명시 serializer 구성을 사용하세요.
+
+캐시 lookup 또는 factory 실패가 public 예외로 변환될 때 Lib.Db는 `DB query failed.` 같은 일반 메시지를 가진 `InvalidOperationException`을 throw합니다. 원본 SQL, provider exception, row value, cache payload, tenant/user identifier는 public error message나 `InnerException`으로 노출하지 않습니다.
+
 ### 9-4. 캐시 무효화
 
 ```csharp
 await cache.InvalidateCacheAsync("user:1");
 await hybridCache.RemoveByTagAsync("product");
 ```
+
+`RemoveByTagAsync`는 태그에 연결된 entry의 논리 invalidation을 요청합니다. provider-backed L2가 없는 local-only 구성에서는 현재 프로세스의 HybridCache entry에만 의미가 있습니다. provider-backed L2가 있으면 current-server/L2 가시성은 바뀌지만, 다른 서버가 이미 들고 있는 in-memory L1 entry가 현재 서버 호출만으로 물리적으로 지워진다고 가정하면 안 됩니다.
 
 ### 9-5. 캐시 동작 흐름
 
@@ -578,9 +584,14 @@ WithCacheAsync 호출
 
 ---
 
-## 10. BulkInsertAsync (SqlBulkCopy)
+## 10. Bulk Mutations (SqlBulkCopy + staged DML)
 
-`IDbSession.BulkInsertAsync<T>()`는 SqlBulkCopy를 사용하여 대량 INSERT를 수행합니다.
+Lib.Db는 두 종류의 bulk 경로를 제공합니다.
+
+- Legacy reflection `BulkInsertAsync<T>(..., BulkInsertOptions?)`는 기존 호환성을 위해 유지됩니다. 이 overload는 public property reflection을 사용하므로 Native AOT 환경에는 적합하지 않습니다.
+- AOT-safe `BulkShape<T>` overload는 column metadata와 getter를 명시하고 `SqlBulkCopy` 및 staged set-based DML을 사용합니다. Insert, update, delete, upsert, merge-like mutation을 지원합니다.
+
+Update/delete/upsert/merge는 stage table에 먼저 적재한 뒤 SQL Server DML로 대상 테이블을 변경합니다. SQL Server `MERGE` statement는 기본 engine으로 사용하지 않습니다. Stage unique index로 duplicate source key를 target DML 전에 거부하며, target key column은 애플리케이션이 소유한 `PRIMARY KEY` 또는 `UNIQUE` 제약/인덱스로 보호되어야 합니다.
 
 ### 10-1. 시그니처
 
@@ -592,9 +603,69 @@ Task<DbResult<long>> BulkInsertAsync<T>(
     IEnumerable<T> records,
     BulkInsertOptions? options = null,
     CancellationToken ct = default) where T : class;
+
+Task<DbResult<long>> BulkInsertAsync<T>(
+    string instanceName,
+    string destinationTable,
+    IEnumerable<T> records,
+    BulkShape<T> shape,
+    BulkWriteOptions? options = null,
+    CancellationToken ct = default) where T : notnull;
+
+Task<DbResult<long>> BulkUpdateAsync<T>(
+    string instanceName,
+    string destinationTable,
+    IEnumerable<T> records,
+    BulkShape<T> shape,
+    BulkWriteOptions? options = null,
+    CancellationToken ct = default) where T : notnull;
+
+Task<DbResult<long>> BulkDeleteAsync<T>(
+    string instanceName,
+    string destinationTable,
+    IEnumerable<T> records,
+    BulkShape<T> shape,
+    BulkWriteOptions? options = null,
+    CancellationToken ct = default) where T : notnull;
+
+Task<DbResult<BulkUpsertResult>> BulkUpsertAsync<T>(
+    string instanceName,
+    string destinationTable,
+    IEnumerable<T> records,
+    BulkShape<T> shape,
+    BulkWriteOptions? options = null,
+    CancellationToken ct = default) where T : notnull;
+
+Task<DbResult<BulkMergeResult>> BulkMergeAsync<T>(
+    string instanceName,
+    string destinationTable,
+    IEnumerable<T> records,
+    BulkShape<T> shape,
+    BulkMergeOptions? options = null,
+    CancellationToken ct = default) where T : notnull;
 ```
 
-### 10-2. BulkInsertOptions
+### 10-2. BulkShape<T>
+
+```csharp
+BulkShape<SensorReading> shape = BulkShape.For<SensorReading>()
+    .Key("SensorId", SqlDbType.Int, static row => row.SensorId)
+    .Column("Value", SqlDbType.Decimal, static row => row.Value, precision: 9, scale: 2)
+    .Column("Timestamp", SqlDbType.DateTime2, static row => row.Timestamp, scale: 7)
+    .Build();
+```
+
+`BulkShape<T>`는 reflection 대신 static getter를 사용합니다. Shape 생성 시 다음 metadata를 검증합니다.
+
+- `decimal` column은 precision/scale을 명시해야 하며 `decimal(18,0)`으로 조용히 fallback하지 않습니다.
+- string/binary key column은 유효한 fixed size가 필요하며 `max` size를 사용할 수 없습니다. Non-key string/binary column은 명시 size 또는 `max` 요청을 사용할 수 있습니다.
+- temporal column은 SQL Server가 지원하는 scale 범위만 허용합니다.
+- CLR `TValue`와 선언한 `SqlDbType`은 호환되어야 하며 enum은 underlying type이 SQL type과 맞아야 합니다.
+- Stage key는 32개 column 이하이고, 선언된 key width가 SQL Server index key portability limit인 900 bytes를 넘으면 안 됩니다.
+
+`DateOnly`와 `TimeOnly`는 Runtime TVP 경로와 같은 provider-facing convention으로 정규화됩니다. Bulk reader는 row enumerator를 한 번만 dispose하고 EOF에서 current row state를 지웁니다.
+
+### 10-3. BulkInsertOptions / BulkWriteOptions
 
 | 속성 | 타입 | 기본값 | 설명 |
 |---|---|---|---|
@@ -602,10 +673,15 @@ Task<DbResult<long>> BulkInsertAsync<T>(
 | `TimeoutSeconds` | `int` | 600 | 명령 타임아웃 (초) |
 | `EnableStreaming` | `bool` | `true` | 스트리밍 활성화 |
 | `FireTriggers` | `bool` | `false` | INSERT 트리거 실행 여부 |
-| `CheckConstraints` | `bool` | `false` | 제약 조건 검사 여부 |
+| `CheckConstraints` | `bool` | legacy `false`, AOT-safe `true` | 제약 조건 검사 여부 |
 | `KeepIdentity` | `bool` | `false` | IDENTITY 값 유지 여부 |
+| `UseTransaction` | `bool` | AOT-safe `true` | AOT-safe bulk 작업의 로컬 트랜잭션 사용 여부 |
 
-### 10-3. 사용 예시
+`FireTriggers`, `CheckConstraints`, `KeepIdentity`는 direct `BulkInsertAsync`의 `SqlBulkCopy` destination flag입니다. Staged update/delete/upsert/merge는 target 변경이 일반 SQL Server DML이므로 `FireTriggers = true`, `KeepIdentity = true`, `CheckConstraints = false` 같은 misleading non-default 값을 연결 open 전에 거부합니다.
+
+Direct AOT-safe insert에서 `UseTransaction = false`는 명시적인 non-atomic 성능 opt-out입니다. provider 실패나 취소가 일부 row 전송 이후 발생하면 partial row가 남을 수 있으므로, 원자성이 필요한 쓰기에서는 기본값을 유지하세요.
+
+### 10-4. 사용 예시
 
 ```csharp
 DbResult<long> result = await session.BulkInsertAsync(
@@ -615,15 +691,32 @@ DbResult<long> result = await session.BulkInsertAsync(
     new BulkInsertOptions { BatchSize = 10_000, FireTriggers = true });
 ```
 
-### 10-4. TVP vs BulkInsert 비교
+```csharp
+DbResult<BulkUpsertResult> result = await session.BulkUpsertAsync(
+    "Default",
+    "[dbo].[SensorReadings]",
+    readings,
+    shape);
 
-| 항목 | TVP (Runtime TVP) | BulkInsertAsync |
-|---|---|---|
-| 적합 건수 | ~수천 건 | 수만~수십만 건 이상 |
-| AOT 호환 | O (static-shape fast-path) | X (Reflection) |
-| SP 통합 | O (파라미터로 전달) | X (직접 테이블 INSERT) |
-| 트리거/제약조건 | SP 내에서 제어 | 옵션으로 제어 |
-| 트랜잭션 | SP 트랜잭션 활용 | 내부 트랜잭션 |
+if (result.IsSuccess)
+{
+    Console.WriteLine($"inserted={result.Value.Inserted}, updated={result.Value.Updated}");
+}
+```
+
+`BulkMergeAsync`의 기본 action은 matched row update와 missing row insert이며, 결과는 inserted/updated/deleted count를 분리해서 반환합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 v2.4.0에서 지원하지 않는 action으로 거부됩니다.
+
+Non-cancellation failure는 rollback 이후 redacted `DbResult<T>` 실패로 반환됩니다. Public `DbError`에는 raw SQL, provider exception, row value, payload, connection string value, public `InnerException`을 노출하지 않습니다.
+
+### 10-5. TVP vs Bulk 비교
+
+| 항목 | TVP (Runtime TVP) | Legacy BulkInsert | AOT-safe BulkShape |
+|---|---|---|---|
+| 적합 건수 | ~수천 건 | 수만~수십만 건 이상 | 수만~수십만 건 이상 |
+| AOT 호환 | O (static-shape fast-path) | X (Reflection) | O (explicit shape) |
+| SP 통합 | O (파라미터로 전달) | X (직접 테이블 INSERT) | X (직접/staged DML) |
+| 트리거/제약조건 | SP 내에서 제어 | 옵션으로 제어 | insert는 bulk-copy flag, staged DML은 SQL Server 기본 동작 |
+| 트랜잭션 | SP 트랜잭션 활용 | 내부 트랜잭션 | 기본 로컬 트랜잭션 |
 
 ---
 

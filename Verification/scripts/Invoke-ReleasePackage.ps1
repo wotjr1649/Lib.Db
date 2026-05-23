@@ -611,6 +611,7 @@ if ($packages.Count -ne 1) {
 $expandedDirectory = Join-Path $artifactRoot 'expanded'
 try {
     Assert-PackageMetadata -Package $packages[0] -ExpandedDirectory $expandedDirectory -Head $head
+    Invoke-Checked 'pwsh' @('-NoProfile', '-File', $artifactScanner, '-SelfTest')
     Invoke-Checked 'pwsh' @('-NoProfile', '-File', $artifactScanner, '-Paths', $expandedDirectory)
 }
 finally {

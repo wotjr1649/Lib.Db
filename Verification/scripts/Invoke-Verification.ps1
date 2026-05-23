@@ -136,6 +136,11 @@ else {
     $skippedGates.Add('benchmark')
 }
 
+& pwsh -NoProfile -File $artifactScanner -SelfTest
+if ($LASTEXITCODE -ne 0) {
+    throw "Verification artifact secret scan self-test failed with exit code $LASTEXITCODE."
+}
+
 & pwsh -NoProfile -File $artifactScanner
 if ($LASTEXITCODE -ne 0) {
     throw "Verification artifact secret scan failed with exit code $LASTEXITCODE."
