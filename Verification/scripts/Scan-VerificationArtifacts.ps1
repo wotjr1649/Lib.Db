@@ -16,22 +16,30 @@ $textExtensions = @(
     '.ps1', '.sql'
 )
 
+$archiveExtensions = @(
+    '.nupkg', '.snupkg'
+)
+
 $markerPatterns = @(
     [pscustomobject]@{
         Marker = 'Password'
-        Pattern = '(?i)\b(password|pwd)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^;,"''\s<>&]{4,}'
+        Pattern = '(?i)\b([a-z0-9_]*?(password|pwd)[a-z0-9_]*)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^;,"''\s<>&]{4,}'
     },
     [pscustomobject]@{
         Marker = 'Token'
-        Pattern = '(?i)\b(access[_-]?token|refresh[_-]?token|tokenvalue)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{8,}'
+        Pattern = '(?i)\b([a-z0-9_]*?(access[_-]?token|refresh[_-]?token|tokenvalue|token)[a-z0-9_]*)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{8,}'
     },
     [pscustomobject]@{
         Marker = 'ApiKey'
-        Pattern = '(?i)\b(api[_-]?key)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{8,}'
+        Pattern = '(?i)\b([a-z0-9_]*?(api[_-]?key|apikey)[a-z0-9_]*)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{8,}'
     },
     [pscustomobject]@{
         Marker = 'ClientSecret'
-        Pattern = '(?i)\b(client[_-]?secret|client secret)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{8,}'
+        Pattern = '(?i)\b([a-z0-9_]*?(client[_-]?secret|client secret)[a-z0-9_]*)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{8,}'
+    },
+    [pscustomobject]@{
+        Marker = 'Secret'
+        Pattern = '(?i)\b([a-z0-9_]*?secret[a-z0-9_]*)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{8,}'
     },
     [pscustomobject]@{
         Marker = 'Bearer'
@@ -39,7 +47,7 @@ $markerPatterns = @(
     },
     [pscustomobject]@{
         Marker = 'Sas'
-        Pattern = '(?i)\b(sastoken|sharedaccesssignature|shared access signature)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{12,}'
+        Pattern = '(?i)\b([a-z0-9_]*?(sastoken|sharedaccesssignature|shared access signature)[a-z0-9_]*)\b["'']?\s*[:=]\s*["'']?(?!(placeholder|redacted|null|false|true|\*+|\.{3})\b)[^,"''\s;<>]{12,}'
     },
     [pscustomobject]@{
         Marker = 'Sas'
@@ -104,11 +112,80 @@ function Resolve-ArtifactRoots {
 function ConvertTo-DisplayPath {
     param([string] $Path)
 
-    if ($Path.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
-        return $Path.Substring($repoRoot.Length).TrimStart('\', '/')
+    $entrySeparator = $Path.IndexOf('::', [StringComparison]::Ordinal)
+    if ($entrySeparator -ge 0) {
+        $archivePath = $Path.Substring(0, $entrySeparator)
+        $entryPath = $Path.Substring($entrySeparator + 2)
+        return (ConvertTo-DisplayPath -Path $archivePath) + '::' + (ConvertTo-SafeDisplayPathSegment -PathValue $entryPath)
     }
 
-    $Path
+    $displayPath = $Path
+    if ($Path.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        $displayPath = $Path.Substring($repoRoot.Length).TrimStart('\', '/')
+    }
+
+    ConvertTo-SafeDisplayPathSegment -PathValue $displayPath
+}
+
+function ConvertTo-SafeDisplayPathSegment {
+    param([string] $PathValue)
+
+    $normalized = $PathValue -replace '\\', '/'
+    $parts = @($normalized -split '/' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($parts.Count -eq 0) {
+        return '<redacted-path>'
+    }
+
+    $safeParts = @(
+        foreach ($part in $parts) {
+            if (Test-SecretLikePathSegment -Segment $part) {
+                '<redacted-segment>'
+            }
+            else {
+                $part
+            }
+        }
+    )
+
+    $safeParts -join '/'
+}
+
+function Test-SecretLikePathSegment {
+    param([string] $Segment)
+
+    foreach ($markerPattern in $markerPatterns) {
+        if ([System.Text.RegularExpressions.Regex]::IsMatch($Segment, $markerPattern.Pattern)) {
+            return $true
+        }
+    }
+
+    if ([System.Text.RegularExpressions.Regex]::IsMatch($Segment, $connectionStringValuePattern)) {
+        return $true
+    }
+
+    return $false
+}
+
+function Test-SecretLikePath {
+    param([string] $PathValue)
+
+    $entrySeparator = $PathValue.IndexOf('::', [StringComparison]::Ordinal)
+    if ($entrySeparator -ge 0) {
+        if (Test-SecretLikePath -PathValue $PathValue.Substring(0, $entrySeparator)) {
+            return $true
+        }
+
+        return Test-SecretLikePath -PathValue $PathValue.Substring($entrySeparator + 2)
+    }
+
+    $normalized = $PathValue -replace '\\', '/'
+    foreach ($part in @($normalized -split '/' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        if (Test-SecretLikePathSegment -Segment $part) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Add-Hit {
@@ -149,6 +226,19 @@ function Test-CodeLikeTenantUserIdentifierLine {
     return $false
 }
 
+function Remove-KnownPublicKeyTokenMetadata {
+    param([string] $Content)
+
+    if ([string]::IsNullOrEmpty($Content)) {
+        return $Content
+    }
+
+    [System.Text.RegularExpressions.Regex]::Replace(
+        $Content,
+        '(?i)\bpublic[-_\s]?key[-_\s]?token\b\s*=\s*["'']?[0-9a-f]{16}["'']?',
+        'PublicKeyToken=<public-metadata>')
+}
+
 function Read-ArtifactText {
     param([string] $Path)
 
@@ -172,6 +262,156 @@ function Read-ArtifactText {
     }
 }
 
+function Test-ScannableTextArtifact {
+    param(
+        [string] $Name,
+        [string] $Extension
+    )
+
+    $normalizedName = if ($null -eq $Name) { '' } else { $Name.ToLowerInvariant() }
+    $normalizedExtension = if ($null -eq $Extension) { '' } else { $Extension.ToLowerInvariant() }
+
+    return $textExtensions -contains $normalizedExtension -or $textExtensions -contains $normalizedName
+}
+
+function Read-ArchiveTextEntries {
+    param([string] $Path)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $entries = [System.Collections.Generic.List[object]]::new()
+    $stream = $null
+
+    try {
+        $stream = [System.IO.FileStream]::new(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite)
+
+        $archive = [System.IO.Compression.ZipArchive]::new(
+            $stream,
+            [System.IO.Compression.ZipArchiveMode]::Read,
+            $false)
+
+        try {
+            foreach ($entry in $archive.Entries) {
+                if ([string]::IsNullOrWhiteSpace($entry.FullName)) {
+                    continue
+                }
+
+                $entryPath = $Path + '::' + $entry.FullName
+                $entryName = [System.IO.Path]::GetFileName($entry.FullName)
+                $entryExtension = [System.IO.Path]::GetExtension($entry.FullName)
+                $content = $null
+                if (-not (Test-ScannableTextArtifact -Name $entryName -Extension $entryExtension)) {
+                    $entries.Add([pscustomobject]@{
+                        Path = $entryPath
+                        Content = $content
+                    }) | Out-Null
+
+                    continue
+                }
+
+                $entryStream = $entry.Open()
+                try {
+                    $reader = [System.IO.StreamReader]::new($entryStream, [System.Text.Encoding]::UTF8, $true)
+                    try {
+                        $content = $reader.ReadToEnd()
+                    }
+                    finally {
+                        $reader.Dispose()
+                    }
+                }
+                finally {
+                    $entryStream.Dispose()
+                }
+
+                $entries.Add([pscustomobject]@{
+                    Path = $entryPath
+                    Content = $content
+                }) | Out-Null
+            }
+        }
+        finally {
+            $archive.Dispose()
+        }
+    }
+    catch {
+        $displayPath = ConvertTo-DisplayPath -Path $Path
+        $displayMessage = ConvertTo-DisplayPath -Path $_.Exception.Message
+        throw "Unable to inspect archive artifact '$displayPath': $displayMessage"
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+
+    @($entries)
+}
+
+function Find-ContentSecretMarkers {
+    param(
+        [System.Collections.Generic.HashSet[string]] $Keys,
+        [System.Collections.Generic.List[object]] $Hits,
+        [string] $Path,
+        [string] $Content
+    )
+
+    foreach ($markerPattern in $markerPatterns) {
+        if ($markerPattern.Marker -eq 'TenantUserIdentifier') {
+            $lines = $Content -split '\r?\n'
+            foreach ($line in $lines) {
+                if ([System.Text.RegularExpressions.Regex]::IsMatch($line, $markerPattern.Pattern) -and
+                    -not (Test-CodeLikeTenantUserIdentifierLine -Line $line)) {
+                    Add-Hit -Keys $Keys -Hits $Hits -Path $Path -Marker $markerPattern.Marker
+                    break
+                }
+            }
+
+            continue
+        }
+
+        $contentToScan = if ($markerPattern.Marker -eq 'Token') {
+            Remove-KnownPublicKeyTokenMetadata -Content $Content
+        }
+        else {
+            $Content
+        }
+
+        if ([System.Text.RegularExpressions.Regex]::IsMatch($contentToScan, $markerPattern.Pattern)) {
+            Add-Hit -Keys $Keys -Hits $Hits -Path $Path -Marker $markerPattern.Marker
+        }
+    }
+
+    $connectionMatches = [System.Text.RegularExpressions.Regex]::Matches($Content, $connectionStringValuePattern)
+    foreach ($match in $connectionMatches) {
+        $candidate = $match.Value
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+
+        if ([System.Text.RegularExpressions.Regex]::IsMatch($candidate, $localServerPattern)) {
+            continue
+        }
+
+        Add-Hit -Keys $Keys -Hits $Hits -Path $Path -Marker 'ConnectionStringValue'
+        break
+    }
+}
+
+function Add-SecretPathHit {
+    param(
+        [System.Collections.Generic.HashSet[string]] $Keys,
+        [System.Collections.Generic.List[object]] $Hits,
+        [string] $Path
+    )
+
+    if (Test-SecretLikePath -PathValue $Path) {
+        Add-Hit -Keys $Keys -Hits $Hits -Path $Path -Marker 'SecretPath'
+    }
+}
+
 function Find-VerificationArtifactSecretMarkers {
     param([string[]] $Roots)
 
@@ -180,47 +420,25 @@ function Find-VerificationArtifactSecretMarkers {
 
     foreach ($root in $Roots) {
         Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction Stop |
-            Where-Object {
-                $extension = $_.Extension.ToLowerInvariant()
-                $name = $_.Name.ToLowerInvariant()
-                $textExtensions -contains $extension -or $textExtensions -contains $name
-            } |
             ForEach-Object {
                 $file = $_.FullName
-                $content = Read-ArtifactText -Path $file
+                $extension = $_.Extension.ToLowerInvariant()
+                $name = $_.Name.ToLowerInvariant()
 
-                foreach ($markerPattern in $markerPatterns) {
-                    if ($markerPattern.Marker -eq 'TenantUserIdentifier') {
-                        $lines = $content -split '\r?\n'
-                        foreach ($line in $lines) {
-                            if ([System.Text.RegularExpressions.Regex]::IsMatch($line, $markerPattern.Pattern) -and
-                                -not (Test-CodeLikeTenantUserIdentifierLine -Line $line)) {
-                                Add-Hit -Keys $hitKeys -Hits $hits -Path $file -Marker $markerPattern.Marker
-                                break
-                            }
-                        }
+                Add-SecretPathHit -Keys $hitKeys -Hits $hits -Path $file
 
-                        continue
-                    }
-
-                    if ([System.Text.RegularExpressions.Regex]::IsMatch($content, $markerPattern.Pattern)) {
-                        Add-Hit -Keys $hitKeys -Hits $hits -Path $file -Marker $markerPattern.Marker
-                    }
+                if (Test-ScannableTextArtifact -Name $name -Extension $extension) {
+                    $content = Read-ArtifactText -Path $file
+                    Find-ContentSecretMarkers -Keys $hitKeys -Hits $hits -Path $file -Content $content
                 }
 
-                $connectionMatches = [System.Text.RegularExpressions.Regex]::Matches($content, $connectionStringValuePattern)
-                foreach ($match in $connectionMatches) {
-                    $candidate = $match.Value
-                    if ([string]::IsNullOrWhiteSpace($candidate)) {
-                        continue
+                if ($archiveExtensions -contains $extension) {
+                    foreach ($entry in Read-ArchiveTextEntries -Path $file) {
+                        Add-SecretPathHit -Keys $hitKeys -Hits $hits -Path $entry.Path
+                        if ($null -ne $entry.Content) {
+                            Find-ContentSecretMarkers -Keys $hitKeys -Hits $hits -Path $entry.Path -Content $entry.Content
+                        }
                     }
-
-                    if ([System.Text.RegularExpressions.Regex]::IsMatch($candidate, $localServerPattern)) {
-                        continue
-                    }
-
-                    Add-Hit -Keys $hitKeys -Hits $hits -Path $file -Marker 'ConnectionStringValue'
-                    break
                 }
             }
     }
@@ -330,7 +548,7 @@ if ($roots.Count -eq 0) {
 }
 
 foreach ($root in $roots) {
-    Write-Output "Scanning verification artifact path: $root"
+    Write-Output "Scanning verification artifact path: $(ConvertTo-DisplayPath -Path $root)"
 }
 
 $hits = @(Find-VerificationArtifactSecretMarkers -Roots $roots)

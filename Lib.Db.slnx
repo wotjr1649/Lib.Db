@@ -7,4 +7,5 @@
     <Project Path="Verification/projects/Lib.Db.ChaosHarness/Lib.Db.ChaosHarness.csproj" />
   </Folder>
   <Project Path="Lib.Db/Lib.Db.csproj" />
+  <Project Path="Lib.Db.Tools/Lib.Db.Tools.csproj" />
 </Solution>

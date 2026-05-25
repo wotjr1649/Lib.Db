@@ -353,7 +353,7 @@ public enum BulkMergeActions
     /// <summary>대상에 존재하는 key를 delete</summary>
     DeleteMatched = 4,
 
-    /// <summary>소스에 없는 대상 행을 delete (v2.4.0 미지원)</summary>
+    /// <summary>소스에 없는 대상 행을 delete (현재 bulk merge에서는 미지원)</summary>
     DeleteNotMatchedBySource = 8
 }
 
@@ -384,12 +384,12 @@ public sealed class BulkMergeOptions : BulkWriteOptions
             throw new InvalidOperationException("Bulk merge actions cannot be empty.");
 
         if ((Actions & BulkMergeActions.DeleteNotMatchedBySource) != 0)
-            throw new InvalidOperationException("DeleteNotMatchedBySource is not supported by Lib.Db v2.4.0 bulk merge.");
+            throw new InvalidOperationException("DeleteNotMatchedBySource is not supported by the current Lib.Db bulk merge.");
 
         if ((Actions & BulkMergeActions.DeleteMatched) != 0
             && Actions != BulkMergeActions.DeleteMatched)
         {
-            throw new InvalidOperationException("DeleteMatched is exclusive in Lib.Db v2.4.0 bulk merge.");
+            throw new InvalidOperationException("DeleteMatched is exclusive in the current Lib.Db bulk merge.");
         }
     }
 }

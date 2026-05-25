@@ -1,11 +1,11 @@
 # Lib.Db Generator, Migration, and Change Tracking Roadmap
 
-Status: Roadmap for v2.5.0 or later
-Last reviewed: 2026-05-22
+Status: Roadmap after the v2.5.0 no-DB contract tooling MVP
+Last reviewed: 2026-05-25
 
 ## Scope Boundary
 
-Lib.Db v2.4.0 does not implement generator, migration, or SQL Server Change Tracking adapters. These are documented as future candidates only.
+Lib.Db core runtime does not implement generator, migration, or SQL Server Change Tracking adapters. v2.5.0 adds a separate, non-packable `Lib.Db.Tools` no-DB contract validate/report MVP; live metadata inspect, script scaffold, generator integration, and Change Tracking adapters remain future candidates only.
 
 ## `Lib.Db.Generator`
 
@@ -18,6 +18,7 @@ Lib.Db v2.4.0 does not implement generator, migration, or SQL Server Change Trac
 ## Migration / Contract Tooling
 
 - SQL Server object contract validation and script scaffolding only.
+- v2.5.0 MVP starts with checked-in `libdb.contracts.json` validate/report and no operating DB connection.
 - No automatic production DDL from Lib.Db core.
 - No EF-style model snapshot engine in core.
 - Scripts must be deterministic, reviewable, and opt-in.

@@ -1,5 +1,6 @@
 param(
-    [string] $ArtifactsDirectory = 'Verification\artifacts\packages',
+    [string] $ArtifactsDirectory = 'Verification\artifacts\release-package',
+    [string] $PackageVersion = '',
     [bool] $AllowUnsigned = $true,
     [switch] $SelfTest
 )
@@ -11,6 +12,7 @@ $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $projectPath = Join-Path $repoRoot 'Lib.Db\Lib.Db.csproj'
 $verificationArtifactsRoot = Join-Path $repoRoot 'Verification\artifacts'
 $artifactScanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
+$secretLikeStatusPattern = '(?i)(password|pwd|token|secret|api[_-]?key|connection\s*string|credential|authorization|sas[_-]?token)\s*[:=]|(?i)(server|data\s+source|address|addr|network\s+address)\s*=\s*[^;\s]+;.*(database|initial\s+catalog|user\s+id|uid|password|pwd|encrypt|trustservercertificate|application\s+name)\s*='
 
 function Resolve-RepoChildPath {
     param(
@@ -148,6 +150,29 @@ function Get-ProjectProperty {
     throw "Project property was not found: $Name"
 }
 
+function Resolve-PackageVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $ProjectVersion,
+        [string] $OverrideVersion = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OverrideVersion)) {
+        return $ProjectVersion
+    }
+
+    $trimmedVersion = $OverrideVersion.Trim()
+    if ($trimmedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-][0-9A-Za-z.-]+)?$') {
+        throw "PackageVersion must be a SemVer version without the v prefix: $trimmedVersion"
+    }
+
+    if (-not [string]::Equals($trimmedVersion, $ProjectVersion, [System.StringComparison]::Ordinal)) {
+        throw "PackageVersion override must match project Version. Project=$ProjectVersion, Override=$trimmedVersion"
+    }
+
+    return $trimmedVersion
+}
+
 function Get-ProjectPackageReferences {
     param(
         [Parameter(Mandatory = $true)]
@@ -257,16 +282,32 @@ function Assert-RepositoryStatusClean {
         return
     }
 
-    $preview = @($changes | Select-Object -First 20)
+    $preview = @($changes | Select-Object -First 20 | ForEach-Object { ConvertTo-SafeRepositoryStatusLine -StatusLine $_ })
     $more = if ($changes.Count -gt $preview.Count) { " plus $($changes.Count - $preview.Count) more change(s)" } else { '' }
     throw "Repository has uncommitted source changes. Commit or remove changes before release packaging:`n - $($preview -join "`n - ")$more"
+}
+
+function ConvertTo-SafeRepositoryStatusLine {
+    param([string] $StatusLine)
+
+    if ([string]::IsNullOrWhiteSpace($StatusLine)) {
+        return $StatusLine
+    }
+
+    if ($StatusLine -match $secretLikeStatusPattern) {
+        $prefix = if ($StatusLine.Length -ge 2) { $StatusLine.Substring(0, 2) } else { '??' }
+        return "$prefix <redacted-path>"
+    }
+
+    return $StatusLine
 }
 
 function Get-RepositoryStatusLines {
     $statusOutput = & git @('-C', $repoRoot, 'status', '--porcelain=v1', '--untracked-files=all') 2>&1
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
-        throw "git status failed with exit code $exitCode.`n$($statusOutput -join [Environment]::NewLine)"
+        $safeOutput = @($statusOutput | ForEach-Object { ConvertTo-SafeRepositoryStatusLine -StatusLine $_.ToString() })
+        throw "git status failed with exit code $exitCode.`n$($safeOutput -join [Environment]::NewLine)"
     }
 
     return @($statusOutput | ForEach-Object { $_.ToString() })
@@ -371,11 +412,12 @@ function Assert-PackageMetadata {
         [Parameter(Mandatory = $true)]
         [string] $ExpandedDirectory,
         [Parameter(Mandatory = $true)]
-        [string] $Head
+        [string] $Head,
+        [Parameter(Mandatory = $true)]
+        [string] $ExpectedVersion
     )
 
     $projectDocument = Read-XmlDocument -Path $projectPath
-    $version = Get-ProjectProperty -ProjectDocument $projectDocument -Name 'Version'
     $licenseExpression = Get-ProjectProperty -ProjectDocument $projectDocument -Name 'PackageLicenseExpression'
     $readmeFile = Get-ProjectProperty -ProjectDocument $projectDocument -Name 'PackageReadmeFile'
     $repositoryUrl = Get-ProjectProperty -ProjectDocument $projectDocument -Name 'RepositoryUrl'
@@ -399,8 +441,8 @@ function Assert-PackageMetadata {
     }
 
     $packageVersion = Get-XmlChildText -Node $metadata -Name 'version'
-    if ($packageVersion -ne $version) {
-        throw "Unexpected package version. Expected $version but found $packageVersion."
+    if ($packageVersion -ne $ExpectedVersion) {
+        throw "Unexpected package version. Expected $ExpectedVersion but found $packageVersion."
     }
 
     $license = Get-XmlChildElement -Node $metadata -Name 'license'
@@ -551,6 +593,17 @@ function Invoke-SelfTest {
         }
     }
 
+    Assert-SelfTestPass -Name 'RedactsSecretLikeDirtyStatusPath' -Assertion {
+        try {
+            Assert-RepositoryStatusClean -StatusLines @('?? docs/Password=fixture-secret/libdb.contracts.json')
+            return $false
+        }
+        catch {
+            return $_.Exception.Message.Contains('<redacted-path>', [System.StringComparison]::Ordinal) -and
+                -not $_.Exception.Message.Contains('fixture-secret', [System.StringComparison]::Ordinal)
+        }
+    }
+
     Assert-SelfTestPass -Name 'RejectsArtifactDirectoryOutsideVerificationArtifacts' -Assertion {
         try {
             $outsideArtifacts = Resolve-RepoChildPath -ChildPath 'Lib.Db'
@@ -569,6 +622,36 @@ function Invoke-SelfTest {
         }
         catch {
             return $_.Exception.Message.Contains('not to the artifacts root', [System.StringComparison]::Ordinal)
+        }
+    }
+
+    Assert-SelfTestPass -Name 'AcceptsExplicitPackageVersionOverride' -Assertion {
+        try {
+            Resolve-PackageVersion -ProjectVersion '2.5.0-rc.1' -OverrideVersion '2.5.0-rc.1' | Out-Null
+            return $true
+        }
+        catch {
+            return $false
+        }
+    }
+
+    Assert-SelfTestPass -Name 'RejectsPrefixedPackageVersionOverride' -Assertion {
+        try {
+            Resolve-PackageVersion -ProjectVersion '2.4.0' -OverrideVersion 'v2.5.0' | Out-Null
+            return $false
+        }
+        catch {
+            return $_.Exception.Message.Contains('without the v prefix', [System.StringComparison]::Ordinal)
+        }
+    }
+
+    Assert-SelfTestPass -Name 'RejectsMismatchedPackageVersionOverride' -Assertion {
+        try {
+            Resolve-PackageVersion -ProjectVersion '2.5.0' -OverrideVersion '2.5.1' | Out-Null
+            return $false
+        }
+        catch {
+            return $_.Exception.Message.Contains('must match project Version', [System.StringComparison]::Ordinal)
         }
     }
 }
@@ -593,12 +676,18 @@ if ($head -notmatch '^[0-9a-fA-F]{40}$') {
     throw "git rev-parse HEAD did not return a full commit SHA: $head"
 }
 
+$projectDocument = Read-XmlDocument -Path $projectPath
+$projectVersion = Get-ProjectProperty -ProjectDocument $projectDocument -Name 'Version'
+$effectivePackageVersion = Resolve-PackageVersion -ProjectVersion $projectVersion -OverrideVersion $PackageVersion
+
 Invoke-Checked 'dotnet' @(
     'pack',
     $projectPath,
     '-c', 'Release',
     '-o', $artifactRoot,
-    "/p:RepositoryCommit=$head"
+    "/p:RepositoryCommit=$head",
+    "/p:PackageVersion=$effectivePackageVersion",
+    "/p:Version=$effectivePackageVersion"
 )
 
 $packages = @(Get-ChildItem -LiteralPath $artifactRoot -Filter '*.nupkg' -File |
@@ -610,9 +699,9 @@ if ($packages.Count -ne 1) {
 
 $expandedDirectory = Join-Path $artifactRoot 'expanded'
 try {
-    Assert-PackageMetadata -Package $packages[0] -ExpandedDirectory $expandedDirectory -Head $head
+    Assert-PackageMetadata -Package $packages[0] -ExpandedDirectory $expandedDirectory -Head $head -ExpectedVersion $effectivePackageVersion
     Invoke-Checked 'pwsh' @('-NoProfile', '-File', $artifactScanner, '-SelfTest')
-    Invoke-Checked 'pwsh' @('-NoProfile', '-File', $artifactScanner, '-Paths', $expandedDirectory)
+    Invoke-Checked 'pwsh' @('-NoProfile', '-File', $artifactScanner, '-Paths', $artifactRoot)
 }
 finally {
     if (Test-Path -LiteralPath $expandedDirectory) {

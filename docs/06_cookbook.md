@@ -356,7 +356,7 @@ if (mergeResult.IsSuccess)
 ```
 
 **결과 타입**: `DbResult<long>`, `DbResult<BulkUpsertResult>`, `DbResult<BulkMergeResult>`
-**주의사항**: Legacy `BulkInsertAsync<T>(..., BulkInsertOptions?)`는 여전히 사용할 수 있지만 reflection 기반이므로 AOT 환경에서는 `BulkShape<T>` overload를 사용하세요. Update/delete/upsert/merge는 SQL Server `MERGE` statement를 사용하지 않는 staged DML입니다. Duplicate source key는 target DML 전에 거부되고, target key는 애플리케이션 schema의 `PRIMARY KEY` 또는 `UNIQUE` 제약/인덱스로 보호되어야 합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 v2.4.0에서 지원하지 않는 action으로 거부됩니다. `CheckConstraints` 기본값은 AOT-safe insert에서 `true`입니다. Staged mutation은 `UseTransaction = false`, `FireTriggers = true`, `KeepIdentity = true`, `CheckConstraints = false`를 연결 open 전에 거부합니다. Direct insert에서 `UseTransaction = false`는 partial row가 남을 수 있는 non-atomic opt-out입니다.
+**주의사항**: Legacy `BulkInsertAsync<T>(..., BulkInsertOptions?)`는 여전히 사용할 수 있지만 reflection 기반이므로 AOT 환경에서는 `BulkShape<T>` overload를 사용하세요. Update/delete/upsert/merge는 SQL Server `MERGE` statement를 사용하지 않는 staged DML입니다. Duplicate source key는 target DML 전에 거부되고, target key는 애플리케이션 schema의 `PRIMARY KEY` 또는 `UNIQUE` 제약/인덱스로 보호되어야 합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 현재 bulk merge에서 지원하지 않는 action으로 거부됩니다. `CheckConstraints` 기본값은 AOT-safe insert에서 `true`입니다. Staged mutation은 `UseTransaction = false`, `FireTriggers = true`, `KeepIdentity = true`, `CheckConstraints = false`를 연결 open 전에 거부합니다. Direct insert에서 `UseTransaction = false`는 partial row가 남을 수 있는 non-atomic opt-out입니다.
 
 ---
 

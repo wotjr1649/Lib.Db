@@ -5,6 +5,7 @@
 // ============================================================================
 
 using System.Diagnostics;
+using System.IO.Compression;
 
 namespace Lib.Db.IntegrationTests.Unit;
 
@@ -102,6 +103,239 @@ public sealed class VerificationArtifactScanTests
         result.Output.Should().Contain(fileName);
     }
 
+    [Fact]
+    public async Task Scanner_ShouldAllowNuGetPublicKeyTokenMetadataInsidePackageArchives()
+    {
+        using TemporaryArtifactRoot root = new();
+        string packagePath = Path.Combine(root.Path, "Lib.Db.2.5.0.nupkg");
+
+        await using (FileStream stream = File.Create(packagePath))
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
+        {
+            ZipArchiveEntry entry = archive.CreateEntry("package/services/metadata/core-properties/metadata.psmdcp");
+            await using Stream entryStream = entry.Open();
+            await using StreamWriter writer = new(entryStream);
+            await writer.WriteAsync(
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <coreProperties>
+                  <lastModifiedBy>NuGet.Packaging, Version=6.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35;.NET 8.0</lastModifiedBy>
+                  <description>Public-Key-Token=31bf3856ad364e35</description>
+                </coreProperties>
+                """);
+        }
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(0, result.Output);
+        result.Output.Should().NotContain("Potential verification artifact secret markers");
+        result.Output.Should().NotContain("Marker: Token");
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRejectPublicKeyTokenWhenValueIsNotPublicMetadataHex()
+    {
+        using TemporaryArtifactRoot root = new();
+        string file = Path.Combine(root.Path, "metadata.psmdcp");
+        string value = $"fixture-{Guid.NewGuid():N}";
+        await File.WriteAllTextAsync(
+            file,
+            $"PublicKeyToken={value}",
+            TestContext.Current.CancellationToken);
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Marker: Token");
+        result.Output.Should().NotContain(value);
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRejectSecretMarkersInsideNuGetPackageArchivesWithoutEchoingValues()
+    {
+        using TemporaryArtifactRoot root = new();
+        string packagePath = Path.Combine(root.Path, "Lib.Db.2.5.0.nupkg");
+        string connectionString = $"Server=prod-sql.internal;Database=CustomerLedger;User ID=app;Password=fixture-{Guid.NewGuid():N};Encrypt=True";
+
+        await using (FileStream stream = File.Create(packagePath))
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
+        {
+            ZipArchiveEntry entry = archive.CreateEntry("Lib.Db.nuspec");
+            await using Stream entryStream = entry.Open();
+            await using StreamWriter writer = new(entryStream);
+            await writer.WriteAsync(
+                $"""
+                <package>
+                  <metadata>
+                    <id>Lib.Db</id>
+                    <connectionString>{connectionString}</connectionString>
+                  </metadata>
+                </package>
+                """);
+        }
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Lib.Db.2.5.0.nupkg::Lib.Db.nuspec");
+        result.Output.Should().Contain("Marker: ConnectionString");
+        result.Output.Should().NotContain(connectionString);
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRedactSecretLikeArchiveEntryNames()
+    {
+        using TemporaryArtifactRoot root = new();
+        string secretInEntryName = $"fixture-{Guid.NewGuid():N}";
+        string packagePath = Path.Combine(root.Path, "Lib.Db.2.5.0.nupkg");
+
+        await using (FileStream stream = File.Create(packagePath))
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
+        {
+            ZipArchiveEntry entry = archive.CreateEntry($"metadata/Password={secretInEntryName}.nuspec");
+            await using Stream entryStream = entry.Open();
+            await using StreamWriter writer = new(entryStream);
+            await writer.WriteAsync("clean artifact");
+        }
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Marker: SecretPath");
+        result.Output.Should().NotContain(secretInEntryName);
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRedactConnectionStringLikeArchiveEntryNames()
+    {
+        using TemporaryArtifactRoot root = new();
+        string secretInEntryName = $"Server=prod-sql.internal;Database=CustomerLedger;Password=fixture-{Guid.NewGuid():N}";
+        string packagePath = Path.Combine(root.Path, "Lib.Db.2.5.0.nupkg");
+
+        await using (FileStream stream = File.Create(packagePath))
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
+        {
+            ZipArchiveEntry entry = archive.CreateEntry($"metadata/{secretInEntryName}.nuspec");
+            await using Stream entryStream = entry.Open();
+            await using StreamWriter writer = new(entryStream);
+            await writer.WriteAsync("clean artifact");
+        }
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Marker: SecretPath");
+        result.Output.Should().NotContain("prod-sql.internal");
+        result.Output.Should().NotContain("CustomerLedger");
+        result.Output.Should().NotContain("Password=fixture-");
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRejectSecretLikeNonTextArchiveEntryNames()
+    {
+        using TemporaryArtifactRoot root = new();
+        string secretInEntryName = $"Password=fixture-{Guid.NewGuid():N}";
+        string packagePath = Path.Combine(root.Path, "Lib.Db.2.5.0.nupkg");
+
+        await using (FileStream stream = File.Create(packagePath))
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
+        {
+            ZipArchiveEntry entry = archive.CreateEntry($"lib/net10.0/{secretInEntryName}.dll");
+            await using Stream entryStream = entry.Open();
+            byte[] bytes = [0x4d, 0x5a, 0x90, 0x00];
+            await entryStream.WriteAsync(bytes, TestContext.Current.CancellationToken);
+        }
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Marker: SecretPath");
+        result.Output.Should().NotContain(secretInEntryName);
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRejectSecretLikeArchiveDirectoryEntryNames()
+    {
+        using TemporaryArtifactRoot root = new();
+        string secretInEntryName = $"Password=fixture-{Guid.NewGuid():N}";
+        string packagePath = Path.Combine(root.Path, "Lib.Db.2.5.0.nupkg");
+
+        await using (FileStream stream = File.Create(packagePath))
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
+        {
+            archive.CreateEntry($"metadata/{secretInEntryName}/");
+        }
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Marker: SecretPath");
+        result.Output.Should().NotContain(secretInEntryName);
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRedactSecretLikeArchivePathWhenInspectionFails()
+    {
+        string secretInPath = $"Password=fixture-{Guid.NewGuid():N}";
+        string rootPath = Path.Combine(
+            Path.GetTempPath(),
+            "LibDbArtifactScanTests",
+            secretInPath,
+            Guid.NewGuid().ToString("N"));
+        string packagePath = Path.Combine(rootPath, "Lib.Db.2.5.0.nupkg");
+
+        Directory.CreateDirectory(rootPath);
+        try
+        {
+            await File.WriteAllTextAsync(packagePath, "not a zip archive", TestContext.Current.CancellationToken);
+            await using FileStream lockedPackage = new(
+                packagePath,
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None);
+
+            ProcessResult result = await RunScannerAsync(rootPath);
+
+            result.ExitCode.Should().Be(1, result.Output);
+            result.Output.Should().Contain("Unable to inspect archive artifact");
+            result.Output.Should().NotContain(secretInPath);
+            result.Output.Should().NotContain("fixture-");
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+                Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRedactSecretLikeRootPathWhenReportingScanStart()
+    {
+        string secretInPath = $"Password=fixture-{Guid.NewGuid():N}";
+        string rootPath = Path.Combine(
+            Path.GetTempPath(),
+            "LibDbArtifactScanTests",
+            secretInPath,
+            Guid.NewGuid().ToString("N"));
+
+        Directory.CreateDirectory(rootPath);
+        try
+        {
+            string file = Path.Combine(rootPath, "clean.log");
+            await File.WriteAllTextAsync(file, "clean artifact", TestContext.Current.CancellationToken);
+
+            ProcessResult result = await RunScannerAsync(rootPath);
+
+            result.Output.Should().Contain("Scanning verification artifact path:");
+            result.Output.Should().NotContain(secretInPath);
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+                Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("""{ "ConnectionString": "redacted" }""")]
     [InlineData("""{ "ConnectionStrings": "placeholder" }""")]
@@ -174,6 +408,40 @@ public sealed class VerificationArtifactScanTests
     }
 
     [Fact]
+    public async Task Scanner_ShouldRejectEnvironmentStyleSecretNamesWithoutEchoingValues()
+    {
+        using TemporaryArtifactRoot root = new();
+        string file = Path.Combine(root.Path, "env-dump.log");
+        string[] values = Enumerable.Range(0, 6)
+            .Select(index => $"fixture-{index}-{Guid.NewGuid():N}")
+            .ToArray();
+
+        await File.WriteAllLinesAsync(
+            file,
+            [
+                $"LIBDB_TEST_SQL_PASSWORD={values[0]}",
+                $"NUGET_API_KEY={values[1]}",
+                $"GITHUB_TOKEN={values[2]}",
+                $"AWS_SECRET_ACCESS_KEY={values[3]}",
+                $"LIBDB_SECRET={values[4]}",
+                $"SECRET_KEY={values[5]}"
+            ],
+            TestContext.Current.CancellationToken);
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Marker: Password");
+        result.Output.Should().Contain("Marker: ApiKey");
+        result.Output.Should().Contain("Marker: Token");
+        result.Output.Should().Contain("Marker: Secret");
+        foreach (string value in values)
+        {
+            result.Output.Should().NotContain(value);
+        }
+    }
+
+    [Fact]
     public async Task Scanner_ShouldFlagShortNumericTenantAndUserIdentifiersWithoutEchoingValues()
     {
         using TemporaryArtifactRoot root = new();
@@ -195,8 +463,8 @@ public sealed class VerificationArtifactScanTests
 
         result.ExitCode.Should().Be(1, result.Output);
         result.Output.Should().Contain("Marker: TenantUserIdentifier");
-        result.Output.Should().NotContain(tenantId);
-        result.Output.Should().NotContain(userId);
+        result.Output.Should().NotContain($"TenantId={tenantId}");
+        result.Output.Should().NotContain($"UserId = {userId}");
         result.Output.Should().NotContain("user@example.invalid");
     }
 

@@ -11,6 +11,7 @@ on:
       - 'Verification/baselines/aot-warnings.json'
       - 'Verification/projects/Lib.Db.AotVerification/**'
       - 'Verification/scripts/Invoke-Aot.ps1'
+      - 'Verification/scripts/Scan-VerificationArtifacts.ps1'
 
 permissions:
   contents: read
@@ -88,8 +89,11 @@ jobs:
       shell: pwsh
       run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Aot.ps1 -ArtifactsDirectory "Verification/artifacts/aot-${{ matrix.rid }}"
 
+    - name: Scan Native AOT artifacts
+      shell: pwsh
+      run: pwsh -NoProfile -File ./Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths "Verification/artifacts/aot-${{ matrix.rid }}"
+
     - name: Upload Native AOT artifacts
-      if: always()
       uses: actions/upload-artifact@v6
       with:
         name: native-aot-${{ matrix.rid }}-${{ github.run_id }}

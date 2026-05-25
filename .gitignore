@@ -48,6 +48,17 @@ Thumbs.db
 !/docs/security/libdb-server-chaos-harness.md
 /docs/superpowers/*
 !/docs/superpowers/README.md
+!/docs/superpowers/specs/
+/docs/superpowers/specs/*
+!/docs/superpowers/specs/2026-05-25-libdb-generator-design.md
+!/docs/superpowers/specs/2026-05-25-libdb-contract-tooling-design.md
+!/docs/superpowers/specs/2026-05-25-libdb-change-tracking-adapter-design.md
+!/docs/superpowers/specs/2026-05-25-libdb-release-infra-hardening-design.md
+!/docs/superpowers/plans/
+/docs/superpowers/plans/*
+!/docs/superpowers/plans/2026-05-25-v250-runtime-first-roadmap.md
+!/docs/superpowers/plans/2026-05-25-v250-release-infra-hardening.md
+!/docs/superpowers/plans/2026-05-25-v250-contract-tooling-mvp.md
 
 # Local verification secrets
 Verification/scripts/Set-LibDbVerificationEnvironment.local.ps1

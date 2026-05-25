@@ -28,6 +28,10 @@ public sealed class ConsumerSkillTests
         combined.Should().Contain("Remove the `Lib.Db.TvpGen` package/analyzer reference");
         combined.Should().Contain("LibDb.Tvp(\"schema.TypeName\", rows)");
         combined.Should().Contain("options.Tvp.Map<T>()");
+        combined.Should().Contain("Lib.Db.Tools");
+        combined.Should().Contain("no-DB contract validate/report");
+        combined.Should().Contain("BulkMergeOptions.Actions");
+        combined.Should().Contain("DeleteNotMatchedBySource");
 
         combined.Should().NotContain("Invoke-Benchmarks");
         combined.Should().NotContain("Invoke-Coverage");
@@ -36,6 +40,35 @@ public sealed class ConsumerSkillTests
         combined.Should().NotContain("Verification/scripts");
         combined.Should().NotContain("ChaosHarness");
         combined.Should().NotContain("LIBDB_CHAOS_TEST");
+    }
+
+    [Fact]
+    public void ConsumerSkillRoots_ShouldStayInSyncForReleaseGuidance()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string agentsRoot = Path.Combine(repoRoot.FullName, ".agents", "skills", "lib-db");
+        string claudeRoot = Path.Combine(repoRoot.FullName, ".claude", "skills", "lib-db");
+
+        string[] agentsFiles = Directory
+            .EnumerateFiles(agentsRoot, "*.md", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(agentsRoot, path))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        string[] claudeFiles = Directory
+            .EnumerateFiles(claudeRoot, "*.md", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(claudeRoot, path))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        claudeFiles.Should().Equal(agentsFiles);
+
+        foreach (string relativePath in agentsFiles)
+        {
+            string agentsText = File.ReadAllText(Path.Combine(agentsRoot, relativePath));
+            string claudeText = File.ReadAllText(Path.Combine(claudeRoot, relativePath));
+
+            claudeText.Should().Be(agentsText, $"{relativePath} should not drift between repo-local skill roots");
+        }
     }
 
     private static DirectoryInfo FindRepoRoot()

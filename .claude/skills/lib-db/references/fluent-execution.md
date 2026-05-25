@@ -94,20 +94,24 @@ DbResult<long?> result = await db.Default
 - `MarsPolicy.ForceEnable`: injects `MultipleActiveResultSets=True` during `AddLibDb(...)` registration. Use this only when the application accepts automatic connection-string adjustment.
 
 ```csharp
-DbResult<IMultipleResultReader> result = await db.Default
+using Lib.Db.Extensions;
+
+DbResult<DbMultiple<OrderDto, OrderSummaryDto>> result = await db.Default
     .Procedure("dbo.usp_GetOrderDashboard")
     .With(new { CustomerId = customerId })
-    .QueryMultipleAsync(ct);
+    .QueryMultipleAsync(ct)
+    .ReadMultipleAsync<OrderDto, OrderSummaryDto>(ct);
 
 if (!result.IsSuccess)
     return Dashboard.Empty;
 
-await using IMultipleResultReader grid = result.Value!;
-List<OrderDto> orders = await grid.ReadAsync<OrderDto>(ct);
-OrderSummaryDto? summary = await grid.ReadSingleAsync<OrderSummaryDto>(ct);
+List<OrderDto> orders = result.Value.First;
+OrderSummaryDto? summary = result.Value.Second.SingleOrDefault();
 ```
 
-`IMultipleResultReader` is stateful and single-consumer. Read result sets in order. Extra trailing result sets can be ignored by not reading them. If application code asks for another result set and the stored procedure returned no more result sets, Lib.Db throws `InvalidOperationException`. If the result set exists but has no rows, `ReadAsync<T>()` returns an empty list and `ReadSingleAsync<T>()` returns `default`.
+`ReadMultipleAsync<T1,T2>()`, `ReadMultipleAsync<T1,T2,T3>()`, and `ReadMultipleAsync<T1,T2,T3,T4>()` read result sets in stored-procedure order, dispose the reader, and return `DbMultiple<...>` with `List<T>` fields named `First`, `Second`, `Third`, and `Fourth`. Missing result sets or read failures return the redacted message `Reading multiple result sets failed.`.
+
+Use `IMultipleResultReader` directly only when you need manual consumption. It is stateful and single-consumer. Read result sets in order.
 
 ## Advanced Snapshot Overrides
 

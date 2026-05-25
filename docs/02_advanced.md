@@ -709,7 +709,7 @@ if (result.IsSuccess)
 }
 ```
 
-`BulkMergeAsync`의 기본 action은 matched row update와 missing row insert이며, 결과는 inserted/updated/deleted count를 분리해서 반환합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 v2.4.0에서 지원하지 않는 action으로 거부됩니다.
+`BulkMergeAsync`의 기본 action은 matched row update와 missing row insert이며, 결과는 inserted/updated/deleted count를 분리해서 반환합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 현재 bulk merge에서 지원하지 않는 action으로 거부됩니다.
 
 Non-cancellation failure는 rollback 이후 redacted `DbResult<T>` 실패로 반환됩니다. Public `DbError`에는 raw SQL, provider exception, row value, payload, connection string value, public `InnerException`을 노출하지 않습니다.
 

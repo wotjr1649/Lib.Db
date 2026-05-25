@@ -372,7 +372,7 @@ Legacy `BulkInsertAsync<T>(..., BulkInsertOptions?)`는 reflection 기반 compat
 
 `BulkShape<T>`는 destination identifier, decimal precision/scale, string/binary size, temporal scale, CLR value type과 `SqlDbType` compatibility, enum underlying type alignment, stage-key metadata(32 key columns 이하, `max` key 금지, 900-byte portability limit)를 shape construction 시점에 검증합니다.
 
-Direct AOT-safe insert에서 `UseTransaction = false`는 non-atomic opt-out입니다. Staged update/delete/upsert/merge는 v2.4.0에서 `UseTransaction = false`, `FireTriggers = true`, `KeepIdentity = true`, `CheckConstraints = false`를 connection open 전에 거부합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 v2.4.0 bulk merge에서 지원하지 않는 action으로 거부됩니다. Bulk failure는 rollback 후 generic/redacted `DbResult<T>` failure로 반환되며 public `DbError.InnerException`에 provider exception을 노출하지 않습니다.
+Direct AOT-safe insert에서 `UseTransaction = false`는 non-atomic opt-out입니다. Staged update/delete/upsert/merge는 현재 구현에서 `UseTransaction = false`, `FireTriggers = true`, `KeepIdentity = true`, `CheckConstraints = false`를 connection open 전에 거부합니다. `DeleteMatched`는 단독 action일 때만 허용되고, `DeleteNotMatchedBySource`는 현재 bulk merge에서 지원하지 않는 action으로 거부됩니다. Bulk failure는 rollback 후 generic/redacted `DbResult<T>` failure로 반환되며 public `DbError.InnerException`에 provider exception을 노출하지 않습니다.
 
 ---
 
