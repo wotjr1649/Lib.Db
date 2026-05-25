@@ -65,7 +65,9 @@ Each OS verifies its own native toolchain before running `Verification/scripts/I
 - GitHub Actions hosted runner docs list standard runner labels and architecture, including `ubuntu-24.04`, `windows-2022`, and `macos-15-intel`: <https://docs.github.com/en/actions/reference/github-hosted-runners-reference>
 - GitHub Actions workflow syntax documents branch and path filters for push and pull_request events: <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax>
 - GitHub Actions secrets documentation recommends environment variables over direct command-line secret interpolation when a tool must consume a secret: <https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets>
-- NuGet Trusted Publishing documents OIDC-based short-lived package publishing credentials as the preferred long-term NuGet publishing model: <https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing>
+- NuGet documents API-key package publishing with `dotnet nuget push`; Trusted Publishing is a separate OIDC-based model and is not the current `.github/workflows/publish.yml` contract:
+  - <https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-nuget-push>
+  - <https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing>
 - Microsoft Learn documents Visual Studio workload/component IDs for Desktop C++ and Build Tools C++ workloads:
   - <https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-community>
   - <https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools>
@@ -84,7 +86,7 @@ Provider-owned warnings are accepted only when the id, assembly, source package,
 
 ## NuGet publish policy
 
-NuGet publishing is allowed only from a SemVer `v*` tag whose target commit is contained in `origin/main`. The publish workflow uses NuGet Trusted Publishing (`NuGet/login@v1`) to exchange GitHub OIDC for a short-lived NuGet API key immediately before `dotnet nuget push`; maintainers must configure a matching nuget.org Trusted Publishing policy for `.github/workflows/publish.yml` and provide the `NUGET_USER` GitHub secret with the nuget.org profile name.
+NuGet publishing is allowed only from a SemVer `v*` tag whose target commit is contained in `origin/main`. The publish workflow currently requires the `NUGET_API_KEY` GitHub secret, verifies that the key is present without printing its value, and passes it through the environment to `dotnet nuget push`. Do not configure `NUGET_USER`, `NuGet/login@v1`, or a Trusted Publishing/OIDC policy for the current workflow unless `.github/workflows/publish.yml` is intentionally changed back to that model.
 
 ## Artifact Policy
 

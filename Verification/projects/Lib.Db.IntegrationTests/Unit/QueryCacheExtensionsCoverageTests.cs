@@ -212,9 +212,11 @@ public sealed class QueryCacheExtensionsCoverageTests
         using ServiceProvider provider = CreateHybridCacheProvider();
         HybridCache cache = provider.GetRequiredService<HybridCache>();
 
+#pragma warning disable xUnit1051 // This regression test intentionally preserves the default literal cancellation token call.
         DbResult<CachedUser?> result = await Task
             .FromResult(DbResult<CachedUser?>.Ok(new CachedUser(11, "default-ct")))
             .WithHybridCacheAsync(cache, "hybrid:default-ct", TimeSpan.FromMinutes(1), default);
+#pragma warning restore xUnit1051
 
         result.IsSuccess.Should().BeTrue();
         result.Value.Should().Be(new CachedUser(11, "default-ct"));
