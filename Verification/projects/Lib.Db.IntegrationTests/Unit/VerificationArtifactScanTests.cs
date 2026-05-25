@@ -104,6 +104,53 @@ public sealed class VerificationArtifactScanTests
     }
 
     [Fact]
+    public async Task Scanner_ShouldAllowNuGetPublicKeyTokenMetadataInsidePackageArchives()
+    {
+        using TemporaryArtifactRoot root = new();
+        string packagePath = Path.Combine(root.Path, "Lib.Db.2.5.0.nupkg");
+
+        await using (FileStream stream = File.Create(packagePath))
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
+        {
+            ZipArchiveEntry entry = archive.CreateEntry("package/services/metadata/core-properties/metadata.psmdcp");
+            await using Stream entryStream = entry.Open();
+            await using StreamWriter writer = new(entryStream);
+            await writer.WriteAsync(
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <coreProperties>
+                  <lastModifiedBy>NuGet.Packaging, Version=6.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35;.NET 8.0</lastModifiedBy>
+                  <description>Public-Key-Token=31bf3856ad364e35</description>
+                </coreProperties>
+                """);
+        }
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(0, result.Output);
+        result.Output.Should().NotContain("Potential verification artifact secret markers");
+        result.Output.Should().NotContain("Marker: Token");
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldRejectPublicKeyTokenWhenValueIsNotPublicMetadataHex()
+    {
+        using TemporaryArtifactRoot root = new();
+        string file = Path.Combine(root.Path, "metadata.psmdcp");
+        string value = $"fixture-{Guid.NewGuid():N}";
+        await File.WriteAllTextAsync(
+            file,
+            $"PublicKeyToken={value}",
+            TestContext.Current.CancellationToken);
+
+        ProcessResult result = await RunScannerAsync(root.Path);
+
+        result.ExitCode.Should().Be(1, result.Output);
+        result.Output.Should().Contain("Marker: Token");
+        result.Output.Should().NotContain(value);
+    }
+
+    [Fact]
     public async Task Scanner_ShouldRejectSecretMarkersInsideNuGetPackageArchivesWithoutEchoingValues()
     {
         using TemporaryArtifactRoot root = new();

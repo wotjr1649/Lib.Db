@@ -226,6 +226,19 @@ function Test-CodeLikeTenantUserIdentifierLine {
     return $false
 }
 
+function Remove-KnownPublicKeyTokenMetadata {
+    param([string] $Content)
+
+    if ([string]::IsNullOrEmpty($Content)) {
+        return $Content
+    }
+
+    [System.Text.RegularExpressions.Regex]::Replace(
+        $Content,
+        '(?i)\bpublic[-_\s]?key[-_\s]?token\b\s*=\s*["'']?[0-9a-f]{16}["'']?',
+        'PublicKeyToken=<public-metadata>')
+}
+
 function Read-ArtifactText {
     param([string] $Path)
 
@@ -359,7 +372,14 @@ function Find-ContentSecretMarkers {
             continue
         }
 
-        if ([System.Text.RegularExpressions.Regex]::IsMatch($Content, $markerPattern.Pattern)) {
+        $contentToScan = if ($markerPattern.Marker -eq 'Token') {
+            Remove-KnownPublicKeyTokenMetadata -Content $Content
+        }
+        else {
+            $Content
+        }
+
+        if ([System.Text.RegularExpressions.Regex]::IsMatch($contentToScan, $markerPattern.Pattern)) {
             Add-Hit -Keys $Keys -Hits $Hits -Path $Path -Marker $markerPattern.Marker
         }
     }
