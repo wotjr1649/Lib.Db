@@ -28,8 +28,10 @@ public sealed class ReleasePackageGuardTests
         script.Should().Contain("[string] $ArtifactsDirectory = 'Verification\\artifacts\\release-package'");
         script.Should().Contain("[string] $PackageVersion");
         script.Should().Contain("$effectivePackageVersion");
+        script.Should().Contain("PackageVersion override must match project Version");
         script.Should().Contain("/p:PackageVersion=$effectivePackageVersion");
         script.Should().Contain("/p:Version=$effectivePackageVersion");
+        script.Should().Contain("RejectsMismatchedPackageVersionOverride");
     }
 
     [Fact]

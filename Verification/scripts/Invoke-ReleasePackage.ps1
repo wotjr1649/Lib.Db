@@ -166,6 +166,10 @@ function Resolve-PackageVersion {
         throw "PackageVersion must be a SemVer version without the v prefix: $trimmedVersion"
     }
 
+    if (-not [string]::Equals($trimmedVersion, $ProjectVersion, [System.StringComparison]::Ordinal)) {
+        throw "PackageVersion override must match project Version. Project=$ProjectVersion, Override=$trimmedVersion"
+    }
+
     return $trimmedVersion
 }
 
@@ -623,7 +627,7 @@ function Invoke-SelfTest {
 
     Assert-SelfTestPass -Name 'AcceptsExplicitPackageVersionOverride' -Assertion {
         try {
-            Resolve-PackageVersion -ProjectVersion '2.4.0' -OverrideVersion '2.5.0-rc.1' | Out-Null
+            Resolve-PackageVersion -ProjectVersion '2.5.0-rc.1' -OverrideVersion '2.5.0-rc.1' | Out-Null
             return $true
         }
         catch {
@@ -638,6 +642,16 @@ function Invoke-SelfTest {
         }
         catch {
             return $_.Exception.Message.Contains('without the v prefix', [System.StringComparison]::Ordinal)
+        }
+    }
+
+    Assert-SelfTestPass -Name 'RejectsMismatchedPackageVersionOverride' -Assertion {
+        try {
+            Resolve-PackageVersion -ProjectVersion '2.5.0' -OverrideVersion '2.5.1' | Out-Null
+            return $false
+        }
+        catch {
+            return $_.Exception.Message.Contains('must match project Version', [System.StringComparison]::Ordinal)
         }
     }
 }
