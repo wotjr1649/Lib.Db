@@ -3,7 +3,7 @@ name: Publish to NuGet
 on:
   push:
     tags:
-      - 'v*' # Trigger on version tags like v1.0.0, v2.0-beta
+      - 'v*' # Trigger on version tags like v1.0.0, v2.0.0-beta
 
 permissions:
   contents: read  # Required to checkout code
@@ -124,28 +124,25 @@ jobs:
     - name: Restore local tools
       run: dotnet tool restore
 
-    - name: Run v2.4.0 release gate
+    - name: Run release verification gate
       shell: pwsh
       run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
 
+    - name: Build allowlisted release package
+      shell: pwsh
+      run: pwsh -NoProfile -File ./Verification/scripts/Invoke-ReleasePackage.ps1 -ArtifactsDirectory Verification/artifacts/release-package -PackageVersion '${{ steps.version.outputs.version }}'
+
     - name: Upload verification artifacts
-      if: always()
       uses: actions/upload-artifact@v6
       with:
         name: verification-artifacts-${{ github.run_id }}
-        path: Verification/artifacts/**
+        path: |
+          Verification/artifacts/**
+          !Verification/artifacts/release-package/**
+          !Verification/artifacts/**/*.nupkg
+          !Verification/artifacts/**/*.snupkg
         if-no-files-found: warn
         retention-days: 7
-
-    # 2) Pack 시 태그 버전을 강제 주입
-    - name: Pack (tag version)
-      run: |
-        dotnet pack Lib.Db/Lib.Db.csproj \
-          --configuration Release \
-          --no-restore \
-          --output ./nupkgs \
-          -p:PackageVersion=${{ steps.version.outputs.version }} \
-          -p:Version=${{ steps.version.outputs.version }}
 
     - name: Push to NuGet
       shell: bash
@@ -153,7 +150,12 @@ jobs:
         NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
       run: |
         set -euo pipefail
-        dotnet nuget push ./nupkgs/*.nupkg \
+        package_path="./Verification/artifacts/release-package/Lib.Db.${{ steps.version.outputs.version }}.nupkg"
+        if [[ ! -f "$package_path" ]]; then
+          echo "ERROR: Allowlisted release package was not found: $package_path" >&2
+          exit 1
+        fi
+        dotnet nuget push "$package_path" \
           --api-key "$NUGET_API_KEY" \
           --source https://api.nuget.org/v3/index.json \
           --skip-duplicate

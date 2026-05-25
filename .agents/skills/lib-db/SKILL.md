@@ -13,6 +13,8 @@ Keep this file as the router. Read only the reference files needed for the curre
 
 This skill documents application consumer-facing Lib.Db APIs. Internal, infrastructure-level, and low-level public contracts are outside normal application scope unless the user is extending Lib.Db itself.
 
+`Lib.Db.Tools` is separate no-DB contract validation/report tooling, not an application runtime API. When a user asks about contract files or tool commands, use `docs/contracts/libdb-contracts-v1.md`; do not present `Lib.Db.Tools` as a consumer application package reference.
+
 Exact-name index for validation and routing: consumer-facing `IDbInterceptor`; infrastructure-level `DbResultAttribute`, `ConfigurationBinder`, `IIsolationKeyGenerator`, `IQueryAnalyzer`, `IDbCommandInterceptor`, `IResiliencePipelineProvider`, `ITransientSqlErrorDetector`, `ISchemaService`, `ITvpSchemaValidator`, `ITvpStaticValidator`, and `ISchemaFlushCoordinator`.
 
 ## First Step
@@ -63,7 +65,7 @@ Exact-name index for validation and routing: consumer-facing `IDbInterceptor`; i
 - `BulkInsertAsync<T>()` returns `DbResult<long>`.
 - Prefer `BulkShape<T>` overloads for AOT-safe bulk insert, update, delete, upsert, and merge-like mutation. Treat bulk mutation keys as non-null unique database keys backed by application-owned `PRIMARY KEY` or `UNIQUE` schema constraints.
 - Use HybridCache tag overloads for grouped logical invalidation. Tags are app-owned non-sensitive labels; do not use wildcard `*` as an entry tag and do not put tenant/user identifiers, tokens, connection strings, SQL text, row values, or cache payloads in keys or tags.
-- Generator, migration/contract tooling, and SQL Server Change Tracking adapter work is roadmap-only for v2.5.0 or later; do not write examples as if those features are implemented in v2.4.0.
+- `Lib.Db.Tools` provides no-DB contract validate/report tooling separately from the runtime package. `Lib.Db.Generator` and SQL Server Change Tracking adapters remain roadmap/prototype candidates; do not write examples as if those features are implemented runtime APIs.
 - Result mapping tries exact case-insensitive column/property matches first, then underscore-insensitive normalized matches.
 - `DateOnly` binds as SQL `date`; `TimeOnly` binds as SQL `time`.
 

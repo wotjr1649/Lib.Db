@@ -1,6 +1,6 @@
 # Lib.Db Verification
 
-This directory is the canonical root for Lib.Db v2.4.0 verification assets.
+This directory is the canonical root for Lib.Db verification assets.
 
 ## Environment Variable Names
 
@@ -46,5 +46,8 @@ Direct SQL execution is restricted to allowlisted files under `Verification/data
 - Verification/artifacts/coverage/report
 - Verification/artifacts/benchmarks/BenchmarkDotNet.Artifacts
 - Verification/artifacts/aot
+- Verification/artifacts/release-package
+
+Release package artifacts are dry-run verification outputs. Workflows exclude `Verification/artifacts/release-package/**`, `*.nupkg`, and `*.snupkg` from uploaded verification artifacts. Do not preserve or share package artifacts unless the release package scanner has passed.
 
 Generated artifacts are not source and must not be committed.

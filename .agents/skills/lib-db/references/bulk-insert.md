@@ -66,7 +66,7 @@ DbResult<long> result = await db.BulkInsertAsync(
 - `CheckConstraints`: enforce constraints. AOT-safe `BulkWriteOptions` defaults this to `true`.
 - `KeepIdentity`: preserve identity values.
 - `UseTransaction`: AOT-safe bulk transaction control. Keep the default `true` unless intentionally accepting non-atomic direct insert.
-- `BulkMergeOptions.Actions`: defaults to `UpdateMatched | InsertMissing`; unknown bits and `DeleteNotMatchedBySource` are rejected in v2.4.0. `DeleteMatched` is exclusive and must be used by itself.
+- `BulkMergeOptions.Actions`: defaults to `UpdateMatched | InsertMissing`; unknown bits and `DeleteNotMatchedBySource` are rejected. `DeleteMatched` is exclusive and must be used by itself.
 
 ## Mapping
 

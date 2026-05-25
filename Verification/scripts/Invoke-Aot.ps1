@@ -483,7 +483,7 @@ if (Test-Path -LiteralPath $publishDirectory) {
     Remove-Item -LiteralPath $publishDirectory -Recurse -Force
 }
 
-Write-Host 'Lib.Db v2.4.0 AOT verification started.'
+Write-Host 'Lib.Db AOT verification started.'
 Write-Host "AotArtifacts=$artifactRoot"
 
 $publishArguments = @(
@@ -525,4 +525,4 @@ if (-not (Test-Path -LiteralPath $aotExecutable)) {
 
 Invoke-Checked $aotExecutable @()
 
-Write-Host 'Lib.Db v2.4.0 AOT verification completed.'
+Write-Host 'Lib.Db AOT verification completed.'

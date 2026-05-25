@@ -2,6 +2,32 @@
 
 Current usage docs are intended to stay version-neutral and describe the current API. This file owns version-specific history: release changes, verification summaries, migration notes, and archived report summaries that should not remain scattered through active guides.
 
+## 2.5.0 Summary
+
+### Added
+
+- Added `Lib.Db.Tools` as a separate, non-packable no-DB contract validate/report MVP. It reads checked-in `libdb.contracts.json` files, compares stored procedure/TVP/bulk target contracts, and emits deterministic JSON or Markdown reports.
+- Added `docs/contracts/libdb-contracts-v1.md` to define the strict no-secret v1 contract shape, CLI commands, exit codes, and unsupported-command boundary.
+- Added v2.5.0 design specs for generator, contract tooling, SQL Server Change Tracking adapter, and release infra hardening.
+
+### Changed
+
+- `Lib.Db` runtime package version moved to `2.5.0` while keeping generator and SQL Server Change Tracking out of the core runtime.
+- Release package verification now builds only the allowlisted `Lib.Db` package through `Invoke-ReleasePackage.ps1`; `Lib.Db.Tools` remains `IsPackable=false`.
+- Release verification writes dry-run package artifacts under an excluded release-package artifact directory, and workflows exclude package artifacts from verification artifact uploads.
+- Repository-local `.agents` and `.claude` Lib.Db skills now distinguish the runtime package from `Lib.Db.Tools` and keep bulk mutation guidance aligned.
+
+### Verification
+
+- Added guard tests for package allowlist, dry-run non-publish behavior, unsupported `Lib.Db.Tools` commands, SQL non-execution, contract validation/report output, and verification artifact redaction.
+- Artifact scanning now inspects NuGet archives, redacts secret-like archive entry names and paths, and reports marker/key names without echoing secret-like values.
+
+### Security
+
+- `Lib.Db.Tools` rejects secret-bearing contract fields and redacts secret-like object names, paths, and connection-string-shaped values in reports and failures.
+- `Lib.Db.Tools` does not connect to SQL Server, inspect live metadata, execute SQL, or mutate databases in the v2.5.0 MVP.
+- Publish workflows push an exact allowlisted package path instead of a wildcard package glob.
+
 ## 2.4.0 Summary
 
 ### Added

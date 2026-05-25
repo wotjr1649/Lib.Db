@@ -30,6 +30,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\Lib.Db\Lib.Db.csproj" />
+    <ProjectReference Include="..\..\..\Lib.Db.Tools\Lib.Db.Tools.csproj" />
   </ItemGroup>
   <PropertyGroup>
     <LibDbTestSqlPasswordConfigured Condition="'$(LIBDB_TEST_SQL_PASSWORD)' != ''">true</LibDbTestSqlPasswordConfigured>

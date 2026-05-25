@@ -23,6 +23,7 @@ $artifactScanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
 $artifactTrackingGate = Join-Path $PSScriptRoot 'Assert-GeneratedArtifactsUntracked.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
 $matrixResultsDirectory = Join-Path $repoRoot 'Verification\artifacts\test-results\matrix'
+$releasePackageArtifactsDirectory = 'Verification\artifacts\release-package'
 
 $skippedGates = [System.Collections.Generic.List[string]]::new()
 
@@ -61,7 +62,7 @@ function Write-SecretSafeEnvironmentSummary {
     }
 }
 
-Write-Host 'Lib.Db v2.4.0 verification started.'
+Write-Host 'Lib.Db verification started.'
 Write-SecretSafeEnvironmentSummary
 
 Invoke-Checked 'dotnet' @('build', $integrationProject, '--no-restore', '-v:minimal')
@@ -117,7 +118,7 @@ else {
 }
 
 if (-not $SkipReleasePackage) {
-    & pwsh -NoProfile -File $releasePackageScript
+    & pwsh -NoProfile -File $releasePackageScript -ArtifactsDirectory $releasePackageArtifactsDirectory
     if ($LASTEXITCODE -ne 0) {
         throw "Release package verification failed with exit code $LASTEXITCODE."
     }
@@ -152,11 +153,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($skippedGates.Count -gt 0) {
-    Write-Warning "Lib.Db v2.4.0 verification completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade evidence."
+    Write-Warning "Lib.Db verification completed as a PARTIAL run. Skipped gates: $($skippedGates -join ', '). This is not release-grade evidence."
     if (-not $AllowPartial) {
         throw "Partial verification runs require -AllowPartial so CI cannot mistake them for release-grade evidence."
     }
 }
 else {
-    Write-Host 'Lib.Db v2.4.0 release-grade verification completed.'
+    Write-Host 'Lib.Db release-grade verification completed.'
 }

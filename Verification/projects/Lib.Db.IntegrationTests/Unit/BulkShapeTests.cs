@@ -447,7 +447,7 @@ public sealed class BulkShapeTests
     }
 
     [Fact]
-    public void BulkMergeOptions_ShouldRejectDeleteNotMatchedBySourceInV240()
+    public void BulkMergeOptions_ShouldRejectDeleteNotMatchedBySource()
     {
         BulkWriteOptions options = new BulkMergeOptions
         {
@@ -457,7 +457,7 @@ public sealed class BulkShapeTests
         Action act = () => options.Validate();
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*DeleteNotMatchedBySource*not supported*v2.4.0*");
+            .WithMessage("*DeleteNotMatchedBySource*not supported*current Lib.Db bulk merge*");
     }
 
     [Theory]

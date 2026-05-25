@@ -119,7 +119,7 @@ public interface IDbSession : IAsyncDisposable
     /// AOT-safe shape metadata 기반 staged 대량 UPDATE를 수행합니다.
     /// </summary>
     /// <remarks>
-    /// staged UPDATE는 v2.4.0에서 로컬 트랜잭션을 필수로 사용합니다.
+    /// staged UPDATE는 현재 구현에서 로컬 트랜잭션을 필수로 사용합니다.
     /// <see cref="BulkWriteOptions.UseTransaction"/>을 <see langword="false"/>로 지정하거나
     /// 직접 bulk-copy 대상에만 의미가 있는 <see cref="BulkWriteOptions.FireTriggers"/>,
     /// <see cref="BulkWriteOptions.KeepIdentity"/>, <c>CheckConstraints = false</c> 옵션을 지정하면
@@ -146,7 +146,7 @@ public interface IDbSession : IAsyncDisposable
     /// AOT-safe shape metadata 기반 staged 대량 DELETE를 수행합니다.
     /// </summary>
     /// <remarks>
-    /// staged DELETE는 key column만 staging하며 v2.4.0에서 로컬 트랜잭션을 필수로 사용합니다.
+    /// staged DELETE는 key column만 staging하며 현재 구현에서 로컬 트랜잭션을 필수로 사용합니다.
     /// <see cref="BulkWriteOptions.UseTransaction"/>을 <see langword="false"/>로 지정하거나
     /// 직접 bulk-copy 대상에만 의미가 있는 <see cref="BulkWriteOptions.FireTriggers"/>,
     /// <see cref="BulkWriteOptions.KeepIdentity"/>, <c>CheckConstraints = false</c> 옵션을 지정하면
@@ -174,7 +174,7 @@ public interface IDbSession : IAsyncDisposable
     /// </summary>
     /// <remarks>
     /// SQL Server <c>MERGE</c>를 사용하지 않고 staged UPDATE 후 NOT EXISTS 기반 INSERT를 수행합니다.
-    /// v2.4.0에서는 로컬 트랜잭션을 필수로 사용하며,
+    /// 현재 구현에서는 로컬 트랜잭션을 필수로 사용하며,
     /// <see cref="BulkWriteOptions.UseTransaction"/>을 <see langword="false"/>로 지정하거나
     /// 직접 bulk-copy 대상에만 의미가 있는 <see cref="BulkWriteOptions.FireTriggers"/>,
     /// <see cref="BulkWriteOptions.KeepIdentity"/>, <c>CheckConstraints = false</c> 옵션을 지정하면
@@ -203,7 +203,7 @@ public interface IDbSession : IAsyncDisposable
     /// </summary>
     /// <remarks>
     /// SQL Server <c>MERGE</c>를 사용하지 않고 선택된 staged DML action을 순서대로 실행합니다.
-    /// v2.4.0에서는 로컬 트랜잭션을 필수로 사용하며,
+    /// 현재 구현에서는 로컬 트랜잭션을 필수로 사용하며,
     /// <see cref="BulkWriteOptions.UseTransaction"/>을 <see langword="false"/>로 지정하거나
     /// 직접 bulk-copy 대상에만 의미가 있는 <see cref="BulkWriteOptions.FireTriggers"/>,
     /// <see cref="BulkWriteOptions.KeepIdentity"/>, <c>CheckConstraints = false</c> 옵션을 지정하면
