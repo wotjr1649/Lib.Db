@@ -62,6 +62,392 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DictionarySqlMapper_ShouldCloneExplicitSqlParameterOutputReferencesAndCopyBack()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var outputVal = new SqlParameter("@OutputVal", SqlDbType.BigInt)
+        {
+            Direction = ParameterDirection.Input,
+            Value = 999L
+        };
+        var inOutVal = new SqlParameter("@InOutVal", SqlDbType.BigInt)
+        {
+            Direction = ParameterDirection.InputOutput,
+            Value = 5L
+        };
+        var returnValue = new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 999
+        };
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["InputVal"] = 10,
+            ["OutputVal"] = outputVal,
+            ["InOutVal"] = inOutVal,
+            ["ReturnValue"] = returnValue
+        };
+
+        mapper.MapParameters(command, values, CreateSchema(
+            Param("@InputVal", SqlDbType.Int, nullable: false),
+            Param("@OutputVal", SqlDbType.Int, direction: ParameterDirection.Output),
+            Param("@InOutVal", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        command.Parameters["@OutputVal"].Should().NotBeSameAs(outputVal);
+        command.Parameters["@OutputVal"].Direction.Should().Be(ParameterDirection.Output);
+        command.Parameters["@OutputVal"].SqlDbType.Should().Be(SqlDbType.Int);
+        command.Parameters["@OutputVal"].Value.Should().Be(DBNull.Value);
+        outputVal.Direction.Should().Be(ParameterDirection.Input);
+        outputVal.SqlDbType.Should().Be(SqlDbType.BigInt);
+        outputVal.Value.Should().Be(999L);
+
+        command.Parameters["@InOutVal"].Should().NotBeSameAs(inOutVal);
+        command.Parameters["@InOutVal"].Direction.Should().Be(ParameterDirection.InputOutput);
+        command.Parameters["@InOutVal"].SqlDbType.Should().Be(SqlDbType.Int);
+        command.Parameters["@InOutVal"].Value.Should().BeOfType<int>().Which.Should().Be(5);
+        inOutVal.SqlDbType.Should().Be(SqlDbType.BigInt);
+        inOutVal.Value.Should().Be(5L);
+
+        command.Parameters["@ReturnValue"].Should().NotBeSameAs(returnValue);
+        command.Parameters["@ReturnValue"].Direction.Should().Be(ParameterDirection.ReturnValue);
+        command.Parameters["@ReturnValue"].Value.Should().Be(DBNull.Value);
+        returnValue.Value.Should().Be(999);
+
+        command.Parameters["@OutputVal"].Value = 20;
+        command.Parameters["@InOutVal"].Value = 15;
+        command.Parameters["@ReturnValue"].Value = 10;
+        mapper.MapOutputParameters(command, values);
+
+        values["OutputVal"].Should().Be(20);
+        values["InOutVal"].Should().Be(15);
+        values["ReturnValue"].Should().BeSameAs(returnValue);
+        outputVal.Value.Should().Be(20);
+        inOutVal.Value.Should().Be(15);
+        returnValue.Value.Should().Be(10);
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldNormalizeExplicitInputOutputValueWithSchema()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var inOutValue = new SqlParameter("@TextValue", SqlDbType.NVarChar, 4000)
+        {
+            Direction = ParameterDirection.InputOutput,
+            Value = "abcdef"
+        };
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["TextValue"] = inOutValue
+        };
+
+        mapper.MapParameters(command, values, CreateSchema(
+            Param("@TextValue", SqlDbType.NVarChar, direction: ParameterDirection.Output, size: 3)));
+
+        command.Parameters["@TextValue"].Should().NotBeSameAs(inOutValue);
+        command.Parameters["@TextValue"].Direction.Should().Be(ParameterDirection.InputOutput);
+        command.Parameters["@TextValue"].Size.Should().Be(3);
+        command.Parameters["@TextValue"].Value.Should().Be("abc");
+        inOutValue.Size.Should().Be(4000);
+        inOutValue.Value.Should().Be("abcdef");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectRequiredExplicitInputOutputNull()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Required"] = new SqlParameter("@Required", SqlDbType.Int)
+            {
+                Direction = ParameterDirection.InputOutput,
+                Value = DBNull.Value
+            }
+        };
+
+        Action act = () => mapper.MapParameters(
+            command,
+            values,
+            CreateSchema(Param(
+                "@Required",
+                SqlDbType.Int,
+                direction: ParameterDirection.InputOutput,
+                nullable: false)));
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*Required*");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectAmbiguousOutputTargetNames()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["OutputVal"] = null,
+            ["outputval"] = null
+        };
+
+        command.Parameters.Add(new SqlParameter("@OutputVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 42
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, values);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*OutputVal*ambiguous*");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectUnsupportedExplicitReturnValueType()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Id"] = 1,
+            ["ReturnValue"] = new SqlParameter("@ReturnValue", SqlDbType.BigInt)
+            {
+                Direction = ParameterDirection.ReturnValue
+            }
+        };
+
+        Action act = () => mapper.MapParameters(command, values, CreateSchema(Param("@Id", SqlDbType.Int)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ReturnValue*Int*");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldNotDoubleBindSchemaReturnValue()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var returnValue = new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 999
+        };
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["ReturnValue"] = returnValue
+        };
+
+        mapper.MapParameters(
+            command,
+            values,
+            CreateSchema(Param("@ReturnValue", SqlDbType.Int, direction: ParameterDirection.ReturnValue)));
+
+        command.Parameters
+            .Cast<SqlParameter>()
+            .Should()
+            .ContainSingle(parameter => parameter.Direction == ParameterDirection.ReturnValue);
+        command.Parameters["@ReturnValue"].Should().NotBeSameAs(returnValue);
+        command.Parameters["@ReturnValue"].Value = 10;
+
+        mapper.MapOutputParameters(command, values);
+
+        values["ReturnValue"].Should().BeSameAs(returnValue);
+        returnValue.Value.Should().Be(10);
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectSchemaModeDuplicateExtraReturnValueParameters()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["ReturnValue"] = new SqlParameter("@ReturnValue", SqlDbType.Int)
+            {
+                Direction = ParameterDirection.ReturnValue
+            },
+            ["OtherReturn"] = new SqlParameter("@OtherReturn", SqlDbType.Int)
+            {
+                Direction = ParameterDirection.ReturnValue
+            }
+        };
+
+        Action act = () => mapper.MapParameters(
+            command,
+            values,
+            CreateSchema(Param("@ReturnValue", SqlDbType.Int, direction: ParameterDirection.ReturnValue)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Only one ReturnValue*OtherReturn*");
+    }
+
+    [Theory]
+    [InlineData(SqlDbType.Structured)]
+    [InlineData(SqlDbType.Text)]
+    [InlineData(SqlDbType.NText)]
+    [InlineData(SqlDbType.Image)]
+    public void DictionarySqlMapper_ShouldRejectUnsupportedExplicitOutputTypes(SqlDbType sqlDbType)
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Blob"] = new SqlParameter("@Blob", sqlDbType)
+            {
+                Direction = ParameterDirection.Output
+            }
+        };
+
+        Action act = () => mapper.MapParameters(
+            command,
+            values,
+            CreateSchema(Param("@Blob", sqlDbType, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Blob*unsupported*");
+    }
+
+    [Theory]
+    [InlineData(SqlDbType.Structured)]
+    [InlineData(SqlDbType.Text)]
+    [InlineData(SqlDbType.NText)]
+    [InlineData(SqlDbType.Image)]
+    public void DictionarySqlMapper_ShouldRejectUnsupportedSchemaOutputTypesWithoutExplicitSqlParameter(SqlDbType sqlDbType)
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            [],
+            CreateSchema(Param("@Blob", sqlDbType, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Blob*unsupported*");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectDuplicateRawReturnValueParameters()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["ReturnValue"] = new SqlParameter("@ReturnValue", SqlDbType.Int)
+            {
+                Direction = ParameterDirection.ReturnValue
+            },
+            ["OtherReturn"] = new SqlParameter("@OtherReturn", SqlDbType.Int)
+            {
+                Direction = ParameterDirection.ReturnValue
+            }
+        };
+
+        Action act = () => mapper.MapParameters(command, values, schema: null);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Only one ReturnValue*");
+    }
+
+    [Fact]
+    public void DbBinder_ShouldAllowExplicitSqlParameterRebindAfterCommandParametersClear()
+    {
+        using var command = new SqlCommand();
+        var returnValue = new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue
+        };
+
+        DbBinder.BindRawParameter(command, "ReturnValue", returnValue);
+        command.Parameters.Clear();
+
+        Action act = () => DbBinder.BindRawParameter(command, "ReturnValue", returnValue);
+
+        act.Should().NotThrow();
+        command.Parameters
+            .Cast<SqlParameter>()
+            .Should()
+            .ContainSingle(parameter => parameter.Direction == ParameterDirection.ReturnValue);
+    }
+
+    [Fact]
+    public void DbBinder_ShouldNotRetainExplicitSqlParameterAfterCommandParametersClear()
+    {
+        using var command = new SqlCommand();
+        WeakReference weakReference = BindExplicitParameterAndClear(command);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        weakReference.IsAlive.Should().BeFalse();
+    }
+
+    [Fact]
+    public void DbBinder_ShouldEscapeControlCharactersInOutputParameterDisplayName()
+    {
+        using var command = new SqlCommand();
+        const string parameterName = "Bad\t\u001B\u202EName";
+        var parameter = new SqlParameter(parameterName, SqlDbType.Image)
+        {
+            Direction = ParameterDirection.Output
+        };
+
+        Action act = () => DbBinder.BindRawParameter(command, parameterName, parameter);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Bad\\u0009\\u001B\\u202EName*");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldOmitExplicitSqlParameterWhenInputUsesDbDefault()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var defaultedValue = new SqlParameter("@Defaulted", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Input,
+            Value = DBNull.Value
+        };
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Defaulted"] = defaultedValue
+        };
+
+        mapper.MapParameters(command, values, CreateSchema(
+            Param("@Defaulted", SqlDbType.Int, nullable: false, hasDefault: true)));
+
+        command.Parameters.Cast<SqlParameter>()
+            .Should()
+            .NotContain(parameter => parameter.ParameterName == "@Defaulted");
+    }
+
+    [Fact]
+    public void ExpressionTreeMapper_ShouldBindExplicitSqlParameterOutputReferences()
+    {
+        var mapper = new ExpressionTreeMapper<ExplicitSqlParameterDto>(jsonOptions: null, strict: true);
+
+        AssertExplicitSqlParameterSchemaBinding(mapper);
+    }
+
+    [Fact]
+    public void ExpressionTreeMapper_ShouldNotEvaluateNonSqlParameterPropertiesWhenScanningExtraReturnValue()
+    {
+        var mapper = new ExpressionTreeMapper<ThrowingGetterReturnValueDto>(jsonOptions: null, strict: true);
+
+        AssertExtraReturnValueScanDoesNotEvaluateNonSqlParameterProperties(mapper);
+    }
+
+    [Fact]
+    public void ExpressionTreeMapper_ShouldRejectSchemaModeDuplicateExtraReturnValueParameters()
+    {
+        var mapper = new ExpressionTreeMapper<DuplicateReturnValueDto>(jsonOptions: null, strict: true);
+
+        AssertDuplicateExtraReturnValueRejected(mapper);
+    }
+
+    [Fact]
     public void DictionarySqlMapper_ShouldThrowWhenRequiredKeyIsMissing()
     {
         var mapper = new DictionarySqlMapper(strict: true);
@@ -157,6 +543,30 @@ public sealed class MapperCoverageTests
         mapper.Invoking(m => m.MapResult(Mock.Of<DbDataReader>()))
             .Should()
             .Throw<NotSupportedException>();
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldBindExplicitSqlParameterOutputReferences()
+    {
+        var mapper = new ReflectionParameterMapper<ExplicitSqlParameterDto>(strict: true);
+
+        AssertExplicitSqlParameterSchemaBinding(mapper);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldNotEvaluateNonSqlParameterPropertiesWhenScanningExtraReturnValue()
+    {
+        var mapper = new ReflectionParameterMapper<ThrowingGetterReturnValueDto>(strict: true);
+
+        AssertExtraReturnValueScanDoesNotEvaluateNonSqlParameterProperties(mapper);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldRejectSchemaModeDuplicateExtraReturnValueParameters()
+    {
+        var mapper = new ReflectionParameterMapper<DuplicateReturnValueDto>(strict: true);
+
+        AssertDuplicateExtraReturnValueRejected(mapper);
     }
 
     [Fact]
@@ -409,6 +819,131 @@ public sealed class MapperCoverageTests
         stream.Length.Should().Be(3);
     }
 
+    private static void AssertExplicitSqlParameterSchemaBinding(ISqlMapper<ExplicitSqlParameterDto> mapper)
+    {
+        using var command = new SqlCommand();
+        var inputVal = new SqlParameter("@InputVal", SqlDbType.BigInt)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 10L
+        };
+        var outputVal = new SqlParameter("@OutputVal", SqlDbType.BigInt)
+        {
+            Direction = ParameterDirection.Input,
+            Value = 999L
+        };
+        var inOutVal = new SqlParameter("@InOutVal", SqlDbType.BigInt)
+        {
+            Direction = ParameterDirection.InputOutput,
+            Value = 5L
+        };
+        var returnValue = new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 999
+        };
+        var dto = new ExplicitSqlParameterDto
+        {
+            InputVal = inputVal,
+            OutputVal = outputVal,
+            InOutVal = inOutVal,
+            ReturnValue = returnValue
+        };
+
+        mapper.MapParameters(command, dto, CreateSchema(
+            Param("@InputVal", SqlDbType.Int, nullable: false),
+            Param("@OutputVal", SqlDbType.Int, direction: ParameterDirection.Output),
+            Param("@InOutVal", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        command.Parameters["@InputVal"].Should().NotBeSameAs(inputVal);
+        command.Parameters["@InputVal"].Direction.Should().Be(ParameterDirection.Input);
+        command.Parameters["@InputVal"].SqlDbType.Should().Be(SqlDbType.Int);
+        command.Parameters["@InputVal"].Value.Should().BeOfType<int>().Which.Should().Be(10);
+        inputVal.Direction.Should().Be(ParameterDirection.Output);
+        inputVal.SqlDbType.Should().Be(SqlDbType.BigInt);
+        inputVal.Value.Should().Be(10L);
+
+        command.Parameters["@OutputVal"].Should().NotBeSameAs(outputVal);
+        command.Parameters["@OutputVal"].Direction.Should().Be(ParameterDirection.Output);
+        command.Parameters["@OutputVal"].SqlDbType.Should().Be(SqlDbType.Int);
+        command.Parameters["@OutputVal"].Value.Should().Be(DBNull.Value);
+        outputVal.Direction.Should().Be(ParameterDirection.Input);
+        outputVal.SqlDbType.Should().Be(SqlDbType.BigInt);
+        outputVal.Value.Should().Be(999L);
+
+        command.Parameters["@InOutVal"].Should().NotBeSameAs(inOutVal);
+        command.Parameters["@InOutVal"].Direction.Should().Be(ParameterDirection.InputOutput);
+        command.Parameters["@InOutVal"].SqlDbType.Should().Be(SqlDbType.Int);
+        command.Parameters["@InOutVal"].Value.Should().BeOfType<int>().Which.Should().Be(5);
+        inOutVal.SqlDbType.Should().Be(SqlDbType.BigInt);
+        inOutVal.Value.Should().Be(5L);
+
+        command.Parameters["@ReturnValue"].Should().NotBeSameAs(returnValue);
+        command.Parameters["@ReturnValue"].Direction.Should().Be(ParameterDirection.ReturnValue);
+        command.Parameters["@ReturnValue"].Value.Should().Be(DBNull.Value);
+        returnValue.Value.Should().Be(999);
+
+        command.Parameters["@OutputVal"].Value = 20;
+        command.Parameters["@InOutVal"].Value = 15;
+        command.Parameters["@ReturnValue"].Value = 10;
+        mapper.Invoking(m => m.MapOutputParameters(command, dto))
+            .Should()
+            .NotThrow();
+
+        dto.OutputVal.Should().BeSameAs(outputVal);
+        dto.InOutVal.Should().BeSameAs(inOutVal);
+        dto.ReturnValue.Should().BeSameAs(returnValue);
+        dto.OutputVal.Value.Should().Be(20);
+        dto.InOutVal.Value.Should().Be(15);
+        dto.ReturnValue.Value.Should().Be(10);
+    }
+
+    private static void AssertExtraReturnValueScanDoesNotEvaluateNonSqlParameterProperties(
+        ISqlMapper<ThrowingGetterReturnValueDto> mapper)
+    {
+        using var command = new SqlCommand();
+        var dto = new ThrowingGetterReturnValueDto();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            dto,
+            CreateSchema(Param("@Id", SqlDbType.Int, nullable: false)));
+
+        act.Should().NotThrow();
+        command.Parameters
+            .Cast<SqlParameter>()
+            .Should()
+            .ContainSingle(parameter => parameter.Direction == ParameterDirection.ReturnValue);
+    }
+
+    private static void AssertDuplicateExtraReturnValueRejected(ISqlMapper<DuplicateReturnValueDto> mapper)
+    {
+        using var command = new SqlCommand();
+        var dto = new DuplicateReturnValueDto();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            dto,
+            CreateSchema(Param("@ReturnValue", SqlDbType.Int, direction: ParameterDirection.ReturnValue)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Only one ReturnValue*OtherReturn*");
+    }
+
+    private static WeakReference BindExplicitParameterAndClear(SqlCommand command)
+    {
+        var parameter = new SqlParameter("@OutputVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output
+        };
+        WeakReference weakReference = new(parameter);
+
+        DbBinder.BindRawParameter(command, "OutputVal", parameter);
+        command.Parameters.Clear();
+
+        return weakReference;
+    }
+
     private static object GetPrivateField(object instance, string fieldName)
     {
         FieldInfo field = instance.GetType().GetField(
@@ -432,15 +967,18 @@ public sealed class MapperCoverageTests
         SqlDbType dbType,
         ParameterDirection direction = ParameterDirection.Input,
         bool nullable = true,
-        bool hasDefault = false)
+        bool hasDefault = false,
+        int size = 0,
+        byte precision = 0,
+        byte scale = 0)
         => new(
             name,
             UdtTypeName: null,
-            Size: 0,
+            Size: size,
             dbType,
             direction,
-            Precision: 0,
-            Scale: 0,
+            Precision: precision,
+            Scale: scale,
             IsNullable: nullable,
             HasDefaultValue: hasDefault);
 
@@ -461,6 +999,42 @@ public sealed class MapperCoverageTests
         public int? WritableValue { get; set; }
 
         public int ReadOnlyValue => 0;
+    }
+
+    private sealed class ExplicitSqlParameterDto
+    {
+        public SqlParameter InputVal { get; init; } = new();
+
+        public SqlParameter OutputVal { get; init; } = new();
+
+        public SqlParameter InOutVal { get; init; } = new();
+
+        public SqlParameter ReturnValue { get; init; } = new();
+    }
+
+    private sealed class ThrowingGetterReturnValueDto
+    {
+        public int Id { get; init; } = 1;
+
+        public SqlParameter ReturnValue { get; init; } = new("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue
+        };
+
+        public int Explodes => throw new InvalidOperationException("This getter must not be evaluated.");
+    }
+
+    private sealed class DuplicateReturnValueDto
+    {
+        public SqlParameter ReturnValue { get; init; } = new("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue
+        };
+
+        public SqlParameter OtherReturn { get; init; } = new("@OtherReturn", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue
+        };
     }
 
     private sealed class ReflectionMetadataTokenFallbackDto

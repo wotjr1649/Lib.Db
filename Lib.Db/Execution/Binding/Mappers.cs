@@ -23,6 +23,7 @@ using System.Text.Json;
 
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
+using Lib.Db.Execution.Output;
 using Microsoft.Extensions.ObjectPool;
 
 namespace Lib.Db.Execution.Binding;
@@ -481,6 +482,70 @@ internal static class SqlIdentifierName
 
 #endregion
 
+#region 명시적 ReturnValue 후보 처리
+
+internal static class ExplicitReturnValueBinding
+{
+    public static void BindOrValidateCandidate(
+        SqlCommand cmd,
+        string fallbackName,
+        object? value,
+        ref bool observedCandidate)
+    {
+        if (value is not SqlParameter { Direction: ParameterDirection.ReturnValue } source)
+            return;
+
+        string candidateName = string.IsNullOrWhiteSpace(source.ParameterName)
+            ? fallbackName
+            : source.ParameterName;
+
+        if (TryGetExistingReturnValue(cmd, out SqlParameter? existing))
+        {
+            if (!observedCandidate &&
+                OutputParameterName.From(existing.ParameterName).Matches(candidateName) &&
+                SqlParameterCloneFactory.IsRegisteredSource(existing, source))
+            {
+                observedCandidate = true;
+                return;
+            }
+
+            ThrowDuplicate(candidateName);
+        }
+
+        if (observedCandidate)
+            ThrowDuplicate(candidateName);
+
+        if (DbBinder.TryBindExplicitReturnValueParameter(cmd, fallbackName, source))
+            observedCandidate = true;
+    }
+
+    private static bool TryGetExistingReturnValue(
+        SqlCommand cmd,
+        [NotNullWhen(true)] out SqlParameter? parameter)
+    {
+        foreach (SqlParameter existing in cmd.Parameters)
+        {
+            if (existing.Direction == ParameterDirection.ReturnValue)
+            {
+                parameter = existing;
+                return true;
+            }
+        }
+
+        parameter = null;
+        return false;
+    }
+
+    private static void ThrowDuplicate(string name)
+    {
+        string display = OutputParameterName.From(name).SafeDisplay();
+        throw new InvalidOperationException(
+            $"Only one ReturnValue parameter can be bound to a SqlCommand. Duplicate candidate: '{display}'.");
+    }
+}
+
+#endregion
+
 // ============================================================================
 // [Expression Tree Mapper] JIT 전용 DTO 매퍼 (Typed Getter + JSON 지원)
 // ============================================================================
@@ -571,23 +636,34 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         {
             foreach (SpParameterMetadata meta in schema.Parameters)
             {
-                // Output/ReturnValue는 값 없이 파라미터만 생성
-                if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
-                {
-                    DbBinder.BindParameter(cmd, meta, null, strict);
-                    continue;
-                }
-
                 string name = meta.Name.TrimStart('@');
 
                 if (Meta.TryGetProperty(name, out PropertyInfo? prop) && prop.CanRead)
                 {
                     Func<T, object?> getter = GetGetter(name, prop);
                     object? value = getter(param);
+
+                    if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
+                        continue;
+
+                    // Output/ReturnValue는 값 없이 파라미터만 생성
+                    if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
+                    {
+                        DbBinder.BindParameter(cmd, meta, null, strict);
+                        continue;
+                    }
+
                     DbBinder.BindParameter(cmd, meta, value, strict);
                 }
                 else
                 {
+                    // Output/ReturnValue는 값 없이 파라미터만 생성
+                    if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
+                    {
+                        DbBinder.BindParameter(cmd, meta, null, strict);
+                        continue;
+                    }
+
                     // 필수 Input 파라미터 누락 검사
                     if (meta.Direction == ParameterDirection.Input &&
                         !meta.HasDefaultValue &&
@@ -602,6 +678,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                 }
             }
 
+            BindExtraReturnValueParameter(cmd, param);
             return;
         }
 
@@ -616,6 +693,22 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         }
     }
 
+    private static void BindExtraReturnValueParameter(SqlCommand cmd, T param)
+    {
+        PropertyMeta[] props = Meta.AllProps;
+        bool observedCandidate = false;
+        for (int i = 0; i < props.Length; i++)
+        {
+            ref readonly PropertyMeta meta = ref props[i];
+            if (!typeof(SqlParameter).IsAssignableFrom(meta.Info.PropertyType))
+                continue;
+
+            Func<T, object?> getter = GetGetter(meta.Info.Name, meta.Info);
+            object? value = getter(param);
+            ExplicitReturnValueBinding.BindOrValidateCandidate(cmd, meta.Info.Name, value, ref observedCandidate);
+        }
+    }
+
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, T param)
     {
@@ -624,12 +717,24 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
 
         foreach (SqlParameter p in cmd.Parameters)
         {
-            if (p.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
+            if (p.Direction is ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue)
             {
+                bool copiedRegisteredSource = SqlParameterCloneFactory.TryCopyOutputValueToRegisteredSource(p);
                 string name = p.ParameterName.TrimStart('@');
 
-                if (Meta.TryGetProperty(name, out PropertyInfo? prop) && prop.CanWrite)
+                if (Meta.TryGetProperty(name, out PropertyInfo? prop))
                 {
+                    if (typeof(SqlParameter).IsAssignableFrom(prop.PropertyType))
+                    {
+                        if (!copiedRegisteredSource && prop.GetValue(param) is SqlParameter target)
+                            SqlParameterCloneFactory.CopyOutputValue(target, p);
+
+                        continue;
+                    }
+
+                    if (p.Direction == ParameterDirection.ReturnValue || !prop.CanWrite)
+                        continue;
+
                     Action<T, object?> setter = GetSetter(name, prop);
                     object? value = p.Value == DBNull.Value ? null : p.Value;
                     setter(param, value);
@@ -1042,20 +1147,29 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
         // ---------------------------------------------------------------------
         foreach (SpParameterMetadata meta in schema.Parameters)
         {
-            if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
-            {
-                DbBinder.BindParameter(cmd, meta, null, strict);
-                continue;
-            }
-
             string key = meta.Name.TrimStart('@');
 
             if (TryGet(parameters, key, out object? value))
             {
+                if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
+                    continue;
+
+                if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
+                {
+                    DbBinder.BindParameter(cmd, meta, null, strict);
+                    continue;
+                }
+
                 DbBinder.BindParameter(cmd, meta, value, strict);
             }
             else
             {
+                if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
+                {
+                    DbBinder.BindParameter(cmd, meta, null, strict);
+                    continue;
+                }
+
                 // Strict 모드: 필수 입력 파라미터 누락 시 명시적으로 예외
                 if (strict &&
                     !meta.IsNullable &&
@@ -1069,6 +1183,10 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 DbBinder.BindParameter(cmd, meta, null, strict);
             }
         }
+
+        bool observedCandidate = false;
+        foreach (KeyValuePair<string, object?> kv in parameters)
+            ExplicitReturnValueBinding.BindOrValidateCandidate(cmd, kv.Key, kv.Value, ref observedCandidate);
     }
 
     /// <inheritdoc />
@@ -1079,10 +1197,25 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
 
         foreach (SqlParameter param in cmd.Parameters)
         {
-            if (param.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
+            if (param.Direction is ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue)
             {
-                string key = param.ParameterName.TrimStart('@');
-                parameters[key] = param.Value == DBNull.Value ? null : param.Value;
+                bool copiedRegisteredSource = SqlParameterCloneFactory.TryCopyOutputValueToRegisteredSource(param);
+                OutputParameterName name = OutputParameterName.From(param.ParameterName);
+                if (!TryGetUnique(parameters, name, out string? targetKey, out object? originalValue))
+                {
+                    if (param.Direction == ParameterDirection.ReturnValue)
+                        continue;
+
+                    targetKey = name.Canonical;
+                }
+
+                if (!copiedRegisteredSource && originalValue is SqlParameter source)
+                    SqlParameterCloneFactory.CopyOutputValue(source, param);
+
+                if (param.Direction == ParameterDirection.ReturnValue)
+                    continue;
+
+                parameters[targetKey] = param.Value == DBNull.Value ? null : param.Value;
             }
         }
     }
@@ -1296,6 +1429,35 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
         value = null;
         return false;
     }
+
+    private static bool TryGetUnique(
+        Dictionary<string, object?> dict,
+        OutputParameterName name,
+        [NotNullWhen(true)] out string? targetKey,
+        out object? value)
+    {
+        targetKey = null;
+        value = null;
+        int matches = 0;
+
+        foreach (KeyValuePair<string, object?> kv in dict)
+        {
+            if (!name.Matches(kv.Key))
+                continue;
+
+            matches++;
+            if (matches > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Output target '{name.SafeDisplay()}' is ambiguous.");
+            }
+
+            targetKey = kv.Key;
+            value = kv.Value;
+        }
+
+        return matches == 1;
+    }
 }
 
 #endregion
@@ -1436,21 +1598,31 @@ internal sealed class ReflectionParameterMapper<
         {
             foreach (SpParameterMetadata meta in schema.Parameters)
             {
-                if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
-                {
-                    DbBinder.BindParameter(cmd, meta, null, strict);
-                    continue;
-                }
-
                 string name = meta.Name.TrimStart('@');
 
                 if (TypeCache.TryGetProperty(name, out PropertyInfo? prop) && prop.CanRead)
                 {
                     object? value = prop.GetValue(parameters);
+
+                    if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
+                        continue;
+
+                    if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
+                    {
+                        DbBinder.BindParameter(cmd, meta, null, strict);
+                        continue;
+                    }
+
                     DbBinder.BindParameter(cmd, meta, value, strict);
                 }
                 else
                 {
+                    if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
+                    {
+                        DbBinder.BindParameter(cmd, meta, null, strict);
+                        continue;
+                    }
+
                     if (meta.Direction == ParameterDirection.Input && meta.HasDefaultValue)
                         continue;
 
@@ -1466,6 +1638,7 @@ internal sealed class ReflectionParameterMapper<
                 }
             }
 
+            BindExtraReturnValueParameter(cmd, parameters);
             return;
         }
 
@@ -1479,6 +1652,21 @@ internal sealed class ReflectionParameterMapper<
         }
     }
 
+    private static void BindExtraReturnValueParameter(SqlCommand cmd, T parameters)
+    {
+        PropertyMeta[] props = TypeCache.AllProperties;
+        bool observedCandidate = false;
+        for (int i = 0; i < props.Length; i++)
+        {
+            ref readonly PropertyMeta meta = ref props[i];
+            if (!meta.Info.CanRead || !typeof(SqlParameter).IsAssignableFrom(meta.Info.PropertyType))
+                continue;
+
+            object? value = meta.Info.GetValue(parameters);
+            ExplicitReturnValueBinding.BindOrValidateCandidate(cmd, meta.Info.Name, value, ref observedCandidate);
+        }
+    }
+
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, T parameters)
     {
@@ -1487,12 +1675,24 @@ internal sealed class ReflectionParameterMapper<
 
         foreach (SqlParameter p in cmd.Parameters)
         {
-            if (p.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
+            if (p.Direction is ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue)
             {
+                bool copiedRegisteredSource = SqlParameterCloneFactory.TryCopyOutputValueToRegisteredSource(p);
                 string name = p.ParameterName.TrimStart('@');
 
-                if (TypeCache.TryGetProperty(name, out PropertyInfo? prop) && prop.CanWrite)
+                if (TypeCache.TryGetProperty(name, out PropertyInfo? prop))
                 {
+                    if (typeof(SqlParameter).IsAssignableFrom(prop.PropertyType))
+                    {
+                        if (!copiedRegisteredSource && prop.GetValue(parameters) is SqlParameter target)
+                            SqlParameterCloneFactory.CopyOutputValue(target, p);
+
+                        continue;
+                    }
+
+                    if (p.Direction == ParameterDirection.ReturnValue || !prop.CanWrite)
+                        continue;
+
                     object? value = p.Value == DBNull.Value ? null : p.Value;
                     prop.SetValue(parameters, value);
                 }

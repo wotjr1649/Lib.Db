@@ -23,6 +23,7 @@ using System.Text.Json;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Diagnostics;
+using Lib.Db.Execution.Output;
 using Lib.Db.Execution.Tvp;
 
 namespace Lib.Db.Execution.Binding;
@@ -166,19 +167,107 @@ public static partial class DbBinder
     #region [1. SP 메타데이터 기반 바인딩]
 
     /// <summary>
-    /// 스키마 메타데이터(<see cref="SpParameterMetadata"/>)를 기반으로 단일 파라미터를 안전하게 바인딩합니다.
-    /// <para>
-    /// - NOT NULL/DEFAULT 제약 검증<br/>
-    /// - Decimal/정수/Enum 범위 사전 검증<br/>
-    /// - 문자열 전처리 및 Size 기반 잘라내기<br/>
-    /// - TVP/DataTable/Stream 처리<br/>
-    /// - 한글 컨텍스트를 포함한 상세 예외 메시지 제공
-    /// </para>
+    /// 호출자가 직접 제공한 <see cref="SqlParameter"/>를 SP 스키마 메타데이터에 맞춰 명령에 추가합니다.
     /// </summary>
-    /// <param name="cmd">파라미터를 추가할 <see cref="SqlCommand"/> 인스턴스</param>
-    /// <param name="meta">SP 파라미터 메타데이터</param>
-    /// <param name="rawValue">원본 값(호출자 전달 값)</param>
-    /// <param name="strictCheck">true인 경우 NOT NULL 위반 시 예외를 발생시킵니다.</param>
+    /// <remarks>
+    /// 이름, SQL 타입, 크기, 정밀도/스케일은 저장 프로시저 스키마가 우선합니다.
+    /// Input/InputOutput 값은 일반 <see cref="BindParameter"/>와 같은 검증/정규화 정책을 적용하고,
+    /// Output/ReturnValue는 호출자 입력값을 사용하지 않습니다.
+    /// </remarks>
+    internal static bool TryBindExplicitParameter(SqlCommand cmd, SpParameterMetadata meta, object? rawValue, bool strictCheck)
+    {
+        if (rawValue is not SqlParameter source)
+            return false;
+
+        SqlParameter parameter = SqlParameterCloneFactory.CloneForCommand(source, meta.Name);
+        parameter.ParameterName = meta.Name;
+
+        parameter.Direction = ResolveExplicitParameterDirection(meta.Direction, parameter.Direction);
+
+        parameter.SqlDbType = meta.SqlDbType;
+
+        if (meta.SqlDbType == SqlDbType.Structured)
+        {
+            string? structuredTypeName = NormalizeOptionalTvpTypeName(meta.UdtTypeName);
+            if (!string.IsNullOrEmpty(structuredTypeName))
+                parameter.TypeName = structuredTypeName;
+        }
+        else
+        {
+            if (meta.Size > 0)
+                parameter.Size = (int)meta.Size;
+            else if (meta.Size == -1)
+                parameter.Size = -1;
+
+            if (meta.Precision > 0)
+                parameter.Precision = meta.Precision;
+            if (meta.Scale > 0)
+                parameter.Scale = meta.Scale;
+        }
+
+        if (!NormalizeExplicitParameterValue(parameter, meta, strictCheck))
+            return true;
+
+        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(parameter);
+        SqlParameterCloneFactory.ValidateNoDuplicateReturnValue(cmd, parameter);
+        SqlParameterCloneFactory.RegisterClone(cmd, parameter, source, meta.Name);
+        cmd.Parameters.Add(parameter);
+        return true;
+    }
+
+    internal static bool TryBindExplicitReturnValueParameter(SqlCommand cmd, string name, object? rawValue)
+    {
+        if (rawValue is not SqlParameter { Direction: ParameterDirection.ReturnValue } source)
+            return false;
+
+        foreach (SqlParameter existing in cmd.Parameters)
+        {
+            if (existing.Direction == ParameterDirection.ReturnValue)
+                return false;
+        }
+
+        SqlParameter parameter = SqlParameterCloneFactory.CloneForCommand(source, name);
+        if (string.IsNullOrWhiteSpace(parameter.ParameterName))
+            parameter.ParameterName = name.StartsWith('@') ? name : "@" + name;
+
+        parameter.Value = DBNull.Value;
+        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(parameter);
+        SqlParameterCloneFactory.RegisterClone(cmd, parameter, source, parameter.ParameterName);
+        cmd.Parameters.Add(parameter);
+        return true;
+    }
+
+    private static ParameterDirection ResolveExplicitParameterDirection(
+        ParameterDirection schemaDirection,
+        ParameterDirection requestedDirection)
+        => schemaDirection switch
+        {
+            ParameterDirection.Input => ParameterDirection.Input,
+            // SQL Server metadata marks both output-only and input/output parameters as OUTPUT.
+            // Direction policy for explicit SqlParameter:
+            // - schema Input always stays Input.
+            // - schema Output keeps caller InputOutput only as an explicit opt-in.
+            // - schema InputOutput lets caller downgrade to Output for output-only reads.
+            // Any preserved Input/InputOutput value is schema-validated before binding.
+            ParameterDirection.Output => requestedDirection == ParameterDirection.InputOutput
+                ? ParameterDirection.InputOutput
+                : ParameterDirection.Output,
+            ParameterDirection.InputOutput => requestedDirection == ParameterDirection.Output
+                ? ParameterDirection.Output
+                : ParameterDirection.InputOutput,
+            ParameterDirection.ReturnValue => ParameterDirection.ReturnValue,
+            _ => schemaDirection
+        };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool DirectionConsumesInput(ParameterDirection direction)
+        => direction is ParameterDirection.Input or ParameterDirection.InputOutput;
+
+    private readonly record struct NormalizedParameterValue(
+        bool ShouldBind,
+        object Value,
+        string? StructuredTypeNameOverride);
+
     [UnconditionalSuppressMessage(
         "Trimming",
         "IL2026",
@@ -187,18 +276,54 @@ public static partial class DbBinder
         "AOT",
         "IL3050",
         Justification = "Dynamic JSON fallback is reached only for string-column complex values after structured TVP handling.")]
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    public static void BindParameter(SqlCommand cmd, SpParameterMetadata meta, object? rawValue, bool strictCheck)
+    private static bool NormalizeExplicitParameterValue(
+        SqlParameter parameter,
+        SpParameterMetadata meta,
+        bool strictCheck)
     {
-        // 1. Null 체크 및 기본값 처리
+        if (parameter.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
+        {
+            parameter.Value = DBNull.Value;
+            return true;
+        }
+
+        NormalizedParameterValue normalized = NormalizeParameterValueForMetadata(
+            meta,
+            parameter.Value,
+            parameter.Direction,
+            strictCheck);
+
+        if (!normalized.ShouldBind)
+            return false;
+
+        ApplyStructuredTypeName(parameter, meta, normalized.StructuredTypeNameOverride);
+        parameter.Value = normalized.Value;
+        return true;
+    }
+
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2026",
+        Justification = "Dynamic JSON fallback is reached only for string-column complex values after structured TVP handling.")]
+    [UnconditionalSuppressMessage(
+        "AOT",
+        "IL3050",
+        Justification = "Dynamic JSON fallback is reached only for string-column complex values after structured TVP handling.")]
+    private static NormalizedParameterValue NormalizeParameterValueForMetadata(
+        SpParameterMetadata meta,
+        object? rawValue,
+        ParameterDirection direction,
+        bool strictCheck)
+    {
         bool isNullOrDbNull = rawValue is null || rawValue == DBNull.Value;
+        if (isNullOrDbNull && meta.HasDefaultValue && direction == ParameterDirection.Input)
+            return new NormalizedParameterValue(false, DBNull.Value, null);
 
-        // DB 기본값 사용 (입력 파라미터 + DEFAULT 존재)
-        if (isNullOrDbNull && meta.HasDefaultValue && meta.Direction == ParameterDirection.Input)
-            return;
-
-        // NOT NULL + Strict 모드 위반
-        if (strictCheck && !meta.IsNullable && isNullOrDbNull && meta.Direction == ParameterDirection.Input)
+        if (strictCheck &&
+            !meta.IsNullable &&
+            isNullOrDbNull &&
+            DirectionConsumesInput(direction) &&
+            !meta.HasDefaultValue)
         {
             string baseMsg = $"파라미터 '{meta.Name}'는 필수값입니다. (NOT NULL 제약 조건 위반) " +
                           $"SQL 타입: {meta.SqlDbType}, Direction: {meta.Direction}";
@@ -210,7 +335,6 @@ public static partial class DbBinder
         string? structuredTypeNameOverride = null;
         bool explicitTvpBound = false;
 
-        // 2. 값 변환 및 유효성 검증 (실제 값이 있을 때만)
         if (finalValue != DBNull.Value)
         {
             if (finalValue is LibDbTvpValue explicitTvp)
@@ -235,31 +359,24 @@ public static partial class DbBinder
                 finalValue = timeOnly.ToTimeSpan();
             }
 
-            // 정밀도/범위 오버플로우 사전 검증 (Decimal/정수/Enum/DateTime)
             CheckValueOverflow(meta.Name, finalValue, meta.SqlDbType, meta.Precision, meta.Scale);
 
             if (finalValue is DateTime valDt)
-            {
                 CheckDateTimeRange(meta.Name, valDt, meta.SqlDbType);
-            }
 
             if (finalValue is string strVal)
             {
-                // 문자열 전처리 (공백/제어문자 제거 등)
                 ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(strVal);
 
-                // Size 기반 Truncate
                 if (meta.Size > 0 && processedSpan.Length > meta.Size)
                     finalValue = processedSpan[..(int)meta.Size].ToString();
                 else if (processedSpan.Length != strVal.Length)
                     finalValue = processedSpan.ToString();
             }
-            // ★ JSON 직렬화: "문자열 컬럼" 이면서 "복합 객체"인 경우에만 수행 (구조적 데이터 보존)
             else if (IsStringColumn(meta.SqlDbType) && IsComplexObject(finalValue))
             {
                 finalValue = JsonSerializer.Serialize(finalValue);
             }
-            // TVP(Table-Valued Parameter)
             else if (!explicitTvpBound && meta.SqlDbType == SqlDbType.Structured)
             {
                 if (finalValue is DataTable dt)
@@ -285,24 +402,67 @@ public static partial class DbBinder
                     finalValue = Tvp.CreateReader(legacyList, meta);
                 }
             }
-            // Stream 파라미터는 그대로 통과 (SqlClient가 VarBinary/Binary로 처리)
 
-            // 숫자형 보정 (Enum, 정수 → DB 타입에 맞는 크기로 변환)
             finalValue = NormalizeNumericForDbType(finalValue, meta.SqlDbType);
         }
 
-        // 3. SqlParameter 생성 및 설정
-        SqlParameter sqlParam = cmd.Parameters.Add(
-            meta.Name,
-            meta.SqlDbType == SqlDbType.Structured ? SqlDbType.Structured : meta.SqlDbType);
+        return new NormalizedParameterValue(true, finalValue, structuredTypeNameOverride);
+    }
+
+    private static void ApplyStructuredTypeName(
+        SqlParameter parameter,
+        SpParameterMetadata meta,
+        string? structuredTypeNameOverride)
+    {
+        if (meta.SqlDbType == SqlDbType.Structured)
+        {
+            string? structuredTypeName = structuredTypeNameOverride ?? NormalizeOptionalTvpTypeName(meta.UdtTypeName);
+            if (!string.IsNullOrEmpty(structuredTypeName))
+                parameter.TypeName = structuredTypeName;
+        }
+    }
+
+    /// <summary>
+    /// 스키마 메타데이터(<see cref="SpParameterMetadata"/>)를 기반으로 단일 파라미터를 안전하게 바인딩합니다.
+    /// <para>
+    /// - NOT NULL/DEFAULT 제약 검증<br/>
+    /// - Decimal/정수/Enum 범위 사전 검증<br/>
+    /// - 문자열 전처리 및 Size 기반 잘라내기<br/>
+    /// - TVP/DataTable/Stream 처리<br/>
+    /// - 한글 컨텍스트를 포함한 상세 예외 메시지 제공
+    /// </para>
+    /// </summary>
+    /// <param name="cmd">파라미터를 추가할 <see cref="SqlCommand"/> 인스턴스</param>
+    /// <param name="meta">SP 파라미터 메타데이터</param>
+    /// <param name="rawValue">원본 값(호출자 전달 값)</param>
+    /// <param name="strictCheck">true인 경우 NOT NULL 위반 시 예외를 발생시킵니다.</param>
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2026",
+        Justification = "Dynamic JSON fallback is reached only for string-column complex values after structured TVP handling.")]
+    [UnconditionalSuppressMessage(
+        "AOT",
+        "IL3050",
+        Justification = "Dynamic JSON fallback is reached only for string-column complex values after structured TVP handling.")]
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static void BindParameter(SqlCommand cmd, SpParameterMetadata meta, object? rawValue, bool strictCheck)
+    {
+        NormalizedParameterValue normalized = NormalizeParameterValueForMetadata(
+            meta,
+            rawValue,
+            meta.Direction,
+            strictCheck);
+
+        if (!normalized.ShouldBind)
+            return;
+
+        SqlParameter sqlParam = new(meta.Name, meta.SqlDbType);
 
         sqlParam.Direction = meta.Direction;
 
         if (meta.SqlDbType == SqlDbType.Structured)
         {
-            string? structuredTypeName = structuredTypeNameOverride ?? NormalizeOptionalTvpTypeName(meta.UdtTypeName);
-            if (!string.IsNullOrEmpty(structuredTypeName))
-                sqlParam.TypeName = structuredTypeName;
+            ApplyStructuredTypeName(sqlParam, meta, normalized.StructuredTypeNameOverride);
         }
         else
         {
@@ -318,7 +478,9 @@ public static partial class DbBinder
                 sqlParam.Scale = meta.Scale;
         }
 
-        sqlParam.Value = finalValue;
+        sqlParam.Value = normalized.Value;
+        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(sqlParam);
+        cmd.Parameters.Add(sqlParam);
     }
 
     #endregion
@@ -362,11 +524,14 @@ public static partial class DbBinder
         string paramName = name.StartsWith('@') ? name : "@" + name;
         string? tvpTypeName = null; // [Fix] CS0103: 스코프 확장을 위해 상단 선언
 
-        // 1. 이미 SqlParameter인 경우 그대로 추가
+        // 1. 이미 SqlParameter인 경우 명령 소유 복사본으로 추가
         if (value is SqlParameter rawParam)
         {
-            rawParam.ParameterName = paramName;
-            cmd.Parameters.Add(rawParam);
+            SqlParameter parameter = SqlParameterCloneFactory.CloneForCommand(rawParam, paramName);
+            SqlParameterCloneFactory.ValidateSupportedOutputMetadata(parameter);
+            SqlParameterCloneFactory.ValidateNoDuplicateReturnValue(cmd, parameter);
+            SqlParameterCloneFactory.RegisterClone(cmd, parameter, rawParam, paramName);
+            cmd.Parameters.Add(parameter);
             return;
         }
 
