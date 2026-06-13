@@ -168,7 +168,10 @@ public static class LibDbHealthCheckExtensions
                 throw new InvalidOperationException("HealthCheck: LibDbOptions.ConnectionStringNames[0]이 비어있습니다.");
 
             if (_options.ConnectionStrings is null || !_options.ConnectionStrings.ContainsKey(firstInstance))
-                throw new InvalidOperationException($"HealthCheck: 기본 인스턴스 '{firstInstance}'의 연결 문자열이 없습니다.");
+            {
+                string safeInstance = DbDiagnosticRedactor.RedactInstanceId(firstInstance) ?? firstInstance;
+                throw new InvalidOperationException($"HealthCheck: 기본 인스턴스 '{safeInstance}'의 연결 문자열이 없습니다.");
+            }
 
             return firstInstance;
         }

@@ -68,6 +68,30 @@ public sealed class ServiceRegistrationHelpersTests
     }
 
     [Fact]
+    public void AddLibDbSharedMemoryCache_ShouldRedactSensitivePrimaryAndRegisteredKeys_WhenPrimaryConnectionNameIsMissing()
+    {
+        const string sensitivePrimaryName = "Raw:Server=(localdb)\\MSSQLLocalDB;Database=MissingDb;Encrypt=True";
+        const string sensitiveRegisteredKey = "Server=(localdb)\\MSSQLLocalDB;Database=RegisteredDb;Encrypt=True";
+        LibDbOptions options = new()
+        {
+            ConnectionStringNames = [sensitivePrimaryName],
+            EnableSharedMemoryCache = true
+        };
+        options.ConnectionStrings[sensitiveRegisteredKey] =
+            "Server=(localdb)\\MSSQLLocalDB;Database=SecondaryDb;Integrated Security=True;TrustServerCertificate=True;Encrypt=False";
+        using ServiceProvider provider = BuildSharedMemoryOptInProvider(options);
+
+        Action act = () => provider.GetRequiredService<IDistributedCache>();
+
+        InvalidOperationException exception = act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*SharedMemoryCache*Raw:[redacted]*ConnectionString:[redacted]*")
+            .Which;
+        exception.Message.Should().NotContain("MissingDb");
+        exception.Message.Should().NotContain("RegisteredDb");
+    }
+
+    [Fact]
     public void AddLibDbSharedMemoryCache_ShouldFailClosedForProcessSlot_WhenPrimaryConnectionNameIsMissing()
     {
         using ServiceProvider provider = BuildSharedMemoryOptInProvider(CreateOptionsWithMissingPrimary());

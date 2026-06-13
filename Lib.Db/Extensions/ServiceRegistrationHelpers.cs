@@ -12,6 +12,7 @@ using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Contracts.Schema;
+using Lib.Db.Diagnostics;
 using Lib.Db.Execution;
 using Lib.Db.Execution.Binding;
 using Lib.Db.Execution.Executors;
@@ -293,9 +294,12 @@ internal static class ServiceRegistrationHelpers
         if (!options.ConnectionStrings.TryGetValue(targetName, out string? connectionString)
             || string.IsNullOrWhiteSpace(connectionString))
         {
-            string registeredKeys = string.Join(", ", options.ConnectionStrings.Keys);
+            string safeTargetName = DbDiagnosticRedactor.RedactInstanceId(targetName) ?? targetName;
+            string registeredKeys = string.Join(
+                ", ",
+                options.ConnectionStrings.Keys.Select(key => DbDiagnosticRedactor.RedactInstanceId(key) ?? key));
             throw new InvalidOperationException(
-                $"{context}: 기본 인스턴스 '{targetName}'이(가) ConnectionStrings에 없거나 비어있습니다. 등록된 키: [{registeredKeys}]");
+                $"{context}: 기본 인스턴스 '{safeTargetName}'이(가) ConnectionStrings에 없거나 비어있습니다. 등록된 키: [{registeredKeys}]");
         }
 
         return connectionString;
