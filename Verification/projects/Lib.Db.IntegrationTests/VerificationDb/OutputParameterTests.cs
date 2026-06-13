@@ -4,7 +4,9 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Data;
 using Lib.Db.IntegrationTests.Infrastructure;
+using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.VerificationDb;
 
@@ -50,14 +52,180 @@ public sealed class OutputParameterTests(MultiDbFixture fixture)
 
     #endregion
 
-    #region OP02: WithTimeout + QueryAsync — 정상 완료
+    #region OP02: Procedure + SqlParameter OUTPUT — 호출자 파라미터 참조 갱신
+
+    /// <summary>
+    /// Lib.Db Procedure API에 명시적 SqlParameter OUTPUT/INPUTOUTPUT 파라미터를 전달하면,
+    /// SP 실행 후 동일 파라미터 객체에 계산 결과가 반영되는지 검증한다.
+    /// </summary>
+    [Fact]
+    public async Task OP02_Procedure_WithExplicitSqlParameterOutput_ShouldPopulateValues()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+
+        // Act
+        DbResult<int> result = await _db
+            .Procedure("adv.usp_Adv_OutputParameters")
+            .With(new
+            {
+                InputVal = 10,
+                output.OutputVal,
+                output.InOutVal,
+                output.ReturnValue
+            })
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        AssertAdvancedOutputValues(output);
+    }
+
+    #endregion
+
+    #region OP03: Procedure + SqlParameter NVARCHAR OUTPUT — 문자열 출력값 갱신
+
+    /// <summary>
+    /// NVARCHAR OUTPUT 파라미터가 필요한 SP에서도 명시적 SqlParameter 참조가 실행 후 갱신되는지 검증한다.
+    /// </summary>
+    [Fact]
+    public async Task OP03_Procedure_WithExplicitStringOutput_ShouldPopulateValues()
+    {
+        // Arrange
+        var outputName = new SqlParameter("@OutputName", SqlDbType.NVarChar, 100)
+        {
+            Direction = ParameterDirection.Output
+        };
+        var outputAge = new SqlParameter("@OutputAge", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output
+        };
+
+        // Act
+        DbResult<int> result = await _db
+            .Procedure("test.usp_Output_With_Error")
+            .With(new
+            {
+                InputId = 1,
+                OutputName = outputName,
+                OutputAge = outputAge
+            })
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        outputName.Value.Should().BeOfType<string>().Which.Should().NotBeNullOrWhiteSpace();
+        Convert.ToInt32(outputAge.Value).Should().BeGreaterThan(0);
+    }
+
+    #endregion
+
+    #region OP04: Dictionary + SqlParameter OUTPUT — 동적 파라미터 출력값 갱신
+
+    /// <summary>
+    /// Dictionary 파라미터에서도 명시적 SqlParameter OUTPUT/INPUTOUTPUT 값이 정상 반영되는지 검증한다.
+    /// </summary>
+    [Fact]
+    public async Task OP04_Dictionary_WithExplicitSqlParameterOutput_ShouldPopulateValues()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+        var parameters = new Dictionary<string, object?>
+        {
+            ["InputVal"] = 10,
+            ["OutputVal"] = output.OutputVal,
+            ["InOutVal"] = output.InOutVal,
+            ["ReturnValue"] = output.ReturnValue
+        };
+
+        // Act
+        DbResult<int> result = await _db
+            .Procedure("adv.usp_Adv_OutputParameters")
+            .With(parameters)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        AssertAdvancedOutputValues(output);
+        parameters["OutputVal"].Should().Be(20);
+        parameters["InOutVal"].Should().Be(15);
+        parameters["ReturnValue"].Should().BeSameAs(output.ReturnValue);
+    }
+
+    #endregion
+
+    #region OP05: Procedure + QuerySingleAsync — OUTPUT 역매핑
+
+    /// <summary>
+    /// 결과 행을 반환하지 않는 저장 프로시저를 QuerySingleAsync로 호출해도
+    /// reader가 닫힌 뒤 OUTPUT/RETURN_VALUE가 호출자 SqlParameter에 역매핑되는지 검증한다.
+    /// </summary>
+    [Fact]
+    public async Task OP05_QuerySingle_WithExplicitSqlParameterOutput_ShouldPopulateValues()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+
+        // Act
+        DbResult<Dictionary<string, object?>?> result = await _db
+            .Procedure("adv.usp_Adv_OutputParameters")
+            .With(new
+            {
+                InputVal = 10,
+                output.OutputVal,
+                output.InOutVal,
+                output.ReturnValue
+            })
+            .QuerySingleAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeNull();
+        AssertAdvancedOutputValues(output);
+    }
+
+    #endregion
+
+    #region OP06: Procedure + ExecuteScalarAsync — OUTPUT 역매핑
+
+    /// <summary>
+    /// 결과 스칼라를 반환하지 않는 저장 프로시저를 ExecuteScalarAsync로 호출해도
+    /// command 완료 후 OUTPUT/RETURN_VALUE가 호출자 SqlParameter에 역매핑되는지 검증한다.
+    /// </summary>
+    [Fact]
+    public async Task OP06_ExecuteScalar_WithExplicitSqlParameterOutput_ShouldPopulateValues()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+
+        // Act
+        DbResult<int?> result = await _db
+            .Procedure("adv.usp_Adv_OutputParameters")
+            .With(new
+            {
+                InputVal = 10,
+                output.OutputVal,
+                output.InOutVal,
+                output.ReturnValue
+            })
+            .ExecuteScalarAsync<int?>(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeNull();
+        AssertAdvancedOutputValues(output);
+    }
+
+    #endregion
+
+    #region OP07: WithTimeout + QueryAsync — 정상 완료
 
     /// <summary>
     /// resilience.usp_Resilience_Simulate_Delay SP를 WithTimeout(10)과 QueryAsync로 호출하여
     /// 1초 지연이 정상 완료되고 스트리밍 결과를 열거할 수 있는지 검증한다.
     /// </summary>
     [Fact]
-    public async Task OP02_WithTimeout_QueryAsync_ShouldSucceed()
+    public async Task OP07_WithTimeout_QueryAsync_ShouldSucceed()
     {
         // Act — 1초 지연, 10초 타임아웃, QueryAsync
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
@@ -76,4 +244,32 @@ public sealed class OutputParameterTests(MultiDbFixture fixture)
     }
 
     #endregion
+
+    private static AdvancedOutputParameters CreateAdvancedOutputParameters()
+        => new(
+            new SqlParameter("@OutputVal", SqlDbType.Int)
+            {
+                Direction = ParameterDirection.Output
+            },
+            new SqlParameter("@InOutVal", SqlDbType.Int)
+            {
+                Direction = ParameterDirection.InputOutput,
+                Value = 5
+            },
+            new SqlParameter("@ReturnValue", SqlDbType.Int)
+            {
+                Direction = ParameterDirection.ReturnValue
+            });
+
+    private static void AssertAdvancedOutputValues(AdvancedOutputParameters output)
+    {
+        Convert.ToInt32(output.OutputVal.Value).Should().Be(20, "OutputVal = InputVal(10) * 2 = 20");
+        Convert.ToInt32(output.InOutVal.Value).Should().Be(15, "InOutVal = InOutVal(5) + InputVal(10) = 15");
+        Convert.ToInt32(output.ReturnValue.Value).Should().Be(10, "ReturnValue = InputVal(10)");
+    }
+
+    private sealed record AdvancedOutputParameters(
+        SqlParameter OutputVal,
+        SqlParameter InOutVal,
+        SqlParameter ReturnValue);
 }

@@ -348,11 +348,6 @@ internal sealed partial class SqlDbExecutor(
         return ExecutePipelineAsync(req, options, async (cmd, token) =>
         {
             int affected = await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-
-            _mapperFactory
-                .GetMapper<TParams>()
-                .MapOutputParameters(cmd, parameters);
-
             return affected;
         });
     }
@@ -643,6 +638,10 @@ internal sealed partial class SqlDbExecutor(
                 );
 
                 await _interceptorChain.OnExecutedAsync(cmd, executedEvent).ConfigureAwait(false);
+
+                _mapperFactory
+                    .GetMapper<TParams>()
+                    .MapOutputParameters(cmd, request.Parameters);
 
                 return innerResult;
             }, request.CancellationToken).ConfigureAwait(false);
