@@ -25,6 +25,11 @@ namespace Lib.Db.Contracts.Mapping;
 /// - <b>우선순위 기반 전략</b>: 단일 인터페이스로 여러 구현체(Reflection, Expression, SourceGen)를 통일하고, <see cref="Priority"/> 점수로 런타임에 구현체를 교체합니다.
 /// </para>
 /// <para>
+/// Source Generator가 저장 프로시저 파라미터 바인딩 코드를 직접 생성하는 경우에도
+/// <c>DbBinder</c>의 스키마 기반 검증, OUTPUT/InputOutput, ReturnValue 처리 정책과
+/// 동일한 계약을 유지해야 합니다.
+/// </para>
+/// <para>
 /// 런타임(JIT) / AOT 환경에 따라 사용 가능한 매퍼 구현체가 달라질 수 있으므로,
 /// 이 인터페이스와 <see cref="Priority"/> 값을 통해
 /// 현재 환경에서 가장 적합한 매퍼를 자동으로 선택하는 데 사용됩니다.

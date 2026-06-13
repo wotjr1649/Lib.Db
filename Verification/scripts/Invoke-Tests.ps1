@@ -13,6 +13,7 @@ param(
     [string] $ResultsDirectory,
     [switch] $NoRestore,
     [switch] $NoBuild,
+    [switch] $KeepBuildServers,
     [switch] $SkipTestEnvGuard,
     [ValidateSet('quiet', 'minimal', 'normal', 'detailed', 'diagnostic')]
     [string] $Verbosity = 'minimal',
@@ -47,6 +48,24 @@ function Invoke-Checked {
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "$FilePath failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Invoke-BuildServerCleanup {
+    param([bool] $KeepBuildServers)
+
+    if ($KeepBuildServers) {
+        return
+    }
+
+    try {
+        & dotnet build-server shutdown
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "dotnet build-server shutdown failed with exit code $LASTEXITCODE."
+        }
+    }
+    catch {
+        Write-Warning "dotnet build-server shutdown failed: $($_.Exception.Message)"
     }
 }
 
@@ -209,6 +228,7 @@ foreach ($argument in $AdditionalArguments) {
 Write-Host 'Lib.Db test run started.'
 Write-Host "Target=$Target"
 Write-Host "Configuration=$Configuration"
+Write-Host "KeepBuildServers=$($KeepBuildServers.IsPresent)"
 Write-Host "SkipTestEnvGuard=$($SkipTestEnvGuard.IsPresent)"
 if (-not [string]::IsNullOrWhiteSpace($Filter)) {
     Write-Host "Filter=$Filter"
@@ -227,9 +247,11 @@ if (-not [string]::IsNullOrWhiteSpace($FilterQuery)) {
 }
 
 $savedSkipGuard = [Environment]::GetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD')
+$savedDisableNodeReuse = [Environment]::GetEnvironmentVariable('MSBUILDDISABLENODEREUSE')
 if ($SkipTestEnvGuard) {
     [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')
 }
+[Environment]::SetEnvironmentVariable('MSBUILDDISABLENODEREUSE', '1')
 
 try {
     Write-SecretSafeEnvironmentSummary
@@ -239,5 +261,8 @@ finally {
     if ($SkipTestEnvGuard) {
         [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', $savedSkipGuard)
     }
+
+    [Environment]::SetEnvironmentVariable('MSBUILDDISABLENODEREUSE', $savedDisableNodeReuse)
+    Invoke-BuildServerCleanup -KeepBuildServers:$KeepBuildServers.IsPresent
 }
 Write-Host 'Lib.Db test run completed.'

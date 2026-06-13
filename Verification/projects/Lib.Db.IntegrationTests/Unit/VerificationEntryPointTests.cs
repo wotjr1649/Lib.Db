@@ -38,6 +38,9 @@ public sealed class VerificationEntryPointTests
         testScript.Should().Contain("'dotnet'");
         testScript.Should().Contain("'test'");
         testScript.Should().Contain("Write-SecretSafeEnvironmentSummary");
+        testScript.Should().Contain("KeepBuildServers");
+        testScript.Should().Contain("MSBUILDDISABLENODEREUSE");
+        testScript.Should().Contain("dotnet build-server shutdown");
         testScript.Should().Contain("SkipTestEnvGuard");
         testScript.Should().Contain("[Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')");
     }
