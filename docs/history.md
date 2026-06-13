@@ -2,6 +2,28 @@
 
 Current usage docs are intended to stay version-neutral and describe the current API. This file owns version-specific history: release changes, verification summaries, migration notes, and archived report summaries that should not remain scattered through active guides.
 
+## 2.6.0 Summary
+
+### Added
+
+- Added full stored procedure `Output`, `InputOutput`, and `ReturnValue` copy-back support for explicit `SqlParameter` values across non-streaming, streaming, multiple-result, and `DataRow` parameter paths.
+- Added reader command lease handling so `QueryAsync<T>()` and `QueryMultipleAsync()` copy output values only after the async sequence or multiple-result reader is fully consumed or cleanly disposed.
+- Added transactional `DataRow` output mapping with row/source rollback on copy-back failure.
+
+### Changed
+
+- Explicit caller-owned `SqlParameter` values are cloned into command-owned parameters before execution, then copied back to the original only after successful completion.
+- `InputOutput` explicit parameter input values are preserved and schema-normalized before execution.
+- `ReturnValue` parameters follow the SQL Server integer return-code contract; non-`Int` explicit return parameters are rejected.
+- `DataRow` schema binding now honors explicit `SqlParameter` cells; scalar `ReturnValue` columns remain excluded, so return codes require explicit `SqlParameter` cells.
+- DataRow output failure wrapping avoids preserving raw output values in public inner exception chains.
+
+### Verification
+
+- Added mapper coverage for DataRow output copy-back, strict/non-strict missing output targets, explicit source success, `InputOutput` schema binding, `ReturnValue` source binding, rollback, ambiguous/read-only/expression columns, and sanitized failure wrapping.
+- Added reader lease and non-streaming output tests covering scalar/single-row execution, async stream completion/disposal, multiple-result reader disposal, cancellation/failure boundaries, and command cleanup.
+- Verified the implementation with targeted mapper tests, the unit test namespace, output parameter integration tests, build checks, and diff hygiene checks during the v2.6.0 branch work.
+
 ## 2.5.0 Summary
 
 ### Added

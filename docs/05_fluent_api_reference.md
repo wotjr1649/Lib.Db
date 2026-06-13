@@ -290,6 +290,8 @@ DbResult<int> result = await session.Default
     .ExecuteAsync();
 ```
 
+`DataRow` parameter bags follow the same output copy-back rules: `Output`/`InputOutput` update matching columns, `ReturnValue` requires an explicit `SqlParameter` cell with `SqlDbType.Int`, and failed copy-back rolls back row and explicit parameter values.
+
 ### 5-4. 보간 SQL (값 인수 자동 파라미터화)
 
 `SqlInterpolated(FormattableString)` 또는 `Sql(FormattableString)`를 사용하면 보간 값 인수가 `@p0`, `@p1`, ... 파라미터로 변환됩니다.

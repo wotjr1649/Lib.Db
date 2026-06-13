@@ -62,6 +62,7 @@ Exact-name index for validation and routing: consumer-facing `IDbInterceptor`; i
 - `QueryMultipleAsync()` returns `DbResult<IMultipleResultReader>`.
 - `Lib.Db.Extensions.ReadMultipleAsync<...>()` reads two, three, or four sequential result sets into `DbMultiple<...>` and disposes the reader.
 - `ExecuteAsync()` returns `DbResult<int>`.
+- Stored procedure output parameters copy back after successful command completion; streaming and multiple-result APIs require full consumption or clean disposal before reading output values.
 - `BulkInsertAsync<T>()` returns `DbResult<long>`.
 - Prefer `BulkShape<T>` overloads for AOT-safe bulk insert, update, delete, upsert, and merge-like mutation. Treat bulk mutation keys as non-null unique database keys backed by application-owned `PRIMARY KEY` or `UNIQUE` schema constraints.
 - Use HybridCache tag overloads for grouped logical invalidation. Tags are app-owned non-sensitive labels; do not use wildcard `*` as an entry tag and do not put tenant/user identifiers, tokens, connection strings, SQL text, row values, or cache payloads in keys or tags.

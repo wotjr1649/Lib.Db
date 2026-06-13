@@ -118,7 +118,7 @@ DbResult<int> result = await db.Default
 
 ## Output Parameters
 
-For output parameters, keep a reference to the `SqlParameter` you supplied and read it only after a successful command. Prefer `QuerySingleAsync<T>()` or `ExecuteScalarAsync<T>()` for new application contracts when you control the stored procedure shape.
+For output parameters, keep a reference to the `SqlParameter` you supplied and read it only after a successful command. Use `Direction = InputOutput` when the stored procedure `OUTPUT` parameter also consumes an input value. `ReturnValue` parameters must use `SqlDbType.Int`. Prefer `QuerySingleAsync<T>()` or `ExecuteScalarAsync<T>()` for new application contracts when you control the stored procedure shape.
 
 ```csharp
 var total = new SqlParameter("@Total", SqlDbType.Int)
@@ -148,4 +148,13 @@ int? totalValue = total.Value is DBNull ? null : (int?)total.Value;
 int statusCode = returnValue.Value is DBNull ? 0 : (int)returnValue.Value;
 ```
 
-Do not read output or return parameters after a failed command unless the stored procedure contract explicitly guarantees them.
+Output and return values are copied back for non-streaming execution APIs after successful command completion. For `QueryAsync<T>()` and `QueryMultipleAsync()`, copy-back happens when the returned async sequence or multiple-result reader is fully consumed or disposed cleanly; do not read output values before that point. If the command is canceled, enumeration fails, or reader disposal fails, treat output values as unavailable.
+
+`DataRow` parameter bags also support output copy-back:
+
+- `Output` and `InputOutput` parameters write back to the matching `DataColumn`; `InputOutput` may also carry an input value.
+- `ReturnValue` is not written to a scalar `DataRow` column; use an explicit `SqlParameter` cell with `SqlDbType.Int` when you need the return value.
+- When a `DataRow` cell contains an explicit `SqlParameter`, Lib.Db clones it for the command and copies output values back to the original only after the row update succeeds.
+- Failed `DataRow` copy-back restores row values and explicit `SqlParameter.Value` values as a single rollback boundary.
+
+Do not read output or return parameters after a failed or canceled command, failed reader enumeration, or failed reader disposal.
