@@ -5,6 +5,7 @@
 // ============================================================================
 
 using System.Data;
+using Lib.Db.Contracts.Execution;
 using Lib.Db.IntegrationTests.Infrastructure;
 using Microsoft.Data.SqlClient;
 
@@ -245,6 +246,121 @@ public sealed class OutputParameterTests(MultiDbFixture fixture)
 
     #endregion
 
+    #region OP08: Procedure + QueryAsync full enumeration — OUTPUT 역매핑
+
+    /// <summary>
+    /// 스트리밍 QueryAsync는 enumerable 반환 시점에는 OUTPUT을 갱신하지 않고,
+    /// 전체 열거로 reader가 닫힌 뒤 OUTPUT/RETURN_VALUE를 역매핑한다.
+    /// </summary>
+    [Fact]
+    public async Task OP08_QueryAsync_FullEnumeration_WithExplicitSqlParameterOutput_ShouldPopulateValues()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+
+        // Act
+        DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
+            .Procedure("adv.usp_Adv_OutputParameters")
+            .With(new
+            {
+                InputVal = 10,
+                output.OutputVal,
+                output.InOutVal,
+                output.ReturnValue
+            })
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        AssertAdvancedOutputValuesNotPopulated(output);
+
+        await foreach (Dictionary<string, object?> _ in result.Value!)
+        {
+        }
+
+        AssertAdvancedOutputValues(output);
+    }
+
+    #endregion
+
+    #region OP09: Procedure + QueryAsync early dispose — OUTPUT 역매핑
+
+    /// <summary>
+    /// 스트리밍 QueryAsync를 정상적으로 조기 중단해도 enumerator dispose가 reader를 닫고
+    /// OUTPUT/RETURN_VALUE를 역매핑한다.
+    /// </summary>
+    [Fact]
+    public async Task OP09_QueryAsync_EarlyDispose_WithExplicitSqlParameterOutput_ShouldPopulateValues()
+    {
+        // Arrange
+        var status = new SqlParameter("@Status", SqlDbType.NVarChar, 20)
+        {
+            Direction = ParameterDirection.Output
+        };
+
+        // Act
+        DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
+            .Procedure("test.usp_Status_Branch_Logic")
+            .With(new
+            {
+                UserId = 1,
+                Status = status
+            })
+            .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        status.Value.Should().BeNull();
+
+        int rowsRead = 0;
+        await foreach (Dictionary<string, object?> row in result.Value!)
+        {
+            rowsRead++;
+            row["Status"].Should().BeOfType<string>().Which.Should().NotBeNullOrWhiteSpace();
+            break;
+        }
+
+        rowsRead.Should().Be(1);
+        status.Value.Should().BeOfType<string>().Which.Should().NotBeNullOrWhiteSpace();
+    }
+
+    #endregion
+
+    #region OP10: Procedure + QueryMultipleAsync dispose — OUTPUT 역매핑
+
+    /// <summary>
+    /// QueryMultipleAsync는 reader 반환 시점에는 OUTPUT을 갱신하지 않고,
+    /// IMultipleResultReader.DisposeAsync 성공 후 OUTPUT/RETURN_VALUE를 역매핑한다.
+    /// </summary>
+    [Fact]
+    public async Task OP10_QueryMultiple_Dispose_WithExplicitSqlParameterOutput_ShouldPopulateValues()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+
+        // Act
+        DbResult<IMultipleResultReader> result = await _db
+            .Procedure("adv.usp_Adv_OutputParameters")
+            .With(new
+            {
+                InputVal = 10,
+                output.OutputVal,
+                output.InOutVal,
+                output.ReturnValue
+            })
+            .QueryMultipleAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        AssertAdvancedOutputValuesNotPopulated(output);
+
+        await result.Value!.DisposeAsync();
+
+        AssertAdvancedOutputValues(output);
+    }
+
+    #endregion
+
     private static AdvancedOutputParameters CreateAdvancedOutputParameters()
         => new(
             new SqlParameter("@OutputVal", SqlDbType.Int)
@@ -260,6 +376,13 @@ public sealed class OutputParameterTests(MultiDbFixture fixture)
             {
                 Direction = ParameterDirection.ReturnValue
             });
+
+    private static void AssertAdvancedOutputValuesNotPopulated(AdvancedOutputParameters output)
+    {
+        output.OutputVal.Value.Should().BeNull();
+        Convert.ToInt32(output.InOutVal.Value).Should().Be(5);
+        output.ReturnValue.Value.Should().BeNull();
+    }
 
     private static void AssertAdvancedOutputValues(AdvancedOutputParameters output)
     {

@@ -8,6 +8,7 @@
 
 using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Mapping;
+using Lib.Db.Execution.Output;
 
 namespace Lib.Db.Execution.Executors;
 
@@ -55,7 +56,7 @@ namespace Lib.Db.Execution.Executors;
 /// </code>
 /// </remarks>
 internal sealed class SqlGridReader(
-    DbDataReader reader,
+    DbCommandLease lease,
     IMapperFactory mapperFactory
     ) : IMultipleResultReader
 {
@@ -72,8 +73,8 @@ internal sealed class SqlGridReader(
         ISqlMapper<T> mapper = mapperFactory.GetMapper<T>();
         List<T> list = new List<T>();
 
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            list.Add(mapper.MapResult(reader));
+        while (await lease.ReadAsync(ct).ConfigureAwait(false))
+            list.Add(lease.Map(mapper.MapResult));
 
         return list;
     }
@@ -86,8 +87,8 @@ internal sealed class SqlGridReader(
         _isConsumed = true;
 
         ISqlMapper<T> mapper = mapperFactory.GetMapper<T>();
-        return await reader.ReadAsync(ct).ConfigureAwait(false)
-            ? mapper.MapResult(reader)
+        return await lease.ReadAsync(ct).ConfigureAwait(false)
+            ? lease.Map(mapper.MapResult)
             : default;
     }
 
@@ -96,12 +97,13 @@ internal sealed class SqlGridReader(
         if (!_isConsumed)
             return;
 
-        if (await reader.NextResultAsync(ct).ConfigureAwait(false))
+        if (await lease.NextResultAsync(ct).ConfigureAwait(false))
         {
             _resultSetIndex++;
             return;
         }
 
+        lease.MarkReadFailed();
         throw new InvalidOperationException(
             $"The stored procedure or batch did not return result set #{_resultSetIndex + 1} required for '{resultType.FullName}'.");
     }
@@ -109,7 +111,7 @@ internal sealed class SqlGridReader(
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        await reader.DisposeAsync().ConfigureAwait(false);
+        await lease.DisposeAsync().ConfigureAwait(false);
     }
 }
 

@@ -10,6 +10,7 @@ using System.Data.Common;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution.Executors;
+using Lib.Db.Execution.Output;
 using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.Unit;
@@ -23,29 +24,32 @@ public sealed class SqlGridReaderCoverageTests
             [[1], [2]],
             [["second"]],
             []);
-        var grid = new SqlGridReader(reader, new ValueMapperFactory());
+        int outputCompletions = 0;
+        var grid = new SqlGridReader(
+            DbCommandLease.ForTest(reader, () => outputCompletions++),
+            new ValueMapperFactory());
 
         List<int> first = await grid.ReadAsync<int>(TestContext.Current.CancellationToken);
         string? second = await grid.ReadSingleAsync<string>(TestContext.Current.CancellationToken);
         int emptySingle = await grid.ReadSingleAsync<int>(TestContext.Current.CancellationToken);
-        Func<Task> afterLast = () => grid.ReadAsync<int>(TestContext.Current.CancellationToken);
 
         first.Should().Equal(1, 2);
         second.Should().Be("second");
         emptySingle.Should().Be(0);
-        await afterLast.Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("*result set #4*System.Int32*");
 
         await grid.DisposeAsync();
         reader.Disposed.Should().BeTrue();
+        outputCompletions.Should().Be(1);
     }
 
     [Fact]
     public async Task ReadSingleAsync_ShouldThrowWhenExpectedResultSetIsMissing()
     {
         var reader = new SequenceDbDataReader([[1]]);
-        var grid = new SqlGridReader(reader, new ValueMapperFactory());
+        int outputCompletions = 0;
+        var grid = new SqlGridReader(
+            DbCommandLease.ForTest(reader, () => outputCompletions++),
+            new ValueMapperFactory());
 
         int first = await grid.ReadSingleAsync<int>(TestContext.Current.CancellationToken);
         Func<Task> missingSecond = () => grid.ReadSingleAsync<string>(TestContext.Current.CancellationToken);
@@ -54,6 +58,9 @@ public sealed class SqlGridReaderCoverageTests
         await missingSecond.Should()
             .ThrowAsync<InvalidOperationException>()
             .WithMessage("*result set #2*System.String*");
+
+        await grid.DisposeAsync();
+        outputCompletions.Should().Be(0);
     }
 
     [Fact]
