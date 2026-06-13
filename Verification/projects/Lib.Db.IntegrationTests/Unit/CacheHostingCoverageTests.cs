@@ -71,6 +71,26 @@ public sealed class CacheHostingCoverageTests
     }
 
     [Fact]
+    public void CacheInternalHelpers_ShouldHashConfiguredIsolationKeyForMutexPrefix()
+    {
+        const string secretIsolationKey =
+            "Raw:Server=prod;Database=TenantA;User Id=sa;Password=cache-secret";
+        var options = new SharedMemoryCacheOptions
+        {
+            Scope = CacheScope.Machine,
+            IsolationKey = secretIsolationKey
+        };
+
+        string prefix = CacheInternalHelpers.GetMutexPrefix(options);
+
+        prefix.Should().StartWith("Global\\Lib.Db.Cache_");
+        prefix.Should().NotContain(secretIsolationKey);
+        prefix.Should().NotContain("Password=");
+        prefix.Should().NotContain("TenantA");
+        prefix.Should().Contain(CacheInternalHelpers.BuildSafeIsolationKey(secretIsolationKey));
+    }
+
+    [Fact]
     public async Task CacheMaintenanceService_ShouldKeepRunningWhenMaintenanceCycleThrows()
     {
         using ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));
@@ -751,7 +771,7 @@ public sealed class CacheHostingCoverageTests
         ILogger<ProcessSlotAllocator> logger = loggerFactory.CreateLogger<ProcessSlotAllocator>();
         AbandonMutex(
             name => MutexHelper.CreateProcessMutex(name, logger),
-            $"Lib.Db.{isolationKey}.Slot.0");
+            ProcessSlotAllocator.BuildMutexLogicalName(isolationKey, 0));
 
         using var allocator = new ProcessSlotAllocator(isolationKey, logger);
 
@@ -872,7 +892,9 @@ public sealed class CacheHostingCoverageTests
             int slot = i;
             Thread thread = new(() =>
             {
-                Mutex mutex = MutexHelper.CreateProcessMutex($"Lib.Db.{isolationKey}.Slot.{slot}", logger);
+                Mutex mutex = MutexHelper.CreateProcessMutex(
+                    ProcessSlotAllocator.BuildMutexLogicalName(isolationKey, slot),
+                    logger);
                 try
                 {
                     mutex.WaitOne();
@@ -890,6 +912,32 @@ public sealed class CacheHostingCoverageTests
         }
 
         return threads;
+    }
+
+    [Fact]
+    public void ProcessSlotAllocator_ShouldNotPassRawIsolationKeyToMutexFactory()
+    {
+        const string secretIsolationKey =
+            "Raw:Server=prod;Database=TenantA;User Id=sa;Password=slot-secret";
+        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));
+        ILogger<ProcessSlotAllocator> logger = loggerFactory.CreateLogger<ProcessSlotAllocator>();
+        List<string> observedNames = [];
+
+        using var allocator = new ProcessSlotAllocator(
+            secretIsolationKey,
+            logger,
+            (name, _) =>
+            {
+                observedNames.Add(name);
+                return new Mutex();
+            },
+            maxSlots: 1);
+
+        observedNames.Should().ContainSingle();
+        observedNames[0].Should().NotContain(secretIsolationKey);
+        observedNames[0].Should().NotContain("Password=");
+        observedNames[0].Should().Contain(ProcessSlotAllocator.BuildMutexLogicalName(secretIsolationKey, 0));
+        allocator.HasSlot.Should().BeTrue();
     }
 
     private static async Task ExecuteCacheMaintenanceAsync(

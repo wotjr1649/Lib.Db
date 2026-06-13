@@ -76,8 +76,10 @@ internal static class LibDbExceptionFactory
 
     public static Exception CreateCommandExecutionFailed(Exception inner)
     {
+        _ = inner;
+
         return new InvalidOperationException(
-            "명령 실행 중 오류가 발생했습니다. 자세한 SQL 원문은 보안상 예외 메시지에 포함하지 않습니다.", inner);
+            "명령 실행 중 오류가 발생했습니다. 자세한 SQL 원문은 보안상 예외 메시지에 포함하지 않습니다.");
     }
 
     public static Exception CreateSchemaMismatch(string spName, int errorCode)

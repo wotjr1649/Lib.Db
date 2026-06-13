@@ -468,9 +468,11 @@ internal sealed partial class SqlDbExecutor(
             catch (Exception ex)
             {
                 activity?.SetStatus(ActivityStatusCode.Error, ActivityErrorDescription);
-                _logger.LogWarning(ex,
-                    "다중 결과 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                    diagnosticCommandText);
+                _logger.LogWarning(
+                    "다중 결과 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
+                    diagnosticCommandText,
+                    GetExceptionType(ex),
+                    GetSqlErrorCode(ex));
                 throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
             }
         }
@@ -579,9 +581,10 @@ internal sealed partial class SqlDbExecutor(
                 catch (Exception interceptEx)
                 {
                     // 인터셉터 예외는 로깅 후 무시 (실행 파이프라인 차단하지 않음)
-                    _logger.LogWarning(interceptEx,
-                        "[UserInterceptor] OnExecutingAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                        diagnosticCommandText);
+                    _logger.LogWarning(
+                        "[UserInterceptor] OnExecutingAsync 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType})",
+                        diagnosticCommandText,
+                        GetExceptionType(interceptEx));
                 }
             }
         }
@@ -682,9 +685,10 @@ internal sealed partial class SqlDbExecutor(
                     }
                     catch (Exception interceptEx)
                     {
-                        _logger.LogWarning(interceptEx,
-                            "[UserInterceptor] OnExecutedAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                            diagnosticCommandText);
+                        _logger.LogWarning(
+                            "[UserInterceptor] OnExecutedAsync 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType})",
+                            diagnosticCommandText,
+                            GetExceptionType(interceptEx));
                     }
                 }
             }
@@ -711,19 +715,22 @@ internal sealed partial class SqlDbExecutor(
                     }
                     catch (Exception interceptEx)
                     {
-                        _logger.LogWarning(interceptEx,
-                            "[UserInterceptor] OnErrorAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                            diagnosticCommandText);
+                        _logger.LogWarning(
+                            "[UserInterceptor] OnErrorAsync 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType})",
+                            diagnosticCommandText,
+                            GetExceptionType(interceptEx));
                     }
                 }
             }
 
-            _logger.LogWarning(ex,
+            _logger.LogWarning(
                 "[Executor] DB 파이프라인 실행 중 오류가 발생했습니다. " +
-                "(Command: {CommandText}, Instance: {InstanceId}, CommandType: {CommandType})",
+                "(Command: {CommandText}, Instance: {InstanceId}, CommandType: {CommandType}, ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
                 diagnosticCommandText,
                 DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash),
-                request.CommandType);
+                request.CommandType,
+                GetExceptionType(ex),
+                GetSqlErrorCode(ex));
 
             // [Modify] SqlException은 포장하지 않고 그대로 전파해야 Polly/Test가 정상 동작함
             if (ex is SqlException)
@@ -771,9 +778,11 @@ internal sealed partial class SqlDbExecutor(
                     if (mode == SchemaResolutionMode.SnapshotOnly)
                         throw;
 
-                    _logger.LogWarning(ex,
-                        "[Schema] SP 스키마 조회 실패. 스키마 없이 파라미터 매핑을 진행합니다. (Command: {CommandText})",
-                        GetDiagnosticCommandText(cmd.CommandText, cmd.CommandType));
+                    _logger.LogWarning(
+                        "[Schema] SP 스키마 조회 실패. 스키마 없이 파라미터 매핑을 진행합니다. (Command: {CommandText}, ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
+                        GetDiagnosticCommandText(cmd.CommandText, cmd.CommandType),
+                        GetExceptionType(ex),
+                        GetSqlErrorCode(ex));
                 }
             }
         }
@@ -879,9 +888,11 @@ internal sealed partial class SqlDbExecutor(
             catch (Exception ex)
             {
                 activity?.SetStatus(ActivityStatusCode.Error, ActivityErrorDescription);
-                _logger.LogWarning(ex,
-                    "Streaming 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                    diagnosticCommandText);
+                _logger.LogWarning(
+                    "Streaming 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
+                    diagnosticCommandText,
+                    GetExceptionType(ex),
+                    GetSqlErrorCode(ex));
                 throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
             }
         }
@@ -1220,6 +1231,11 @@ internal sealed partial class SqlDbExecutor(
             CommandType.TableDirect => "TableDirect",
             _ => RedactedCommandText
         };
+
+    private static string GetExceptionType(Exception ex) => ex.GetType().Name;
+
+    private static int GetSqlErrorCode(Exception ex)
+        => ex is SqlException sqlException ? sqlException.Number : 0;
 
     /// <summary>
     /// MarsPolicy에 따라 MARS 활성화 여부를 검증합니다.

@@ -3,6 +3,7 @@ param(
     [string[]] $Scenario = @('All'),
     [string] $Configuration = 'Debug',
     [switch] $NoRestore,
+    [switch] $UseLocalEnvironment,
     [switch] $KeepArtifacts
 )
 
@@ -175,6 +176,10 @@ function New-TestWrapperArguments {
         $arguments += '-NoRestore'
     }
 
+    if ($UseLocalEnvironment -and -not $SkipLocalEnvironment) {
+        $arguments += '-UseLocalEnvironment'
+    }
+
     if ($SkipLocalEnvironment) {
         $arguments += '-SkipLocalEnvironment'
     }
@@ -283,25 +288,33 @@ function Invoke-TrxScenario {
 }
 
 function Invoke-CoverageScenario {
-    Write-Host 'MTP spike coverage scenario started.'
+    Write-Host 'MTP spike coverage guard scenario started.'
     New-ArtifactDirectory -Path $coverageDirectory
     $coverageOutput = Join-Path $coverageDirectory 'coverage.cobertura.xml'
     $arguments = New-TestWrapperArguments -FilterClass '*CacheHostingCoverageTests*' -SkipTestEnvGuard -AdditionalArguments @(
-        '--coverage',
-        '--coverage-output-format', 'cobertura',
-        '--coverage-output', $coverageOutput,
-        '--coverage-settings', $coverageSettings,
-        '--results-directory', $coverageDirectory
+        '-Coverage',
+        '-CoverageOutputFormat', 'cobertura',
+        '-CoverageOutput', $coverageOutput,
+        '-CoverageSettings', $coverageSettings,
+        '-ResultsDirectory', $coverageDirectory
     )
 
-    Invoke-Checked 'pwsh' $arguments
+    $result = Invoke-Captured 'pwsh' $arguments
 
-    if (-not (Test-Path -LiteralPath $coverageOutput)) {
-        throw 'MTP coverage scenario did not produce coverage.cobertura.xml.'
+    if ($result.ExitCode -eq 0) {
+        throw 'MTP coverage guard scenario unexpectedly allowed Invoke-Tests.ps1 to run coverage directly.'
     }
 
-    Write-Host "MtpCoverage=$(Format-RepoRelativePath -Path $coverageOutput)"
-    Write-Host 'MTP spike coverage scenario passed.'
+    if (-not $result.Output.Contains('Invoke-Tests.ps1 does not run coverage directly')) {
+        Write-Host $result.Output
+        throw 'MTP coverage guard scenario failed, but not with the expected coverage routing message.'
+    }
+
+    if (Test-Path -LiteralPath $coverageOutput) {
+        throw 'MTP coverage guard scenario unexpectedly produced coverage.cobertura.xml.'
+    }
+
+    Write-Host 'MTP spike coverage guard scenario passed.'
 }
 
 function Invoke-ArtifactScanScenario {
@@ -314,12 +327,16 @@ function Invoke-ArtifactScanScenario {
 Write-Host 'Lib.Db MTP migration spike started.'
 Write-Host "Configuration=$Configuration"
 
-if (Test-Path -LiteralPath $localEnvironmentScript) {
+if ($UseLocalEnvironment) {
+    if (-not (Test-Path -LiteralPath $localEnvironmentScript)) {
+        throw 'Local verification environment script was requested but not found.'
+    }
+
     . $localEnvironmentScript -NoBenchmarkReset
     Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
 }
 else {
-    Write-Host 'Local verification environment script not found; using existing process environment.'
+    Write-Host 'Local verification environment script not loaded; pass -UseLocalEnvironment to opt in, or use existing process environment.'
 }
 
 Write-SecretSafeEnvironmentSummary

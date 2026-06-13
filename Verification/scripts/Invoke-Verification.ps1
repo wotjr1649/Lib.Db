@@ -6,6 +6,7 @@ param(
     [switch] $SkipReleasePackage,
     [ValidateSet('Dry', 'Short', 'Default')]
     [string] $BenchmarkJob = 'Short',
+    [switch] $UseLocalEnvironment,
     [switch] $AllowPartial
 )
 
@@ -24,7 +25,11 @@ $artifactScanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
 $artifactTrackingGate = Join-Path $PSScriptRoot 'Assert-GeneratedArtifactsUntracked.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
 $matrixResultsDirectory = Join-Path $repoRoot 'Verification\artifacts\test-results\matrix'
+$coverageResultsDirectory = 'Verification\artifacts\coverage\raw'
+$coverageReportDirectory = 'Verification\artifacts\coverage\report'
+$aotArtifactsDirectory = 'Verification\artifacts\aot'
 $releasePackageArtifactsDirectory = 'Verification\artifacts\release-package'
+$benchmarkArtifactsDirectory = Join-Path $repoRoot 'Verification\artifacts\benchmarks\BenchmarkDotNet.Artifacts'
 
 $skippedGates = [System.Collections.Generic.List[string]]::new()
 
@@ -44,9 +49,16 @@ function Format-RepoRelativePath {
     return [System.IO.Path]::GetFileName($fullPath)
 }
 
-if (Test-Path -LiteralPath $localEnvironmentScript) {
+if ($UseLocalEnvironment) {
+    if (-not (Test-Path -LiteralPath $localEnvironmentScript)) {
+        throw 'Local verification environment script was requested but not found.'
+    }
+
     . $localEnvironmentScript -NoBenchmarkReset
     Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
+}
+else {
+    Write-Host 'Local verification environment script not loaded; pass -UseLocalEnvironment to opt in, or use existing process environment.'
 }
 
 function Invoke-Checked {
@@ -117,7 +129,10 @@ else {
 }
 
 if (-not $SkipCoverage) {
-    & pwsh -NoProfile -File $coverageScript -RestoreTools
+    & pwsh -NoProfile -File $coverageScript `
+        -ResultsDirectory $coverageResultsDirectory `
+        -ReportDirectory $coverageReportDirectory `
+        -RestoreTools
     if ($LASTEXITCODE -ne 0) {
         throw "Coverage verification failed with exit code $LASTEXITCODE."
     }
@@ -127,7 +142,7 @@ else {
 }
 
 if (-not $SkipAot) {
-    & pwsh -NoProfile -File $aotScript
+    & pwsh -NoProfile -File $aotScript -ArtifactsDirectory $aotArtifactsDirectory
     if ($LASTEXITCODE -ne 0) {
         throw "AOT verification failed with exit code $LASTEXITCODE."
     }
@@ -161,9 +176,23 @@ if ($LASTEXITCODE -ne 0) {
     throw "Verification artifact secret scan self-test failed with exit code $LASTEXITCODE."
 }
 
-& pwsh -NoProfile -File $artifactScanner
-if ($LASTEXITCODE -ne 0) {
-    throw "Verification artifact secret scan failed with exit code $LASTEXITCODE."
+$currentArtifactScanPaths = @(
+    $matrixResultsDirectory,
+    (Join-Path $repoRoot $coverageResultsDirectory),
+    (Join-Path $repoRoot $coverageReportDirectory),
+    (Join-Path $repoRoot $aotArtifactsDirectory),
+    (Join-Path $repoRoot $releasePackageArtifactsDirectory),
+    $benchmarkArtifactsDirectory
+) | Where-Object { Test-Path -LiteralPath $_ }
+
+if ($currentArtifactScanPaths.Count -gt 0) {
+    & pwsh -NoProfile -File $artifactScanner -Paths $currentArtifactScanPaths
+    if ($LASTEXITCODE -ne 0) {
+        throw "Verification artifact secret scan failed with exit code $LASTEXITCODE."
+    }
+}
+else {
+    Write-Warning 'No current-run verification artifact paths exist; skipping final artifact secret scan for this partial run.'
 }
 
 & pwsh -NoProfile -File $artifactTrackingGate

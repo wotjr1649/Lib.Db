@@ -121,7 +121,7 @@ Lib.Db must build a target map before execution:
 - Empty canonical names are invalid.
 - Dictionary keys, DTO property names, generated mapper parameter names, and `DataRow` column names are matched through the same canonical rule.
 - If two parameters or two target members produce the same canonical name, the contract is ambiguous and must fail before execution.
-- Strict mode fails when an output target is missing. Non-strict mode ignores missing output targets only when the missing target is unambiguous.
+- Strict mode does not fail solely because an output-only target is missing; this preserves execution compatibility for stored procedures whose output values are intentionally ignored. Strict mode still rejects missing `InputOutput` sources, ambiguous targets, invalid existing targets, and unsupported output metadata.
 - Ambiguous matches always fail, regardless of strict mode.
 - Parameter display names in errors must be sanitized for length and control characters before logging or exception construction.
 

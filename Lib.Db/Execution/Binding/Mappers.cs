@@ -445,6 +445,24 @@ internal static class SqlIdentifierName
         return normalized.ToFrozenDictionary(StringComparer.Ordinal);
     }
 
+    public static FrozenSet<string> BuildAmbiguousNormalizedPropertySet(PropertyInfo[] properties)
+    {
+        HashSet<string> observed = new(StringComparer.Ordinal);
+        HashSet<string> ambiguous = new(StringComparer.Ordinal);
+
+        foreach (PropertyInfo property in properties)
+        {
+            string key = Normalize(property.Name);
+            if (key.Length == 0)
+                continue;
+
+            if (!observed.Add(key))
+                ambiguous.Add(key);
+        }
+
+        return ambiguous.ToFrozenSet(StringComparer.Ordinal);
+    }
+
     public static bool TryGetProperty(
         FrozenDictionary<string, PropertyInfo> exactMap,
         FrozenDictionary<string, PropertyInfo> normalizedMap,
@@ -456,6 +474,12 @@ internal static class SqlIdentifierName
 
         string normalized = Normalize(name);
         return normalizedMap.TryGetValue(normalized, out property);
+    }
+
+    public static bool IsAmbiguousNormalizedName(FrozenSet<string> ambiguousNormalizedNames, string name)
+    {
+        string normalized = Normalize(name);
+        return normalized.Length > 0 && ambiguousNormalizedNames.Contains(normalized);
     }
 
     private static string Normalize(string name)
@@ -583,6 +607,9 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         /// <summary>snake_case/upper snake 컬럼명 조회용 정규화 맵 (충돌 항목 제외)</summary>
         public static readonly FrozenDictionary<string, PropertyInfo> NormalizedPropMap;
 
+        /// <summary>정규화 이름 충돌로 output target을 결정할 수 없는 프로퍼티 이름 집합</summary>
+        public static readonly FrozenSet<string> AmbiguousNormalizedPropNames;
+
         /// <summary>Raw SQL 바인딩용 전체 프로퍼티 메타데이터 배열 (선언 순서 유지)</summary>
         public static readonly PropertyMeta[] AllProps;
 
@@ -593,6 +620,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
 
             PropMap = allProps.ToFrozenDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
             NormalizedPropMap = SqlIdentifierName.BuildNormalizedPropertyMap(allProps);
+            AmbiguousNormalizedPropNames = SqlIdentifierName.BuildAmbiguousNormalizedPropertySet(allProps);
 
             // 2) Raw SQL 파라미터 바인딩용 AllProps는 "읽기 가능한" 프로퍼티만 대상
             AllProps = allProps
@@ -604,6 +632,9 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
 
         public static bool TryGetProperty(string name, [NotNullWhen(true)] out PropertyInfo? property)
             => SqlIdentifierName.TryGetProperty(PropMap, NormalizedPropMap, name, out property);
+
+        public static bool HasAmbiguousNormalizedName(string name)
+            => SqlIdentifierName.IsAmbiguousNormalizedName(AmbiguousNormalizedPropNames, name);
     }
 
     #endregion
@@ -638,7 +669,11 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
             {
                 string name = meta.Name.TrimStart('@');
                 bool hasProperty = Meta.TryGetProperty(name, out PropertyInfo? prop);
-                SchemaOutputTargetValidator.ValidateObjectTarget(meta, strict, hasProperty ? prop : null);
+                SchemaOutputTargetValidator.ValidateObjectTarget(
+                    meta,
+                    strict,
+                    hasProperty ? prop : null,
+                    Meta.HasAmbiguousNormalizedName(name));
 
                 if (hasProperty && prop!.CanRead)
                 {
@@ -732,6 +767,11 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                 continue;
 
             string name = p.ParameterName.TrimStart('@');
+
+            SchemaOutputTargetValidator.ThrowIfAmbiguousObjectTarget(
+                p.Direction,
+                OutputParameterName.From(p.ParameterName),
+                Meta.HasAmbiguousNormalizedName(name));
 
             if (Meta.TryGetProperty(name, out PropertyInfo? prop))
             {
@@ -1222,13 +1262,19 @@ internal static class SchemaOutputTargetValidator
     public static void ValidateObjectTarget(
         SpParameterMetadata meta,
         bool strict,
-        [NotNullWhen(true)] PropertyInfo? property)
+        [NotNullWhen(true)] PropertyInfo? property,
+        bool ambiguousTarget)
     {
         SqlParameterCloneFactory.ValidateSupportedOutputMetadata(
             meta.Name,
             meta.SqlDbType,
             meta.Direction,
             meta.IsCursorRef);
+
+        if (ambiguousTarget)
+        {
+            ThrowIfAmbiguousObjectTarget(meta.Direction, OutputParameterName.From(meta.Name), ambiguousTarget);
+        }
 
         if (meta.Direction == ParameterDirection.ReturnValue)
         {
@@ -1248,6 +1294,18 @@ internal static class SchemaOutputTargetValidator
         if (meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
             return;
 
+        if (meta.Direction == ParameterDirection.Output)
+        {
+            if (property is not null && !property.CanRead)
+            {
+                OutputParameterName outputName = OutputParameterName.From(meta.Name);
+                throw new InvalidOperationException(
+                    $"Strict output parameter '{outputName.SafeDisplay()}' maps to unreadable DTO property '{property.Name}'.");
+            }
+
+            return;
+        }
+
         if (!strict)
             return;
 
@@ -1255,17 +1313,32 @@ internal static class SchemaOutputTargetValidator
         if (property is null)
         {
             throw new InvalidOperationException(
-                $"Strict output parameter '{name.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
+                $"Strict input-output parameter '{name.SafeDisplay()}' requires a readable DTO property or explicit SqlParameter source.");
         }
 
         if (!property.CanRead)
         {
             throw new InvalidOperationException(
-                $"Strict output parameter '{name.SafeDisplay()}' maps to unreadable DTO property '{property.Name}'.");
+                $"Strict input-output parameter '{name.SafeDisplay()}' maps to unreadable DTO property '{property.Name}'.");
         }
 
         // Read-only scalar properties, including anonymous-object properties, may declare
         // a stored-procedure OUTPUT parameter for execution even though they cannot receive copy-back.
+    }
+
+    public static void ThrowIfAmbiguousObjectTarget(
+        ParameterDirection direction,
+        OutputParameterName name,
+        bool ambiguousTarget)
+    {
+        if (!ambiguousTarget ||
+            direction is not (ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"DTO output target '{name.SafeDisplay()}' is ambiguous.");
     }
 
     public static void ValidateDictionaryTarget(
@@ -1282,8 +1355,7 @@ internal static class SchemaOutputTargetValidator
         if (meta.Direction == ParameterDirection.ReturnValue)
             return;
 
-        if (!strict ||
-            meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
+        if (!strict || meta.Direction != ParameterDirection.InputOutput)
         {
             return;
         }
@@ -1292,7 +1364,7 @@ internal static class SchemaOutputTargetValidator
         {
             OutputParameterName name = OutputParameterName.From(meta.Name);
             throw new InvalidOperationException(
-                $"Strict output parameter '{name.SafeDisplay()}' requires a Dictionary target key or explicit SqlParameter source.");
+                $"Strict input-output parameter '{name.SafeDisplay()}' requires a Dictionary target key or explicit SqlParameter source.");
         }
     }
 
@@ -1795,10 +1867,10 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
             DataColumn? column = TryGetUniqueOutputColumn(parameters.Table, name);
             if (column is null)
             {
-                if (strict)
+                if (strict && param.Direction == ParameterDirection.InputOutput)
                 {
                     throw new InvalidOperationException(
-                        $"DataRow output target '{name.SafeDisplay()}' is missing.");
+                        $"Strict input-output parameter '{name.SafeDisplay()}' requires a DataRow target column or explicit SqlParameter source.");
                 }
 
                 continue;
@@ -1915,10 +1987,10 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
             DataColumn? column = TryGetUniqueOutputColumn(table, name);
             if (column is null)
             {
-                if (strict)
+                if (strict && meta.Direction == ParameterDirection.InputOutput)
                 {
                     throw new InvalidOperationException(
-                        $"DataRow output target '{name.SafeDisplay()}' is missing.");
+                        $"Strict input-output parameter '{name.SafeDisplay()}' requires a DataRow target column or explicit SqlParameter source.");
                 }
 
                 continue;
@@ -2087,6 +2159,7 @@ internal sealed class ReflectionParameterMapper<
     {
         public static readonly FrozenDictionary<string, PropertyInfo> Properties;
         public static readonly FrozenDictionary<string, PropertyInfo> NormalizedProperties;
+        public static readonly FrozenSet<string> AmbiguousNormalizedProperties;
         public static readonly PropertyMeta[] AllProperties;
         private static readonly bool s_canReadMetadataTokens = RuntimeFeatureSwitch.IsDynamicCodeSupported;
 
@@ -2096,6 +2169,7 @@ internal sealed class ReflectionParameterMapper<
             Properties = props
                 .ToFrozenDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
             NormalizedProperties = SqlIdentifierName.BuildNormalizedPropertyMap(props);
+            AmbiguousNormalizedProperties = SqlIdentifierName.BuildAmbiguousNormalizedPropertySet(props);
 
             AllProperties = props
                 .Where(p => p.CanRead)
@@ -2107,6 +2181,9 @@ internal sealed class ReflectionParameterMapper<
 
         public static bool TryGetProperty(string name, [NotNullWhen(true)] out PropertyInfo? property)
             => SqlIdentifierName.TryGetProperty(Properties, NormalizedProperties, name, out property);
+
+        public static bool HasAmbiguousNormalizedName(string name)
+            => SqlIdentifierName.IsAmbiguousNormalizedName(AmbiguousNormalizedProperties, name);
 
         private static int GetMetadataTokenOrMax(PropertyInfo property)
             => property.Module.Assembly.IsDynamic
@@ -2129,7 +2206,11 @@ internal sealed class ReflectionParameterMapper<
             {
                 string name = meta.Name.TrimStart('@');
                 bool hasProperty = TypeCache.TryGetProperty(name, out PropertyInfo? prop);
-                SchemaOutputTargetValidator.ValidateObjectTarget(meta, strict, hasProperty ? prop : null);
+                SchemaOutputTargetValidator.ValidateObjectTarget(
+                    meta,
+                    strict,
+                    hasProperty ? prop : null,
+                    TypeCache.HasAmbiguousNormalizedName(name));
 
                 if (hasProperty && prop!.CanRead)
                 {
@@ -2137,9 +2218,6 @@ internal sealed class ReflectionParameterMapper<
                     SchemaOutputTargetValidator.ValidateObjectValue(meta, strict, prop, value);
 
                     if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
-                        continue;
-
-                    if (meta.Direction == ParameterDirection.ReturnValue)
                         continue;
 
                     if (meta.Direction == ParameterDirection.Output)
@@ -2197,7 +2275,7 @@ internal sealed class ReflectionParameterMapper<
         for (int i = 0; i < props.Length; i++)
         {
             ref readonly PropertyMeta meta = ref props[i];
-            if (!meta.Info.CanRead || !typeof(SqlParameter).IsAssignableFrom(meta.Info.PropertyType))
+            if (!typeof(SqlParameter).IsAssignableFrom(meta.Info.PropertyType))
                 continue;
 
             object? value = meta.Info.GetValue(parameters);
@@ -2219,6 +2297,11 @@ internal sealed class ReflectionParameterMapper<
                 continue;
 
             string name = p.ParameterName.TrimStart('@');
+
+            SchemaOutputTargetValidator.ThrowIfAmbiguousObjectTarget(
+                p.Direction,
+                OutputParameterName.From(p.ParameterName),
+                TypeCache.HasAmbiguousNormalizedName(name));
 
             if (TypeCache.TryGetProperty(name, out PropertyInfo? prop))
             {

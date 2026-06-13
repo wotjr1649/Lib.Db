@@ -7,6 +7,7 @@ param(
     [switch] $SkipSetup,
     [switch] $SkipRun,
     [switch] $SkipSecretScan,
+    [switch] $UseLocalEnvironment,
     [switch] $AllowPartial
 )
 
@@ -35,12 +36,16 @@ function Format-RepoRelativePath {
     return [System.IO.Path]::GetFileName($fullPath)
 }
 
-if (Test-Path -LiteralPath $localEnvironmentScript) {
+if ($UseLocalEnvironment) {
+    if (-not (Test-Path -LiteralPath $localEnvironmentScript)) {
+        throw 'Local verification environment script was requested but not found.'
+    }
+
     . $localEnvironmentScript -NoBenchmarkReset
     Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
 }
 else {
-    Write-Host 'Local verification environment script not found; using existing process environment.'
+    Write-Host 'Local verification environment script not loaded; pass -UseLocalEnvironment to opt in, or use existing process environment.'
 }
 
 function Invoke-Checked {

@@ -173,7 +173,7 @@ public sealed class RuntimeUtilityCoverageTests
 
         LibDbExceptionFactory.CreateFailedToCreateAccessor("Dto").Should().BeOfType<InvalidOperationException>();
         LibDbExceptionFactory.CreateTvpValidationFailed("dbo.T", "shape").Message.Should().Contain("dbo.T");
-        LibDbExceptionFactory.CreateCommandExecutionFailed(new TimeoutException()).InnerException.Should().BeOfType<TimeoutException>();
+        LibDbExceptionFactory.CreateCommandExecutionFailed(new TimeoutException("provider timeout")).InnerException.Should().BeNull();
         LibDbExceptionFactory.CreateSchemaMismatch("dbo.usp", 123).Message.Should().Contain("123");
     }
 
@@ -188,7 +188,13 @@ public sealed class RuntimeUtilityCoverageTests
         nullName.Should().Throw<ArgumentNullException>().WithParameterName("logicalName");
         nullLogger.Should().Throw<ArgumentNullException>().WithParameterName("logger");
 
-        using Mutex mutex = MutexHelper.CreateProcessMutex("Lib.Db.Coverage." + Guid.NewGuid().ToString("N"), logger);
+        string secretLikeName = "Lib.Db.Coverage.Password=mutex-secret." + Guid.NewGuid().ToString("N");
+        string safeName = MutexHelper.BuildSafeMutexName(secretLikeName);
+        safeName.Should().NotContain(secretLikeName);
+        safeName.Should().NotContain("Password=");
+        safeName.Should().StartWith("Lib.Db.");
+
+        using Mutex mutex = MutexHelper.CreateProcessMutex(secretLikeName, logger);
         mutex.WaitOne(0).Should().BeTrue();
         mutex.ReleaseMutex();
     }

@@ -259,13 +259,13 @@ internal sealed class DbSession(
             DbError error = DbErrorMapper.FromSqlException(ex);
             return DbResult<long>.Fail(error);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             DbError error = new()
             {
                 Kind = DbErrorKind.Unknown,
-                Message = ex.Message,
-                InnerException = ex
+                Message = "대량 INSERT 실행 중 오류가 발생했습니다.",
+                InnerException = null
             };
             return DbResult<long>.Fail(error);
         }
@@ -578,8 +578,11 @@ internal sealed class DbSession(
                 catch (Exception ex)
                 {
                     exceptions ??= [];
-                    exceptions.Add(new InvalidOperationException(
-                        $"인스턴스 '{state.InstanceName}'의 트랜잭션 리소스 해제 중 오류가 발생했습니다.", ex));
+                    exceptions.Add(CreateDisposeFailure(
+                        state,
+                        "트랜잭션 리소스",
+                        ex,
+                        connectionPoolRisk: false));
                 }
             }
 
@@ -593,8 +596,11 @@ internal sealed class DbSession(
                 catch (Exception ex)
                 {
                     exceptions ??= [];
-                    exceptions.Add(new InvalidOperationException(
-                        $"인스턴스 '{state.InstanceName}'의 DB 실행기 리소스 해제 중 오류가 발생했습니다.", ex));
+                    exceptions.Add(CreateDisposeFailure(
+                        state,
+                        "DB 실행기 리소스",
+                        ex,
+                        connectionPoolRisk: false));
                 }
             }
 
@@ -608,8 +614,11 @@ internal sealed class DbSession(
                 catch (Exception ex)
                 {
                     exceptions ??= [];
-                    exceptions.Add(new InvalidOperationException(
-                        $"인스턴스 '{state.InstanceName}'의 DB 연결 리소스 해제 중 오류가 발생했습니다. Connection Pool이 고갈될 수 있습니다.", ex));
+                    exceptions.Add(CreateDisposeFailure(
+                        state,
+                        "DB 연결 리소스",
+                        ex,
+                        connectionPoolRisk: true));
                 }
             }
 
@@ -623,8 +632,11 @@ internal sealed class DbSession(
                 catch (Exception ex)
                 {
                     exceptions ??= [];
-                    exceptions.Add(new InvalidOperationException(
-                        $"임시 인스턴스 '{state.InstanceName}' 등록 해제 중 오류가 발생했습니다.", ex));
+                    exceptions.Add(CreateDisposeFailure(
+                        state,
+                        "임시 인스턴스 등록",
+                        ex,
+                        connectionPoolRisk: false));
                 }
             }
         }
@@ -636,6 +648,23 @@ internal sealed class DbSession(
                 "DbSession 리소스 해제 중 하나 이상의 오류가 발생했습니다. 자세한 내용은 InnerExceptions를 확인하세요.",
                 exceptions);
         }
+    }
+
+    private static InvalidOperationException CreateDisposeFailure(
+        DbInstanceState state,
+        string resourceName,
+        Exception exception,
+        bool connectionPoolRisk)
+    {
+        string safeInstanceName = DbDiagnosticRedactor.RedactInstanceId(state.InstanceName)
+            ?? "Instance:[redacted]";
+        string poolMessage = connectionPoolRisk
+            ? " Connection Pool이 고갈될 수 있습니다."
+            : "";
+
+        return new InvalidOperationException(
+            $"인스턴스 '{safeInstanceName}'의 {resourceName} 해제 중 오류가 발생했습니다.{poolMessage} " +
+            $"ErrorType: {exception.GetType().Name}.");
     }
 
     #endregion
@@ -731,13 +760,13 @@ internal sealed class DbTransactionScopeAdapter : IDbTransactionScope
             DbError error = Diagnostics.DbErrorMapper.FromSqlException(ex);
             return DbResult<bool>.Fail(error);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             DbError error = new()
             {
                 Kind = DbErrorKind.Unknown,
-                Message = ex.Message,
-                InnerException = ex
+                Message = "트랜잭션 커밋 중 오류가 발생했습니다.",
+                InnerException = null
             };
             return DbResult<bool>.Fail(error);
         }
@@ -760,13 +789,13 @@ internal sealed class DbTransactionScopeAdapter : IDbTransactionScope
             DbError error = Diagnostics.DbErrorMapper.FromSqlException(ex);
             return DbResult<bool>.Fail(error);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             DbError error = new()
             {
                 Kind = DbErrorKind.Unknown,
-                Message = ex.Message,
-                InnerException = ex
+                Message = "트랜잭션 롤백 중 오류가 발생했습니다.",
+                InnerException = null
             };
             return DbResult<bool>.Fail(error);
         }

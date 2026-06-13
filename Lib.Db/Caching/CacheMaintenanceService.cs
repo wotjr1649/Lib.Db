@@ -76,7 +76,9 @@ public sealed class CacheMaintenanceService : BackgroundService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "[CacheMaintenance] 유지보수 작업 중 오류 발생");
+                    _logger.LogError(
+                        "[CacheMaintenance] 유지보수 작업 중 오류 발생 (ErrorType: {ErrorType})",
+                        ex.GetType().Name);
                 }
             }
         }

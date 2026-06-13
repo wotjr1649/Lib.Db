@@ -17,9 +17,15 @@ param(
     [switch] $ReportTrx,
     [string] $TrxFileName,
     [string] $ResultsDirectory,
+    [switch] $Coverage,
+    [ValidateSet('coverage', 'xml', 'cobertura')]
+    [string] $CoverageOutputFormat,
+    [string] $CoverageOutput,
+    [string] $CoverageSettings,
     [switch] $NoRestore,
     [switch] $NoBuild,
     [switch] $KeepBuildServers,
+    [switch] $UseLocalEnvironment,
     [switch] $SkipLocalEnvironment,
     [switch] $SkipTestEnvGuard,
     [ValidateSet('quiet', 'minimal', 'normal', 'detailed', 'diagnostic')]
@@ -52,15 +58,30 @@ function Format-RepoRelativePath {
     return [System.IO.Path]::GetFileName($fullPath)
 }
 
-if ($SkipLocalEnvironment) {
-    Write-Host 'Local verification environment script skipped.'
+if ($UseLocalEnvironment -and $SkipLocalEnvironment) {
+    throw 'UseLocalEnvironment and SkipLocalEnvironment cannot be specified together.'
 }
-elseif (Test-Path -LiteralPath $localEnvironmentScript) {
+
+if ($UseLocalEnvironment) {
+    if (-not (Test-Path -LiteralPath $localEnvironmentScript)) {
+        throw 'Local verification environment script was requested but not found.'
+    }
+
     . $localEnvironmentScript -NoBenchmarkReset
     Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
 }
+elseif ($SkipLocalEnvironment) {
+    Write-Host 'Local verification environment script skipped.'
+}
 else {
-    Write-Host 'Local verification environment script not found; using existing process environment.'
+    Write-Host 'Local verification environment script not loaded; pass -UseLocalEnvironment to opt in, or use existing process environment.'
+}
+
+if ($Coverage -or
+    -not [string]::IsNullOrWhiteSpace($CoverageOutputFormat) -or
+    -not [string]::IsNullOrWhiteSpace($CoverageOutput) -or
+    -not [string]::IsNullOrWhiteSpace($CoverageSettings)) {
+    throw 'Invoke-Tests.ps1 does not run coverage directly. Use Invoke-Coverage.ps1 so Windows MTP coverage runs from the dedicated apphost path instead of the test wrapper command line.'
 }
 
 function Invoke-Checked {
@@ -153,7 +174,22 @@ function Assert-VerificationEnvironmentConfigured {
         return
     }
 
-    throw 'Lib.Db integration tests require the verification environment before the test executable starts. Load Set-LibDbVerificationEnvironment.local.ps1, set LIBDB_TEST_SQL_PASSWORD / all LIBDB_TEST_CONNECTION_* / all ConnectionStrings__* values, or pass -SkipTestEnvGuard for non-database-only local runs.'
+    throw 'Lib.Db integration tests require the verification environment before the test executable starts. Pass -UseLocalEnvironment to opt into Set-LibDbVerificationEnvironment.local.ps1, set LIBDB_TEST_SQL_PASSWORD / all LIBDB_TEST_CONNECTION_* / all ConnectionStrings__* values, or pass -SkipTestEnvGuard for non-database-only local runs.'
+}
+
+function Set-ProcessEnvironmentVariable {
+    param(
+        [Parameter(Mandatory = $true)] [string] $Name,
+        [AllowNull()] [string] $Value
+    )
+
+    $path = "Env:$Name"
+    if ($null -eq $Value) {
+        Remove-Item -Path $path -ErrorAction SilentlyContinue
+        return
+    }
+
+    Set-Item -Path $path -Value $Value
 }
 
 function Add-MinimumExpectedTests {
@@ -275,6 +311,81 @@ function Add-MtpReportArguments {
             $Arguments.Add($effectiveTrxFileName)
         }
     }
+}
+
+function Resolve-MtpPathArgumentValue {
+    param([Parameter(Mandatory = $true)] [string] $PathValue)
+
+    if ([string]::IsNullOrWhiteSpace($PathValue)) {
+        return $PathValue
+    }
+
+    if ([System.IO.Path]::IsPathFullyQualified($PathValue)) {
+        return [System.IO.Path]::GetFullPath($PathValue)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $repoRoot $PathValue))
+}
+
+function Ensure-MtpOutputPath {
+    param(
+        [Parameter(Mandatory = $true)] [string] $OptionName,
+        [Parameter(Mandatory = $true)] [string] $PathValue
+    )
+
+    if ($OptionName.Equals('--results-directory', [System.StringComparison]::OrdinalIgnoreCase)) {
+        New-Item -ItemType Directory -Path $PathValue -Force | Out-Null
+    }
+}
+
+function Add-MtpAdditionalArguments {
+    param(
+        [AllowEmptyCollection()]
+        [Parameter(Mandatory = $true)] [System.Collections.Generic.List[string]] $Arguments,
+        [AllowEmptyCollection()]
+        [Parameter(Mandatory = $true)] [string[]] $AdditionalArguments
+    )
+
+    $pathOptions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $pathOptions.Add('--results-directory') | Out-Null
+    $coverageOptions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $coverageOptions.Add('--coverage') | Out-Null
+    $coverageOptions.Add('--coverage-output') | Out-Null
+    $coverageOptions.Add('--coverage-output-format') | Out-Null
+    $coverageOptions.Add('--coverage-settings') | Out-Null
+
+    for ($i = 0; $i -lt $AdditionalArguments.Count; $i++) {
+        $argument = $AdditionalArguments[$i]
+        if ($coverageOptions.Contains($argument)) {
+            throw 'Invoke-Tests.ps1 does not accept raw MTP coverage arguments. Use Invoke-Coverage.ps1 so Windows MTP coverage runs from the dedicated apphost path instead of the test wrapper command line.'
+        }
+
+        if ($argument -eq '--minimum-expected-tests' -and $Arguments.Contains('--minimum-expected-tests')) {
+            Remove-AutoMinimumExpectedTests -Arguments $Arguments
+        }
+
+        $Arguments.Add($argument)
+        if ($pathOptions.Contains($argument) -and ($i + 1) -lt $AdditionalArguments.Count) {
+            $i++
+            $pathArgument = Resolve-MtpPathArgumentValue -PathValue $AdditionalArguments[$i]
+            Ensure-MtpOutputPath -OptionName $argument -PathValue $pathArgument
+            $Arguments.Add($pathArgument)
+        }
+    }
+}
+
+function ConvertTo-MtpStringArguments {
+    param(
+        [AllowEmptyCollection()]
+        [Parameter(Mandatory = $true)] [System.Collections.Generic.List[string]] $Arguments
+    )
+
+    $normalized = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in $Arguments) {
+        $normalized.Add([string] $argument)
+    }
+
+    return ,$normalized
 }
 
 function Add-MtpVerbosityArguments {
@@ -450,6 +561,25 @@ function Get-TestAssemblyPath {
     return Join-Path $projectDirectory "bin\$Configuration\$targetFramework\$assemblyName.dll"
 }
 
+function Get-TestApplicationPath {
+    param(
+        [Parameter(Mandatory = $true)] [string] $ProjectPath,
+        [Parameter(Mandatory = $true)] [string] $Configuration
+    )
+
+    $assemblyPath = Get-TestAssemblyPath -ProjectPath $ProjectPath -Configuration $Configuration
+    $assemblyDirectory = Split-Path -Parent $assemblyPath
+    $applicationName = [System.IO.Path]::GetFileNameWithoutExtension($assemblyPath)
+    $appHostName = if ($IsWindows) { "$applicationName.exe" } else { $applicationName }
+    $appHostPath = Join-Path $assemblyDirectory $appHostName
+
+    if (Test-Path -LiteralPath $appHostPath) {
+        return $appHostPath
+    }
+
+    return $assemblyPath
+}
+
 function Invoke-DirectMtpTestRun {
     param(
         [Parameter(Mandatory = $true)] [string] $Configuration,
@@ -480,21 +610,37 @@ function Invoke-DirectMtpTestRun {
 
     foreach ($testProject in $testProjects) {
         $testAssembly = Get-TestAssemblyPath -ProjectPath $testProject -Configuration $Configuration
+        $testApplication = Get-TestApplicationPath -ProjectPath $testProject -Configuration $Configuration
         $displayAssembly = Format-RepoRelativePath -Path $testAssembly
         if (-not (Test-Path -LiteralPath $testAssembly)) {
             throw "Test assembly not found: $displayAssembly. Build once or omit -NoBuild."
         }
 
-        $execArguments = [System.Collections.Generic.List[string]]::new()
-        $execArguments.Add('exec')
-        $execArguments.Add($testAssembly)
+        if (-not (Test-Path -LiteralPath $testApplication)) {
+            throw "Test application not found: $(Format-RepoRelativePath -Path $testApplication). Build once or omit -NoBuild."
+        }
+
+        $testArgumentList = [System.Collections.Generic.List[string]]::new()
         foreach ($argument in $TestArguments) {
-            $execArguments.Add($argument)
+            $testArgumentList.Add($argument)
         }
 
         Write-Host "Executing MTP test application: $displayAssembly"
-        $execArgumentArray = $execArguments.ToArray()
-        Invoke-Checked 'dotnet' $execArgumentArray
+        if ([string]::Equals($testApplication, $testAssembly, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $execArguments = [System.Collections.Generic.List[string]]::new()
+            $execArguments.Add('exec')
+            $execArguments.Add($testAssembly)
+            foreach ($argument in $TestArguments) {
+                $execArguments.Add($argument)
+            }
+
+            $execArgumentArray = $execArguments.ToArray()
+            Invoke-Checked 'dotnet' $execArgumentArray
+            continue
+        }
+
+        $testArgumentArray = $testArgumentList.ToArray()
+        Invoke-Checked $testApplication $testArgumentArray
     }
 }
 
@@ -516,28 +662,26 @@ Add-MtpReportArguments `
     -TrxFileName $TrxFileName
 
 if (-not [string]::IsNullOrWhiteSpace($ResultsDirectory)) {
+    $resolvedResultsDirectory = Resolve-MtpPathArgumentValue -PathValue $ResultsDirectory
+    Ensure-MtpOutputPath -OptionName '--results-directory' -PathValue $resolvedResultsDirectory
     $mtpArguments.Add('--results-directory')
-    $mtpArguments.Add($ResultsDirectory)
+    $mtpArguments.Add($resolvedResultsDirectory)
 }
 
-foreach ($argument in $AdditionalArguments) {
-    if ($argument -eq '--minimum-expected-tests' -and $mtpArguments.Contains('--minimum-expected-tests')) {
-        Remove-AutoMinimumExpectedTests -Arguments $mtpArguments
-    }
-
-    $mtpArguments.Add($argument)
-}
+Add-MtpAdditionalArguments -Arguments $mtpArguments -AdditionalArguments $AdditionalArguments
 
 Add-MtpVerbosityArguments -Arguments $mtpArguments -Verbosity $Verbosity
+$mtpArguments = ConvertTo-MtpStringArguments -Arguments $mtpArguments
 
 Write-Host 'Lib.Db test run started.'
 Write-Host "Target=$Target"
 Write-Host "Configuration=$Configuration"
 Write-Host "Verbosity=$Verbosity"
 Write-Host "KeepBuildServers=$($KeepBuildServers.IsPresent)"
+Write-Host "UseLocalEnvironment=$($UseLocalEnvironment.IsPresent)"
 Write-Host "SkipLocalEnvironment=$($SkipLocalEnvironment.IsPresent)"
 Write-Host "SkipTestEnvGuard=$($SkipTestEnvGuard.IsPresent)"
-Write-Host 'MtpExecution=Direct'
+Write-Host 'MtpExecution=DirectAppHostPreferred'
 if (-not [string]::IsNullOrWhiteSpace($Filter)) {
     Write-Host "Filter=$Filter"
 }
@@ -559,10 +703,14 @@ if (-not [string]::IsNullOrWhiteSpace($FilterQuery)) {
 
 $savedSkipGuard = [Environment]::GetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD')
 $savedDisableNodeReuse = [Environment]::GetEnvironmentVariable('MSBUILDDISABLENODEREUSE')
+$savedTestingPlatformTelemetryOptOut = [Environment]::GetEnvironmentVariable('TESTINGPLATFORM_TELEMETRY_OPTOUT')
+$savedDotnetCliTelemetryOptOut = [Environment]::GetEnvironmentVariable('DOTNET_CLI_TELEMETRY_OPTOUT')
 if ($SkipTestEnvGuard) {
-    [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')
+    Set-ProcessEnvironmentVariable -Name 'LIBDB_SKIP_TEST_ENV_GUARD' -Value 'true'
 }
-[Environment]::SetEnvironmentVariable('MSBUILDDISABLENODEREUSE', '1')
+Set-ProcessEnvironmentVariable -Name 'MSBUILDDISABLENODEREUSE' -Value '1'
+Set-ProcessEnvironmentVariable -Name 'TESTINGPLATFORM_TELEMETRY_OPTOUT' -Value '1'
+Set-ProcessEnvironmentVariable -Name 'DOTNET_CLI_TELEMETRY_OPTOUT' -Value '1'
 
 try {
     Write-SecretSafeEnvironmentSummary
@@ -577,10 +725,12 @@ try {
 }
 finally {
     if ($SkipTestEnvGuard) {
-        [Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', $savedSkipGuard)
+        Set-ProcessEnvironmentVariable -Name 'LIBDB_SKIP_TEST_ENV_GUARD' -Value $savedSkipGuard
     }
 
-    [Environment]::SetEnvironmentVariable('MSBUILDDISABLENODEREUSE', $savedDisableNodeReuse)
+    Set-ProcessEnvironmentVariable -Name 'MSBUILDDISABLENODEREUSE' -Value $savedDisableNodeReuse
+    Set-ProcessEnvironmentVariable -Name 'TESTINGPLATFORM_TELEMETRY_OPTOUT' -Value $savedTestingPlatformTelemetryOptOut
+    Set-ProcessEnvironmentVariable -Name 'DOTNET_CLI_TELEMETRY_OPTOUT' -Value $savedDotnetCliTelemetryOptOut
     Invoke-BuildServerCleanup -KeepBuildServers:$KeepBuildServers.IsPresent
 }
 Write-Host 'Lib.Db test run completed.'

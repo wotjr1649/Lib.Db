@@ -232,5 +232,65 @@ public sealed class DbRequestBuilderTests
             .WithMessage("*이름 있는 파라미터 객체*");
     }
 
+    [Fact]
+    public async Task RawSql_GeneralFailure_ShouldReturnRedactedDbResultError()
+    {
+        Mock<IDbExecutor> executor = new();
+        executor
+            .Setup(x => x.ExecuteNonQueryAsync(
+                It.IsAny<string>(),
+                It.IsAny<object>(),
+                It.IsAny<string>(),
+                It.IsAny<CommandType>(),
+                It.IsAny<DbExecutionOptions>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("SELECT SecretTable WHERE Password = 'plain-text'"));
+
+        DbRequestBuilder builder = new(executor.Object, "verification");
+
+        DbResult<int> result = await builder
+            .Sql("SELECT * FROM SecretTable WHERE Password = 'plain-text'")
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().NotBeNull();
+        DbError error = result.Error!.Value;
+        error.Message.Should().Be("명령 실행 중 오류가 발생했습니다.");
+        error.ObjectName.Should().Be("SQL command");
+        error.InnerException.Should().BeNull();
+        error.Message.Should().NotContain("SecretTable");
+        error.ObjectName.Should().NotContain("SecretTable");
+    }
+
+    [Fact]
+    public async Task Procedure_GeneralFailure_ShouldReturnRedactedDbResultError()
+    {
+        Mock<IDbExecutor> executor = new();
+        executor
+            .Setup(x => x.ExecuteNonQueryAsync(
+                It.IsAny<string>(),
+                It.IsAny<object>(),
+                It.IsAny<string>(),
+                It.IsAny<CommandType>(),
+                It.IsAny<DbExecutionOptions>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("dbo.SecretProcedure failed"));
+
+        DbRequestBuilder builder = new(executor.Object, "verification");
+
+        DbResult<int> result = await builder
+            .Procedure("dbo.SecretProcedure")
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().NotBeNull();
+        DbError error = result.Error!.Value;
+        error.Message.Should().Be("명령 실행 중 오류가 발생했습니다.");
+        error.ObjectName.Should().Be("stored procedure");
+        error.InnerException.Should().BeNull();
+        error.Message.Should().NotContain("SecretProcedure");
+        error.ObjectName.Should().NotContain("SecretProcedure");
+    }
+
     private sealed record OrderItemRow(int Id, string Sku, int Qty);
 }

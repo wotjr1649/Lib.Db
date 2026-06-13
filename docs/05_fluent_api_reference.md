@@ -290,7 +290,7 @@ DbResult<int> result = await session.Default
     .ExecuteAsync();
 ```
 
-`DataRow` parameter bags follow the same output copy-back rules: `Output`/`InputOutput` update matching columns, `ReturnValue` requires an explicit `SqlParameter` cell with `SqlDbType.Int`, and failed copy-back rolls back row and explicit parameter values.
+`DataRow` parameter bags follow the same output copy-back rules: output-only parameters update matching columns, input-consuming `OUTPUT` parameters require an explicit `SqlParameter(Direction = InputOutput)` cell, `ReturnValue` requires an explicit `SqlParameter` cell with `SqlDbType.Int`, and failed copy-back rolls back row and explicit parameter values.
 
 ### 5-4. 보간 SQL (값 인수 자동 파라미터화)
 

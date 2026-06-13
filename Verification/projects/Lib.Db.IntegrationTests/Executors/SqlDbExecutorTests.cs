@@ -90,7 +90,7 @@ public sealed class SqlDbExecutorTests
     }
 
     [Fact]
-    public async Task SQ06_QueryMultiple_Exception_ShouldWrapInLibDbException()
+    public async Task SQ06_QueryMultiple_Exception_ShouldWrapInRedactedLibDbException()
     {
         _options.EnableDryRun = false;
         SqlDbExecutor executor = CreateExecutor();
@@ -110,7 +110,8 @@ public sealed class SqlDbExecutorTests
             DbExecutionOptions.Default,
             CancellationToken.None));
 
-        Assert.Same(exOriginal, ex.InnerException);
+        Assert.Null(ex.InnerException);
+        Assert.DoesNotContain(exOriginal.Message, ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -296,11 +296,12 @@ internal sealed class SchemaService(
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
-            logger.LogWarning(ex,
-                "[스키마 캐시 복구] {Kind} 캐시 페이로드를 역직렬화할 수 없어 키 제거 후 DB에서 재로딩합니다. 인스턴스: {Instance}, 이름: {Name}",
+            logger.LogWarning(
+                "[스키마 캐시 복구] {Kind} 캐시 페이로드를 역직렬화할 수 없어 키 제거 후 DB에서 재로딩합니다. 인스턴스: {Instance}, 이름: {Name}, ErrorType: {ErrorType}",
                 kind,
                 DbDiagnosticRedactor.RedactInstanceId(instanceHash),
-                normalized);
+                normalized,
+                ex.GetType().Name);
 
             await cache.RemoveAsync(key, ct).ConfigureAwait(false);
             schema = await loadFromDb(normalized, instanceHash, ct).ConfigureAwait(false);
@@ -469,8 +470,9 @@ internal sealed class SchemaService(
             catch (Exception ex)
             {
                 hasError = true;
-                logger.LogError(ex,
-                    "[스키마 초기화] 외부 캐시 '{Name}' 초기화 중 오류 발생", hook.Name);
+                logger.LogError(
+                    "[스키마 초기화] 외부 캐시 '{Name}' 초기화 중 오류 발생 (ErrorType: {ErrorType})",
+                    hook.Name, ex.GetType().Name);
             }
         }
 
@@ -623,8 +625,9 @@ internal sealed class SchemaService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogError(ex,
-                "[스키마 갱신 오류 - 회로 차단 작동] '{Name}' 기존 캐시 1분 연장", name);
+            logger.LogError(
+                "[스키마 갱신 오류 - 회로 차단 작동] '{Name}' 기존 캐시 1분 연장 (ErrorType: {ErrorType})",
+                name, ex.GetType().Name);
 
             DbMetrics.TrackSchemaRefresh(success: false, kind: $"{kind}.Error", info);
 
@@ -1109,7 +1112,9 @@ internal sealed class HybridSchemaSnapshot(ILogger logger, LibDbOptions options)
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "[스냅샷 병합 중 치명적 오류 발생]");
+                logger.LogError(
+                    "[스냅샷 병합 중 치명적 오류 발생] (ErrorType: {ErrorType})",
+                    ex.GetType().Name);
             }
             finally
             {
@@ -1216,9 +1221,9 @@ internal sealed class TvpSchemaValidator(
                 throw;
             }
 
-            logger.LogError(ex,
-                "[TVP 검증 실패] {Name} (사유: {Reason}) - LogOnly 모드로 계속 진행",
-                name, reason);
+            logger.LogError(
+                "[TVP 검증 실패] {Name} (사유: {Reason}, ErrorType: {ErrorType}) - LogOnly 모드로 계속 진행",
+                name, reason, ex.GetType().Name);
 
             accessors.MarkValidated(BuildFallbackValidationIdentity(name, instanceHash));
         }

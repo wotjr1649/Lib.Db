@@ -153,7 +153,9 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "[Mutex] 명명된 Mutex 실패 -> Unnamed 사용: {Name}", name);
+            logger.LogError(
+                "[Mutex] 명명된 Mutex 실패 -> Unnamed 사용: {Name} (ErrorType: {ErrorType})",
+                name, ex.GetType().Name);
             return new Mutex(false);
         }
     }
@@ -205,7 +207,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool
             if (!acquired)
                 throw new TimeoutException($"Epoch 잠금 타임아웃 발생: {diagnosticInstance}");
 
-            long current = ReadEpochSafe(filePath);
+            long current = ReadEpochSafe(filePath, diagnosticInstance);
             long newEpoch = current + 1;
 
             // 1단계: 임시 파일에 쓰기 (Zero-Allocation)
@@ -243,7 +245,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool
         return ReadEpochDirect(instanceHash);
     }
 
-    private long ReadEpochSafe(string filePath)
+    private long ReadEpochSafe(string filePath, string diagnosticInstance)
     {
         if (!File.Exists(filePath))
             return 0;
@@ -264,7 +266,9 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "[Epoch] Read Error: {Path}", filePath);
+            logger.LogError(
+                "[Epoch] Read Error: {Instance} (ErrorType: {ErrorType})",
+                diagnosticInstance, ex.GetType().Name);
             return 0;
         }
     }
@@ -295,7 +299,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool
     private long ReadEpochDirect(string instanceHash)
     {
         string filePath = GetEpochFilePath(instanceHash);
-        return ReadEpochSafe(filePath);
+        return ReadEpochSafe(filePath, RedactInstanceForDiagnostics(instanceHash));
     }
 
     internal static string RedactInstanceForDiagnostics(string instanceHash)

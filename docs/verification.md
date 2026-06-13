@@ -37,11 +37,13 @@ For provider-neutral caching changes, release approval requires a clean verifica
 
 ## Local Bootstrap
 
-Local maintainers can use `Verification/scripts/Set-LibDbVerificationEnvironment.example.ps1` as the template for process-scoped verification environment variables.
+Local maintainers can use `Verification/scripts/Set-LibDbVerificationEnvironment.example.ps1` as the template for process-scoped verification environment variables. Verification wrappers load `Set-LibDbVerificationEnvironment.local.ps1` only when `-UseLocalEnvironment` is specified; otherwise they use the current process environment.
 
 The bootstrap reads the local SQL password from `LIBDB_TEST_SQL_PASSWORD` and also sets process-scoped `SQLCMDPASSWORD` for direct `sqlcmd -U` verification paths. Keep the local script outside source control, do not print secret values, and run direct SQL setup only against disposable verification databases.
 
 For non-database-only maintainer test slices, use `Verification/scripts/Invoke-Tests.ps1 -SkipTestEnvGuard` or set `LIBDB_SKIP_TEST_ENV_GUARD=true` in the current process. Do not use `-p:LIBDB_SKIP_TEST_ENV_GUARD=true` as the runtime bypass; the xUnit assembly guard reads process environment variables.
+
+Run coverage and the full release gate from a normal user PowerShell session, not from a restricted sandbox shell. The MTP coverage extension uses process-monitor named pipe IPC; when a sandbox denies that pipe, Windows may show a `0xe0434352` crash dialog before the test runner can return a clean failure.
 
 ## GitHub Actions AOT
 
@@ -88,9 +90,11 @@ Provider-owned warnings are accepted only when the id, assembly, source package,
 
 NuGet publishing is allowed only from a SemVer `v*` tag whose target commit is contained in `origin/main`. The publish workflow currently requires the `NUGET_API_KEY` GitHub secret, verifies that the key is present without printing its value, and passes it through the environment to `dotnet nuget push`. Do not configure `NUGET_USER`, `NuGet/login@v1`, or a Trusted Publishing/OIDC policy for the current workflow unless `.github/workflows/publish.yml` is intentionally changed back to that model.
 
+Release verification and publish workflows may pass SQL verification environment keys only to the SQL readiness and verification steps that need them. Do not place derived connection strings or SQL passwords in job-wide workflow environment blocks.
+
 ## Artifact Policy
 
-Generated verification artifacts are internal maintainer evidence. They are not source, they are not part of the package, and they must not contain secret values. Benchmark, test, coverage, and AOT artifacts must be scanned for secret-pattern paths before they are retained or shared. Generated artifact directories must remain ignored/untracked.
+Generated verification artifacts are internal maintainer evidence. They are not source, they are not part of the package, and they must not contain secret values. Benchmark, test, coverage, package, and AOT artifacts produced by a release-gate run must be scanned for secret-pattern paths before they are retained or shared. `Invoke-Verification.ps1` scopes its final scan to the artifact roots produced by that run; use `Scan-VerificationArtifacts.ps1` directly when a broader historical artifact sweep is required. Generated artifact directories must remain ignored/untracked.
 
 ## Related Documents
 

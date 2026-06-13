@@ -229,6 +229,45 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DictionarySqlMapper_ShouldMatchOutputTargetsByCanonicalName()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["OutputVal"] = null
+        };
+
+        mapper.MapParameters(command, values, CreateSchema(
+            Param("@Output_Val", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        command.Parameters["@Output_Val"].Value = 42;
+        mapper.MapOutputParameters(command, values);
+
+        values["OutputVal"].Should().Be(42);
+        values.Should().NotContainKey("Output_Val");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectAmbiguousCanonicalOutputTargetNames()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["OutputVal"] = null,
+            ["Output_Val"] = null
+        };
+
+        Action act = () => mapper.MapParameters(command, values, CreateSchema(
+            Param("@Output_Val", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Output_Val*ambiguous*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
     public void DictionarySqlMapper_ShouldRollbackOutputWritesWhenLaterTargetFails()
     {
         var mapper = new DictionarySqlMapper(strict: true);
@@ -759,6 +798,14 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void ExpressionTreeMapper_ShouldRejectAmbiguousCanonicalOutputTarget()
+    {
+        var mapper = new ExpressionTreeMapper<AmbiguousCanonicalOutputDto>(jsonOptions: null, strict: true);
+
+        AssertAmbiguousCanonicalOutputTargetRejected(mapper);
+    }
+
+    [Fact]
     public void ExpressionTreeMapper_ShouldRollbackOutputWritesWhenLaterSetterFails()
     {
         var mapper = new ExpressionTreeMapper<TransactionalOutputDto>(jsonOptions: null, strict: true);
@@ -792,19 +839,17 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void ExpressionTreeMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
+    public void ExpressionTreeMapper_ShouldAllowMissingStrictOutputTargetBeforeBinding()
     {
         var mapper = new ExpressionTreeMapper<ReflectionCoverageDto>(jsonOptions: null, strict: true);
         using var command = new SqlCommand();
 
-        Action act = () => mapper.MapParameters(
+        mapper.MapParameters(
             command,
             new ReflectionCoverageDto(),
             CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*MissingOutput*requires*writable DTO property*");
-        command.Parameters.Count.Should().Be(0);
+        command.Parameters["@MissingOutput"].Direction.Should().Be(ParameterDirection.Output);
     }
 
     [Fact]
@@ -844,19 +889,20 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void DictionarySqlMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
+    public void DictionarySqlMapper_ShouldAllowMissingStrictOutputTargetBeforeBinding()
     {
         var mapper = new DictionarySqlMapper(strict: true);
         using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal);
 
-        Action act = () => mapper.MapParameters(
+        mapper.MapParameters(
             command,
-            [],
+            values,
             CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
+        command.Parameters["@MissingOutput"].Value = 11;
+        mapper.MapOutputParameters(command, values);
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*MissingOutput*Dictionary target key*");
-        command.Parameters.Count.Should().Be(0);
+        values["MissingOutput"].Should().Be(11);
     }
 
     [Fact]
@@ -952,6 +998,47 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DataRowSqlMapper_ShouldMatchOutputTargetsByCanonicalName()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("OutputVal", typeof(int));
+        table.Rows.Add(1);
+        DataRow row = table.Rows[0];
+
+        mapper.MapParameters(
+            command,
+            row,
+            CreateSchema(Param("@Output_Val", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        command.Parameters["@Output_Val"].Value = 42;
+        mapper.MapOutputParameters(command, row);
+
+        row["OutputVal"].Should().Be(42);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldRejectAmbiguousCanonicalOutputTargetNames()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("OutputVal", typeof(int));
+        table.Columns.Add("Output_Val", typeof(int));
+        table.Rows.Add(1, 2);
+
+        Action act = () => mapper.MapParameters(
+            command,
+            table.Rows[0],
+            CreateSchema(Param("@Output_Val", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Output_Val*ambiguous*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
     public void DataRowSqlMapper_ShouldPreserveExplicitInputOutputValueWithSchemaOutput()
     {
         var mapper = new DataRowSqlMapper(strict: true);
@@ -1039,7 +1126,7 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void DataRowSqlMapper_ShouldThrowWhenStrictOutputColumnIsMissing()
+    public void DataRowSqlMapper_ShouldAllowMissingStrictOutputColumnBeforeBinding()
     {
         var mapper = new DataRowSqlMapper(strict: true);
         using var command = new SqlCommand();
@@ -1056,9 +1143,28 @@ public sealed class MapperCoverageTests
 
         Action act = () => mapper.MapOutputParameters(command, row);
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Missing*missing*");
+        act.Should().NotThrow();
         row["Id"].Should().Be(1);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldThrowWhenStrictInputOutputColumnIsMissingBeforeBinding()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("Id", typeof(int));
+        table.Rows.Add(1);
+        DataRow row = table.Rows[0];
+
+        Action act = () => mapper.MapParameters(
+            command,
+            row,
+            CreateSchema(Param("@Missing", SqlDbType.Int, direction: ParameterDirection.InputOutput)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Missing*DataRow target column*");
+        command.Parameters.Count.Should().Be(0);
     }
 
     [Fact]
@@ -1443,6 +1549,14 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void ReflectionParameterMapper_ShouldRejectAmbiguousCanonicalOutputTarget()
+    {
+        var mapper = new ReflectionParameterMapper<AmbiguousCanonicalOutputDto>(strict: true);
+
+        AssertAmbiguousCanonicalOutputTargetRejected(mapper);
+    }
+
+    [Fact]
     public void ReflectionParameterMapper_ShouldRollbackOutputWritesWhenLaterSetterFails()
     {
         var mapper = new ReflectionParameterMapper<TransactionalOutputDto>(strict: true);
@@ -1491,7 +1605,7 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void ReflectionParameterMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
+    public void ReflectionParameterMapper_ShouldAllowMissingStrictOutputTargetBeforeBinding()
     {
         var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: true);
         var dto = new ReflectionOutputCoverageDto();
@@ -1509,14 +1623,12 @@ public sealed class MapperCoverageTests
         inputCommand.Parameters["@MissingNullable"].Value.Should().Be(DBNull.Value);
 
         using var missingCommand = new SqlCommand();
-        Action missing = () => mapper.MapParameters(
+        mapper.MapParameters(
             missingCommand,
             dto,
             CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
 
-        missing.Should().Throw<InvalidOperationException>()
-            .WithMessage("*MissingOutput*requires*writable DTO property*");
-        missingCommand.Parameters.Count.Should().Be(0);
+        missingCommand.Parameters["@MissingOutput"].Direction.Should().Be(ParameterDirection.Output);
     }
 
     [Fact]
@@ -1553,6 +1665,102 @@ public sealed class MapperCoverageTests
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*ReturnValue*non-null explicit SqlParameter*");
         command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldRejectScalarReturnValuePropertyBeforeBinding()
+    {
+        var mapper = new ReflectionParameterMapper<ScalarReturnValueDto>(strict: true);
+        using var command = new SqlCommand();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            new ScalarReturnValueDto(),
+            CreateSchema(Param("@ReturnValue", SqlDbType.Int, direction: ParameterDirection.ReturnValue)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ReturnValue*explicit SqlParameter*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldIgnoreMissingReturnValueBeforeBinding()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionCoverageDto>(strict: true);
+        using var command = new SqlCommand();
+
+        mapper.MapParameters(
+            command,
+            new ReflectionCoverageDto(),
+            CreateSchema(Param("@ReturnValue", SqlDbType.Int, direction: ParameterDirection.ReturnValue)));
+
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldBindMissingInputOutputWhenNotStrict()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionCoverageDto>(strict: false);
+        using var command = new SqlCommand();
+
+        mapper.MapParameters(
+            command,
+            new ReflectionCoverageDto(),
+            CreateSchema(Param("@MissingInOut", SqlDbType.Int, direction: ParameterDirection.InputOutput)));
+
+        command.Parameters["@MissingInOut"].Direction.Should().Be(ParameterDirection.InputOutput);
+        command.Parameters["@MissingInOut"].Value.Should().Be(DBNull.Value);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldSkipWriteOnlySqlParameterWhenScanningExtraReturnValue()
+    {
+        var mapper = new ReflectionParameterMapper<WriteOnlyReturnValueCandidateDto>(strict: true);
+        using var command = new SqlCommand();
+
+        mapper.MapParameters(
+            command,
+            new WriteOnlyReturnValueCandidateDto(),
+            CreateSchema(Param("@Id", SqlDbType.Int)));
+
+        command.Parameters
+            .Cast<SqlParameter>()
+            .Should()
+            .ContainSingle(parameter => parameter.ParameterName == "@Id");
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldCopyBackUnregisteredExplicitSqlParameterProperty()
+    {
+        var mapper = new ReflectionParameterMapper<ExplicitSqlParameterDto>(strict: true);
+        using var command = new SqlCommand();
+        var dto = new ExplicitSqlParameterDto();
+        command.Parameters.Add(new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 7
+        });
+
+        mapper.MapOutputParameters(command, dto);
+
+        dto.ReturnValue.Value.Should().Be(7);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldIgnoreScalarReturnValueDuringCopyBack()
+    {
+        var mapper = new ReflectionParameterMapper<ScalarReturnValueDto>(strict: true);
+        using var command = new SqlCommand();
+        var dto = new ScalarReturnValueDto();
+        command.Parameters.Add(new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 7
+        });
+
+        mapper.MapOutputParameters(command, dto);
+
+        dto.ReturnValue.Should().Be(123);
     }
 
     [Fact]
@@ -1855,6 +2063,34 @@ public sealed class MapperCoverageTests
             .WithMessage("*Only one ReturnValue*OtherReturn*");
     }
 
+    private static void AssertAmbiguousCanonicalOutputTargetRejected(ISqlMapper<AmbiguousCanonicalOutputDto> mapper)
+    {
+        using var command = new SqlCommand();
+        var dto = new AmbiguousCanonicalOutputDto();
+
+        Action bind = () => mapper.MapParameters(
+            command,
+            dto,
+            CreateSchema(Param("@Output_Val", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        bind.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Output_Val*ambiguous*");
+        command.Parameters.Count.Should().Be(0);
+
+        command.Parameters.Add(new SqlParameter("@Output_Val", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 42
+        });
+
+        Action copyBack = () => mapper.MapOutputParameters(command, dto);
+
+        copyBack.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Output_Val*ambiguous*");
+        dto.OutputVal.Should().BeNull();
+        dto.Output_Val.Should().BeNull();
+    }
+
     private static WeakReference BindExplicitParameterAndClear(SqlCommand command)
     {
         var parameter = new SqlParameter("@OutputVal", SqlDbType.Int)
@@ -1948,6 +2184,13 @@ public sealed class MapperCoverageTests
         public SqlParameter ReturnValue { get; init; } = new();
     }
 
+    private sealed class AmbiguousCanonicalOutputDto
+    {
+        public int? OutputVal { get; set; }
+
+        public int? Output_Val { get; set; }
+    }
+
     private sealed class NullExplicitOutputDto
     {
         public SqlParameter? OutputVal { get; init; }
@@ -1956,6 +2199,26 @@ public sealed class MapperCoverageTests
     private sealed class NullExplicitReturnValueDto
     {
         public SqlParameter? ReturnValue { get; init; }
+    }
+
+    private sealed class ScalarReturnValueDto
+    {
+        public int ReturnValue { get; init; } = 123;
+    }
+
+    private sealed class WriteOnlyReturnValueCandidateDto
+    {
+        public int Id { get; init; } = 1;
+
+        public SqlParameter ReturnValue
+        {
+            set => _ = value;
+        }
+
+        public int IgnoredWriteOnlyValue
+        {
+            set => _ = value;
+        }
     }
 
     private sealed class ThrowingGetterReturnValueDto

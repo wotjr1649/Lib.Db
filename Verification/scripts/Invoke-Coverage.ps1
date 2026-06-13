@@ -4,6 +4,7 @@ param(
     [string] $ReportDirectory = 'Verification\artifacts\coverage\report',
     [switch] $SkipReport,
     [switch] $SkipGate,
+    [switch] $UseLocalEnvironment,
     [switch] $RestoreTools
 )
 
@@ -11,9 +12,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+$integrationProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj'
 $coverageSettings = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\mtp-codecoverage.config.xml'
 $assertScript = Join-Path $PSScriptRoot 'Assert-LibDbCoverage.ps1'
-$testScript = Join-Path $PSScriptRoot 'Invoke-Tests.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
 
 function Format-RepoRelativePath {
@@ -32,12 +33,16 @@ function Format-RepoRelativePath {
     return [System.IO.Path]::GetFileName($fullPath)
 }
 
-if (Test-Path -LiteralPath $localEnvironmentScript) {
+if ($UseLocalEnvironment) {
+    if (-not (Test-Path -LiteralPath $localEnvironmentScript)) {
+        throw 'Local verification environment script was requested but not found.'
+    }
+
     . $localEnvironmentScript -NoBenchmarkReset
     Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
 }
 else {
-    Write-Host 'Local verification environment script not found; using existing process environment.'
+    Write-Host 'Local verification environment script not loaded; pass -UseLocalEnvironment to opt in, or use existing process environment.'
 }
 
 function Invoke-Checked {
@@ -90,6 +95,60 @@ function Get-LatestCoverageFile {
     return $coverage.FullName
 }
 
+function Set-ProcessEnvironmentVariable {
+    param(
+        [Parameter(Mandatory = $true)] [string] $Name,
+        [AllowNull()] [string] $Value
+    )
+
+    $path = "Env:$Name"
+    if ($null -eq $Value) {
+        Remove-Item -Path $path -ErrorAction SilentlyContinue
+        return
+    }
+
+    Set-Item -Path $path -Value $Value
+}
+
+function Get-ProjectPropertyValue {
+    param(
+        [Parameter(Mandatory = $true)] [xml] $Project,
+        [Parameter(Mandatory = $true)] [string] $Name
+    )
+
+    foreach ($propertyGroup in @($Project.Project.PropertyGroup)) {
+        foreach ($childNode in @($propertyGroup.ChildNodes)) {
+            if ($childNode.Name -eq $Name -and -not [string]::IsNullOrWhiteSpace($childNode.InnerText)) {
+                return $childNode.InnerText
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-IntegrationTestApplicationPath {
+    [xml] $project = Get-Content -LiteralPath $integrationProject
+    $targetFramework = Get-ProjectPropertyValue -Project $project -Name 'TargetFramework'
+    if ([string]::IsNullOrWhiteSpace($targetFramework)) {
+        $targetFrameworks = Get-ProjectPropertyValue -Project $project -Name 'TargetFrameworks'
+        $targetFramework = $targetFrameworks.Split(';')[0]
+    }
+
+    if ([string]::IsNullOrWhiteSpace($targetFramework)) {
+        throw "Unable to determine TargetFramework from $(Format-RepoRelativePath -Path $integrationProject)."
+    }
+
+    $assemblyName = Get-ProjectPropertyValue -Project $project -Name 'AssemblyName'
+    if ([string]::IsNullOrWhiteSpace($assemblyName)) {
+        $assemblyName = [System.IO.Path]::GetFileNameWithoutExtension($integrationProject)
+    }
+
+    $extension = if ($IsWindows) { '.exe' } else { '' }
+    $projectDirectory = Split-Path -Parent $integrationProject
+    return Join-Path $projectDirectory "bin\$Configuration\$targetFramework\$assemblyName$extension"
+}
+
 $resultsPath = Resolve-RepoChildPath -PathValue $ResultsDirectory -Name 'ResultsDirectory'
 $reportPath = Resolve-RepoChildPath -PathValue $ReportDirectory -Name 'ReportDirectory'
 $coverageOutput = Join-Path $resultsPath 'coverage.cobertura.xml'
@@ -103,20 +162,38 @@ if (Test-Path -LiteralPath $resultsPath) {
 }
 New-Item -ItemType Directory -Path $resultsPath -Force | Out-Null
 
-Invoke-Checked 'pwsh' @(
-    '-NoProfile',
-    '-File', $testScript,
-    '-Target', 'IntegrationTests',
-    '-Configuration', $Configuration,
-    '-NoRestore',
-    '-ResultsDirectory', $resultsPath,
-    '-Verbosity', 'minimal',
-    '-KeepBuildServers',
-    '--coverage',
-    '--coverage-output-format', 'cobertura',
-    '--coverage-output', $coverageOutput,
-    '--coverage-settings', $coverageSettings
+Invoke-Checked 'dotnet' @(
+    'build',
+    $integrationProject,
+    '-c', $Configuration,
+    '--no-restore',
+    '-v:minimal'
 )
+
+$testApplication = Get-IntegrationTestApplicationPath
+if (-not (Test-Path -LiteralPath $testApplication)) {
+    throw "Test application not found: $(Format-RepoRelativePath -Path $testApplication)."
+}
+
+$savedTestingPlatformTelemetryOptOut = [Environment]::GetEnvironmentVariable('TESTINGPLATFORM_TELEMETRY_OPTOUT')
+$savedDotnetCliTelemetryOptOut = [Environment]::GetEnvironmentVariable('DOTNET_CLI_TELEMETRY_OPTOUT')
+Set-ProcessEnvironmentVariable -Name 'TESTINGPLATFORM_TELEMETRY_OPTOUT' -Value '1'
+Set-ProcessEnvironmentVariable -Name 'DOTNET_CLI_TELEMETRY_OPTOUT' -Value '1'
+try {
+    Invoke-Checked $testApplication @(
+        '--results-directory', $resultsPath,
+        '--coverage',
+        '--coverage-output-format', 'cobertura',
+        '--coverage-output', $coverageOutput,
+        '--coverage-settings', $coverageSettings,
+        '--output', 'Normal',
+        '--no-progress'
+    )
+}
+finally {
+    Set-ProcessEnvironmentVariable -Name 'TESTINGPLATFORM_TELEMETRY_OPTOUT' -Value $savedTestingPlatformTelemetryOptOut
+    Set-ProcessEnvironmentVariable -Name 'DOTNET_CLI_TELEMETRY_OPTOUT' -Value $savedDotnetCliTelemetryOptOut
+}
 
 $coveragePath = Get-LatestCoverageFile -Root $resultsPath
 Write-Host "Cobertura=$(Format-RepoRelativePath -Path $coveragePath)"

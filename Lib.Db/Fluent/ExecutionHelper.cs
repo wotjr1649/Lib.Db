@@ -34,11 +34,15 @@ internal static class ExecutionHelper
     /// </para>
     /// </summary>
     /// <typeparam name="T">DbResult에 담길 값의 타입</typeparam>
-    /// <param name="commandText">실행 중인 SQL/SP 이름 (오류 메시지에 포함)</param>
+    /// <param name="commandText">실행 중인 SQL/SP 원문입니다. public 오류에는 노출하지 않습니다.</param>
+    /// <param name="commandType">실행 명령 종류입니다.</param>
     /// <param name="operation">실행할 동기 함수</param>
     /// <returns>성공 또는 실패를 나타내는 DbResult&lt;T&gt;를 담은 Task</returns>
-    internal static Task<DbResult<T>> WrapSync<T>(string commandText, Func<T> operation)
+    internal static Task<DbResult<T>> WrapSync<T>(string commandText, CommandType commandType, Func<T> operation)
     {
+        _ = commandText;
+        string publicObjectName = GetPublicObjectName(commandType);
+
         try
         {
             T value = operation();
@@ -50,12 +54,12 @@ internal static class ExecutionHelper
         }
         catch (Microsoft.Data.SqlClient.SqlException ex)
         {
-            DbError error = DbErrorMapper.FromSqlException(ex, commandText);
+            DbError error = DbErrorMapper.FromSqlException(ex, publicObjectName);
             return Task.FromResult(DbResult<T>.Fail(error));
         }
         catch (Exception ex)
         {
-            DbError error = BuildGeneralError(ex, commandText);
+            DbError error = BuildGeneralError(ex, publicObjectName);
             return Task.FromResult(DbResult<T>.Fail(error));
         }
     }
@@ -71,11 +75,18 @@ internal static class ExecutionHelper
     /// </para>
     /// </summary>
     /// <typeparam name="T">DbResult에 담길 값의 타입</typeparam>
-    /// <param name="commandText">실행 중인 SQL/SP 이름 (오류 메시지에 포함)</param>
+    /// <param name="commandText">실행 중인 SQL/SP 원문입니다. public 오류에는 노출하지 않습니다.</param>
+    /// <param name="commandType">실행 명령 종류입니다.</param>
     /// <param name="operation">실행할 비동기 함수</param>
     /// <returns>성공 또는 실패를 나타내는 DbResult&lt;T&gt;</returns>
-    internal static async Task<DbResult<T>> WrapAsync<T>(string commandText, Func<Task<DbResult<T>>> operation)
+    internal static async Task<DbResult<T>> WrapAsync<T>(
+        string commandText,
+        CommandType commandType,
+        Func<Task<DbResult<T>>> operation)
     {
+        _ = commandText;
+        string publicObjectName = GetPublicObjectName(commandType);
+
         try
         {
             return await operation().ConfigureAwait(false);
@@ -86,12 +97,12 @@ internal static class ExecutionHelper
         }
         catch (Microsoft.Data.SqlClient.SqlException ex)
         {
-            DbError error = DbErrorMapper.FromSqlException(ex, commandText);
+            DbError error = DbErrorMapper.FromSqlException(ex, publicObjectName);
             return DbResult<T>.Fail(error);
         }
         catch (Exception ex)
         {
-            DbError error = BuildGeneralError(ex, commandText);
+            DbError error = BuildGeneralError(ex, publicObjectName);
             return DbResult<T>.Fail(error);
         }
     }
@@ -103,19 +114,26 @@ internal static class ExecutionHelper
     /// <summary>
     /// 분류되지 않은 일반 예외를 <see cref="DbError"/>로 변환합니다.
     /// </summary>
-    /// <param name="ex">변환할 예외</param>
-    /// <param name="commandText">오류가 발생한 SQL/SP 이름 (ObjectName에 기록)</param>
+    /// <param name="ex">변환할 예외입니다. public 오류에는 보관하지 않습니다.</param>
+    /// <param name="objectName">공개해도 되는 명령 종류 라벨입니다.</param>
     /// <returns>DbErrorKind.Unknown 종류의 DbError</returns>
-    private static DbError BuildGeneralError(Exception ex, string commandText)
+    private static DbError BuildGeneralError(Exception ex, string objectName)
     {
+        _ = ex;
+
         return new DbError
         {
             Kind = DbErrorKind.Unknown,
-            Message = ex.Message,
-            ObjectName = commandText,
-            InnerException = ex
+            Message = "명령 실행 중 오류가 발생했습니다.",
+            ObjectName = objectName,
+            InnerException = null
         };
     }
+
+    private static string GetPublicObjectName(CommandType commandType)
+        => commandType == CommandType.StoredProcedure
+            ? "stored procedure"
+            : "SQL command";
 
     #endregion
 }

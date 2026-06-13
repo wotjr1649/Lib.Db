@@ -127,19 +127,24 @@ internal static class CacheInternalHelpers
     /// </summary>
     public static string GetMutexPrefix(SharedMemoryCacheOptions options, string subsystem)
     {
+        string isolationKey = BuildSafeIsolationKey(options.IsolationKey);
         if (options.Scope == CacheScope.Machine)
         {
-            return $"Global\\Lib.Db.{subsystem}_{options.IsolationKey ?? "Shared"}_";
+            return $"Global\\Lib.Db.{subsystem}_{isolationKey}_";
         }
         else
         {
             string userHash = GetUserSidHash();
             string basePath = ResolveBasePath(options);
             string pathHash = GetDeterministicShortHash(basePath);
-            string isoKey = options.IsolationKey ?? "Default";
-            return $"Local\\Lib.Db.{subsystem}_{userHash}_{pathHash}_{isoKey}_";
+            return $"Local\\Lib.Db.{subsystem}_{userHash}_{pathHash}_{isolationKey}_";
         }
     }
+
+    internal static string BuildSafeIsolationKey(string? isolationKey)
+        => string.IsNullOrWhiteSpace(isolationKey)
+            ? "default"
+            : GetDeterministicShortHash(isolationKey);
 
     /// <summary>
     /// 캐시 파일이 저장될 기본 경로를 절대 경로로 반환합니다.

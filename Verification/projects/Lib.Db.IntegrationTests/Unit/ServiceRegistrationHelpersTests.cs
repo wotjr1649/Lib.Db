@@ -10,6 +10,7 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using System.Reflection;
 
 namespace Lib.Db.IntegrationTests.Unit;
 
@@ -111,6 +112,40 @@ public sealed class ServiceRegistrationHelpersTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(LibDbSharedMemoryCacheStartupValidator));
+    }
+
+    [Fact]
+    public void AddLibDbSharedMemoryCache_ShouldUseSameSafeIsolationKeyAsDirectCacheOptions()
+    {
+        const string secretIsolationKey =
+            "Raw:Server=prod;Database=TenantA;User Id=sa;Password=cache-secret";
+        string basePath = Path.Combine(Path.GetTempPath(), "LibDbCacheTest_" + Guid.NewGuid().ToString("N"));
+        LibDbOptions options = CreateOptions(enableSharedMemoryCache: true);
+        options.SharedMemoryCache.BasePath = basePath;
+        options.SharedMemoryCache.IsolationKey = secretIsolationKey;
+        ServiceCollection services = BuildServices(options);
+
+        services.AddLibDbSharedMemoryCache();
+
+        using ServiceProvider provider = services.BuildServiceProvider();
+        SharedMemoryCache cache = provider.GetRequiredService<IDistributedCache>()
+            .Should()
+            .BeOfType<SharedMemoryCache>()
+            .Which;
+        string registeredPrefix = (string)typeof(SharedMemoryCache)
+            .GetField("_mutexPrefix", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(cache)!;
+        string directPrefix = CacheInternalHelpers.GetMutexPrefix(new SharedMemoryCacheOptions
+        {
+            BasePath = basePath,
+            Scope = options.SharedMemoryCache.Scope,
+            IsolationKey = secretIsolationKey
+        });
+
+        registeredPrefix.Should().Be(directPrefix);
+        registeredPrefix.Should().NotContain(secretIsolationKey);
+        registeredPrefix.Should().NotContain("Password=");
+        registeredPrefix.Should().Contain(CacheInternalHelpers.BuildSafeIsolationKey(secretIsolationKey));
     }
 
     [Fact]

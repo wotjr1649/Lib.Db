@@ -76,7 +76,7 @@ public sealed class SqlGridReaderCoverageTests
         var assertion = await act.Should()
             .ThrowAsync<InvalidOperationException>()
             .WithMessage("*명령 실행 중 오류*");
-        assertion.Which.InnerException.Should().BeOfType<InvalidOperationException>();
+        assertion.Which.InnerException.Should().BeNull();
         reader.Disposed.Should().BeTrue();
     }
 
