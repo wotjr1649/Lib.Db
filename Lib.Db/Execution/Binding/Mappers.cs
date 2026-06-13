@@ -1490,17 +1490,27 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
         // [Case B] SP 스키마 기반 바인딩
         foreach (SpParameterMetadata meta in schema.Parameters)
         {
+            string name = meta.Name.TrimStart('@');
+
             if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
             {
+                if (row.Table.Columns.Contains(name) &&
+                    DbBinder.TryBindExplicitParameter(cmd, meta, row[name], strict))
+                {
+                    continue;
+                }
+
                 DbBinder.BindParameter(cmd, meta, null, strict);
                 continue;
             }
 
-            string name = meta.Name.TrimStart('@');
-
             if (row.Table.Columns.Contains(name))
             {
-                DbBinder.BindParameter(cmd, meta, row[name], strict);
+                object value = row[name];
+                if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
+                    continue;
+
+                DbBinder.BindParameter(cmd, meta, value, strict);
             }
             else
             {
@@ -1515,19 +1525,270 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
                 DbBinder.BindParameter(cmd, meta, null, strict);
             }
         }
+
+        BindExtraReturnValueParameter(cmd, row);
     }
 
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, DataRow parameters)
     {
-        // DataRow에 Output 파라미터를 다시 반영하는 시나리오는 많지 않으므로 현재는 미지원.
-        // 필요 시 DataRow[column] = param.Value 패턴으로 확장 가능합니다.
+        if (parameters is null)
+            return;
+
+        List<DataRowOutputWrite> writes = [];
+
+        foreach (SqlParameter param in cmd.Parameters)
+        {
+            if (param.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue))
+                continue;
+
+            OutputParameterName name = OutputParameterName.From(param.ParameterName);
+            if (param.Direction == ParameterDirection.ReturnValue)
+            {
+                SqlParameter? returnSourceParameter = GetDataRowReturnValueSource(param, parameters, name);
+                if (returnSourceParameter is not null)
+                {
+                    writes.Add(DataRowOutputWrite.ForSourceOnly(
+                        returnSourceParameter,
+                        returnSourceParameter.Value,
+                        param));
+                }
+
+                continue;
+            }
+
+            DataColumn? column = TryGetUniqueOutputColumn(parameters.Table, name);
+            if (column is null)
+            {
+                if (strict)
+                {
+                    throw new InvalidOperationException(
+                        $"DataRow output target '{name.SafeDisplay()}' is missing.");
+                }
+
+                continue;
+            }
+
+            ValidateDataRowOutputColumn(column, name);
+
+            object originalValue = parameters[column];
+            SqlParameter? sourceParameter = GetDataRowOutputSource(
+                param,
+                originalValue);
+
+            writes.Add(DataRowOutputWrite.ForDataRow(
+                column,
+                originalValue,
+                param.Value ?? DBNull.Value,
+                sourceParameter,
+                sourceParameter?.Value,
+                param));
+        }
+
+        ApplyDataRowOutputWrites(parameters, writes);
     }
 
     /// <inheritdoc />
     public DataRow MapResult(DbDataReader reader)
         => throw new NotSupportedException(
             "DataRow로의 결과 매핑은 지원하지 않습니다. DTO 또는 Dictionary 매핑을 사용해 주세요.");
+
+    private readonly record struct DataRowOutputWrite(
+        DataColumn? Column,
+        object? OriginalValue,
+        object Value,
+        SqlParameter? SourceParameter,
+        object? OriginalSourceValue,
+        SqlParameter CommandParameter)
+    {
+        public static DataRowOutputWrite ForDataRow(
+            DataColumn column,
+            object originalValue,
+            object value,
+            SqlParameter? sourceParameter,
+            object? originalSourceValue,
+            SqlParameter commandParameter)
+            => new(
+                column,
+                originalValue,
+                value,
+                sourceParameter,
+                originalSourceValue,
+                commandParameter);
+
+        public static DataRowOutputWrite ForSourceOnly(
+            SqlParameter sourceParameter,
+            object? originalSourceValue,
+            SqlParameter commandParameter)
+            => new(
+                null,
+                null,
+                DBNull.Value,
+                sourceParameter,
+                originalSourceValue,
+                commandParameter);
+    }
+
+    private static void BindExtraReturnValueParameter(SqlCommand cmd, DataRow row)
+    {
+        bool observedCandidate = false;
+        foreach (DataColumn column in row.Table.Columns)
+            ExplicitReturnValueBinding.BindOrValidateCandidate(
+                cmd,
+                column.ColumnName,
+                row[column],
+                ref observedCandidate);
+    }
+
+    private static DataColumn? TryGetUniqueOutputColumn(DataTable table, OutputParameterName name)
+    {
+        DataColumn? match = null;
+        foreach (DataColumn column in table.Columns)
+        {
+            if (!name.Matches(column.ColumnName))
+                continue;
+
+            if (match is not null)
+            {
+                throw new InvalidOperationException(
+                    $"DataRow output target '{name.SafeDisplay()}' is ambiguous.");
+            }
+
+            match = column;
+        }
+
+        return match;
+    }
+
+    private static SqlParameter? GetDataRowReturnValueSource(
+        SqlParameter commandParameter,
+        DataRow row,
+        OutputParameterName name)
+    {
+        if (SqlParameterCloneFactory.TryGetRegisteredSource(commandParameter, out SqlParameter? sourceParameter))
+            return sourceParameter;
+
+        SqlParameter? match = null;
+        foreach (DataColumn column in row.Table.Columns)
+        {
+            if (!name.Matches(column.ColumnName) || row[column] is not SqlParameter source)
+                continue;
+
+            if (match is not null)
+            {
+                throw new InvalidOperationException(
+                    $"DataRow output source '{name.SafeDisplay()}' is ambiguous.");
+            }
+
+            match = source;
+        }
+
+        return match;
+    }
+
+    private static SqlParameter? GetDataRowOutputSource(
+        SqlParameter commandParameter,
+        object originalValue)
+    {
+        if (SqlParameterCloneFactory.TryGetRegisteredSource(commandParameter, out SqlParameter? sourceParameter))
+            return sourceParameter;
+
+        return originalValue as SqlParameter;
+    }
+
+    private static void ValidateDataRowOutputColumn(DataColumn column, OutputParameterName name)
+    {
+        if (!string.IsNullOrEmpty(column.Expression))
+        {
+            throw new InvalidOperationException(
+                $"DataRow output target '{name.SafeDisplay()}' is an expression column.");
+        }
+
+        if (column.ReadOnly)
+        {
+            throw new InvalidOperationException(
+                $"DataRow output target '{name.SafeDisplay()}' is read-only.");
+        }
+    }
+
+    private static void ApplyDataRowOutputWrites(DataRow row, List<DataRowOutputWrite> writes)
+    {
+        if (writes.Count == 0)
+            return;
+
+        bool editing = false;
+
+        try
+        {
+            row.BeginEdit();
+            editing = true;
+
+            foreach (DataRowOutputWrite write in writes)
+            {
+                if (write.Column is not null)
+                    row[write.Column] = write.Value;
+            }
+
+            row.EndEdit();
+            editing = false;
+
+            foreach (DataRowOutputWrite write in writes)
+            {
+                if (write.SourceParameter is not null)
+                    SqlParameterCloneFactory.CopyOutputValue(write.SourceParameter, write.CommandParameter);
+            }
+        }
+        catch (Exception ex)
+        {
+            RestoreDataRowOutputWrites(row, writes, editing);
+            throw CreateDataRowOutputApplyException(ex);
+        }
+    }
+
+    private static InvalidOperationException CreateDataRowOutputApplyException(Exception ex)
+        => new(
+            "DataRow output parameters could not be applied transactionally. " +
+            $"Cause: {ex.GetType().Name}.");
+
+    private static void RestoreDataRowOutputWrites(
+        DataRow row,
+        List<DataRowOutputWrite> writes,
+        bool editing)
+    {
+        try
+        {
+            if (editing)
+                row.CancelEdit();
+        }
+        catch
+        {
+        }
+
+        foreach (DataRowOutputWrite write in writes)
+        {
+            if (write.Column is not null)
+            {
+                try
+                {
+                    row[write.Column] = write.OriginalValue ?? DBNull.Value;
+                }
+                catch
+                {
+                }
+            }
+
+            if (write.SourceParameter is not null)
+            {
+                try
+                {
+                    write.SourceParameter.Value = write.OriginalSourceValue;
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
 }
 
 #endregion

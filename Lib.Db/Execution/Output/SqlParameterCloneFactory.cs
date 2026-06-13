@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 namespace Lib.Db.Execution.Output;
@@ -91,6 +92,11 @@ internal static class SqlParameterCloneFactory
         CopyOutputValue(source, commandParameter);
         return true;
     }
+
+    public static bool TryGetRegisteredSource(
+        SqlParameter commandParameter,
+        [NotNullWhen(true)] out SqlParameter? source)
+        => s_cloneSources.TryGetValue(commandParameter, out source);
 
     public static bool IsRegisteredSource(SqlParameter commandParameter, SqlParameter source)
         => s_cloneSources.TryGetValue(commandParameter, out SqlParameter? registeredSource) &&

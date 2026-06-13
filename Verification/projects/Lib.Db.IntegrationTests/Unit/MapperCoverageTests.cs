@@ -469,7 +469,8 @@ public sealed class MapperCoverageTests
         using var command = new SqlCommand();
         DataTable table = new();
         table.Columns.Add("Id", typeof(int));
-        table.Rows.Add(9);
+        table.Columns.Add("OutValue", typeof(int));
+        table.Rows.Add(9, DBNull.Value);
         DataRow row = table.Rows[0];
 
         mapper.MapParameters(command, null!, schema: null);
@@ -484,6 +485,408 @@ public sealed class MapperCoverageTests
         mapper.Invoking(m => m.MapResult(Mock.Of<DbDataReader>()))
             .Should()
             .Throw<NotSupportedException>();
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldMapOutputParametersTransactionally()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("OutputVal", typeof(int));
+        table.Columns.Add("InOutVal", typeof(int));
+        table.Columns.Add("NullableText", typeof(string));
+        table.Rows.Add(1, 5, "old");
+        DataRow row = table.Rows[0];
+
+        command.Parameters.Add(new SqlParameter("@OutputVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 20
+        });
+        command.Parameters.Add(new SqlParameter("@InOutVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.InputOutput,
+            Value = 15
+        });
+        command.Parameters.Add(new SqlParameter("@NullableText", SqlDbType.NVarChar, 50)
+        {
+            Direction = ParameterDirection.Output,
+            Value = DBNull.Value
+        });
+
+        mapper.MapOutputParameters(command, row);
+
+        row["OutputVal"].Should().Be(20);
+        row["InOutVal"].Should().Be(15);
+        row["NullableText"].Should().Be(DBNull.Value);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldPreserveExplicitInputOutputValueWithSchemaOutput()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("TextValue", typeof(object));
+        var source = new SqlParameter("@TextValue", SqlDbType.NVarChar, 4000)
+        {
+            Direction = ParameterDirection.InputOutput,
+            Value = "abcdef"
+        };
+        table.Rows.Add(source);
+        DataRow row = table.Rows[0];
+
+        mapper.MapParameters(
+            command,
+            row,
+            CreateSchema(Param("@TextValue", SqlDbType.NVarChar, direction: ParameterDirection.Output, size: 3)));
+
+        command.Parameters["@TextValue"].Should().NotBeSameAs(source);
+        command.Parameters["@TextValue"].Direction.Should().Be(ParameterDirection.InputOutput);
+        command.Parameters["@TextValue"].Size.Should().Be(3);
+        command.Parameters["@TextValue"].Value.Should().Be("abc");
+        source.Value.Should().Be("abcdef");
+
+        command.Parameters["@TextValue"].Value = "xyz";
+        mapper.MapOutputParameters(command, row);
+
+        row["TextValue"].Should().Be("xyz");
+        source.Value.Should().Be("xyz");
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldPreserveExplicitInputOutputValueWithSchemaInputOutput()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("TextValue", typeof(object));
+        var source = new SqlParameter("@TextValue", SqlDbType.NVarChar, 4000)
+        {
+            Direction = ParameterDirection.InputOutput,
+            Value = "abcdef"
+        };
+        table.Rows.Add(source);
+        DataRow row = table.Rows[0];
+
+        mapper.MapParameters(
+            command,
+            row,
+            CreateSchema(Param("@TextValue", SqlDbType.NVarChar, direction: ParameterDirection.InputOutput, size: 3)));
+
+        command.Parameters["@TextValue"].Should().NotBeSameAs(source);
+        command.Parameters["@TextValue"].Direction.Should().Be(ParameterDirection.InputOutput);
+        command.Parameters["@TextValue"].Size.Should().Be(3);
+        command.Parameters["@TextValue"].Value.Should().Be("abc");
+        source.Value.Should().Be("abcdef");
+
+        command.Parameters["@TextValue"].Value = "uvw";
+        mapper.MapOutputParameters(command, row);
+
+        row["TextValue"].Should().Be("uvw");
+        source.Value.Should().Be("uvw");
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldIgnoreMissingOutputColumnWhenNotStrict()
+    {
+        var mapper = new DataRowSqlMapper(strict: false);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("Id", typeof(int));
+        table.Rows.Add(1);
+        DataRow row = table.Rows[0];
+
+        command.Parameters.Add(new SqlParameter("@Missing", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 7
+        });
+
+        mapper.MapOutputParameters(command, row);
+
+        row["Id"].Should().Be(1);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldThrowWhenStrictOutputColumnIsMissing()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("Id", typeof(int));
+        table.Rows.Add(1);
+        DataRow row = table.Rows[0];
+
+        command.Parameters.Add(new SqlParameter("@Missing", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 7
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, row);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Missing*missing*");
+        row["Id"].Should().Be(1);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldRollbackWhenOutputColumnWriteFails()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("Good", typeof(int));
+        DataColumn bad = table.Columns.Add("Bad", typeof(string));
+        bad.MaxLength = 2;
+        table.Rows.Add(1, "ok");
+        DataRow row = table.Rows[0];
+
+        var source = new SqlParameter("@Good", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 1
+        };
+        DbBinder.BindRawParameter(command, "Good", source);
+        command.Parameters["@Good"].Value = 10;
+        command.Parameters.Add(new SqlParameter("@Bad", SqlDbType.NVarChar, 8)
+        {
+            Direction = ParameterDirection.Output,
+            Value = "toolong"
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, row);
+
+        InvalidOperationException exception = act.Should().Throw<InvalidOperationException>()
+            .Which;
+        exception.Message.Should().Contain("transactionally");
+        exception.InnerException.Should().BeNull();
+        exception.Message.Should().NotContain("toolong");
+        row["Good"].Should().Be(1);
+        row["Bad"].Should().Be("ok");
+        source.Value.Should().Be(1);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldCopyRegisteredExplicitSqlParameterSourceOnSuccess()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("OutputVal", typeof(object));
+        var source = new SqlParameter("@OutputVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 1
+        };
+        table.Rows.Add(source);
+        DataRow row = table.Rows[0];
+
+        DbBinder.BindRawParameter(command, "OutputVal", source);
+        command.Parameters["@OutputVal"].Value = 20;
+
+        mapper.MapOutputParameters(command, row);
+
+        row["OutputVal"].Should().Be(20);
+        source.Value.Should().Be(20);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldNotMapReturnValueToDataRowColumn()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("ReturnValue", typeof(int));
+        table.Rows.Add(7);
+        DataRow row = table.Rows[0];
+
+        command.Parameters.Add(new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 10
+        });
+
+        mapper.MapOutputParameters(command, row);
+
+        row["ReturnValue"].Should().Be(7);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldIgnoreAmbiguousScalarReturnValueColumns()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("ReturnValue", typeof(int));
+        table.Columns.Add("returnvalue", typeof(int));
+        table.Rows.Add(7, 8);
+
+        command.Parameters.Add(new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 10
+        });
+
+        mapper.MapOutputParameters(command, table.Rows[0]);
+
+        table.Rows[0]["ReturnValue"].Should().Be(7);
+        table.Rows[0]["returnvalue"].Should().Be(8);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldExcludeReturnValueFromDataRowButCopyRegisteredSource()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("ReturnValue", typeof(object));
+        var source = new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 999
+        };
+        table.Rows.Add(source);
+        DataRow row = table.Rows[0];
+
+        DbBinder.BindRawParameter(command, "ReturnValue", source);
+        command.Parameters["@ReturnValue"].Value = 10;
+
+        mapper.MapOutputParameters(command, row);
+
+        row["ReturnValue"].Should().BeSameAs(source);
+        source.Value.Should().Be(10);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldBindSchemaReturnValueFromExplicitDataRowSource()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("ReturnValue", typeof(object));
+        var source = new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = 999
+        };
+        table.Rows.Add(source);
+        DataRow row = table.Rows[0];
+
+        mapper.MapParameters(
+            command,
+            row,
+            CreateSchema(Param("@ReturnValue", SqlDbType.Int, direction: ParameterDirection.ReturnValue)));
+        command.Parameters["@ReturnValue"].Value = 10;
+        mapper.MapOutputParameters(command, row);
+
+        row["ReturnValue"].Should().BeSameAs(source);
+        source.Value.Should().Be(10);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldRollbackReturnValueSourceWhenOutputColumnWriteFails()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("ReturnValue", typeof(object));
+        DataColumn bad = table.Columns.Add("Bad", typeof(string));
+        bad.MaxLength = 2;
+        var source = new SqlParameter("@ReturnValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.ReturnValue,
+            Value = null
+        };
+        table.Rows.Add(source, "ok");
+        DataRow row = table.Rows[0];
+
+        DbBinder.BindRawParameter(command, "ReturnValue", source);
+        command.Parameters["@ReturnValue"].Value = 10;
+        command.Parameters.Add(new SqlParameter("@Bad", SqlDbType.NVarChar, 8)
+        {
+            Direction = ParameterDirection.Output,
+            Value = "toolong"
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, row);
+
+        InvalidOperationException exception = act.Should().Throw<InvalidOperationException>()
+            .Which;
+        exception.Message.Should().Contain("transactionally");
+        exception.InnerException.Should().BeNull();
+        exception.Message.Should().NotContain("toolong");
+        row["ReturnValue"].Should().BeSameAs(source);
+        row["Bad"].Should().Be("ok");
+        source.Value.Should().BeNull();
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldRejectAmbiguousOutputColumn()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("OutputVal", typeof(int));
+        table.Columns.Add("outputval", typeof(int));
+        table.Rows.Add(1, 2);
+
+        command.Parameters.Add(new SqlParameter("@OutputVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 3
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, table.Rows[0]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*OutputVal*ambiguous*");
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldRejectReadOnlyOutputColumn()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        DataColumn output = table.Columns.Add("OutputVal", typeof(int));
+        table.Rows.Add(1);
+        output.ReadOnly = true;
+
+        command.Parameters.Add(new SqlParameter("@OutputVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 3
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, table.Rows[0]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*OutputVal*read-only*");
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldRejectExpressionOutputColumn()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("Base", typeof(int));
+        table.Columns.Add("Computed", typeof(int), "Base + 1");
+        table.Rows.Add(1);
+
+        command.Parameters.Add(new SqlParameter("@Computed", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 3
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, table.Rows[0]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Computed*expression*");
     }
 
     [Fact]
