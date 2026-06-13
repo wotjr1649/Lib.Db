@@ -687,7 +687,8 @@ Invoke-Checked 'dotnet' @(
     '-o', $artifactRoot,
     "/p:RepositoryCommit=$head",
     "/p:PackageVersion=$effectivePackageVersion",
-    "/p:Version=$effectivePackageVersion"
+    "/p:Version=$effectivePackageVersion",
+    '-p:UseSharedCompilation=false'
 )
 
 $packages = @(Get-ChildItem -LiteralPath $artifactRoot -Filter '*.nupkg' -File |

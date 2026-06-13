@@ -9,7 +9,7 @@ namespace Lib.Db.IntegrationTests.Unit;
 public sealed class VerificationEntryPointTests
 {
     [Fact]
-    public void VerificationScripts_ShouldLoadLocalEnvironmentBeforeDotnetTest()
+    public void VerificationScripts_ShouldRequireOptInForLocalEnvironmentBeforeTestExecution()
     {
         DirectoryInfo repoRoot = FindRepoRoot();
         string[] scriptNames =
@@ -25,10 +25,12 @@ public sealed class VerificationEntryPointTests
             string scriptPath = Path.Combine(repoRoot.FullName, "Verification", "scripts", scriptName);
             File.Exists(scriptPath).Should().BeTrue("database-backed commands need wrappers that load local environment values");
 
-        string script = File.ReadAllText(scriptPath);
-        script.Should().Contain("Set-LibDbVerificationEnvironment.local.ps1");
-        script.Should().Contain(". $localEnvironmentScript");
-    }
+            string script = File.ReadAllText(scriptPath);
+            script.Should().Contain("Set-LibDbVerificationEnvironment.local.ps1");
+            script.Should().Contain(". $localEnvironmentScript");
+            script.Should().Contain("UseLocalEnvironment");
+            script.Should().Contain("Local verification environment script not loaded");
+        }
 
         string testScript = File.ReadAllText(Path.Combine(
             repoRoot.FullName,
@@ -36,10 +38,45 @@ public sealed class VerificationEntryPointTests
             "scripts",
             "Invoke-Tests.ps1"));
         testScript.Should().Contain("'dotnet'");
-        testScript.Should().Contain("'test'");
         testScript.Should().Contain("Write-SecretSafeEnvironmentSummary");
+        testScript.Should().Contain("Format-RepoRelativePath");
+        testScript.Should().Contain("KeepBuildServers");
+        testScript.Should().Contain("UseLocalEnvironment");
+        testScript.Should().Contain("SkipLocalEnvironment");
+        testScript.Should().Contain("Local verification environment script skipped.");
+        testScript.Should().Contain("CoverageOutputFormat");
+        testScript.Should().Contain("Use Invoke-Coverage.ps1");
+        testScript.Should().Contain("Set-ProcessEnvironmentVariable");
+        testScript.Should().Contain("TESTINGPLATFORM_TELEMETRY_OPTOUT");
+        testScript.Should().Contain("DOTNET_CLI_TELEMETRY_OPTOUT");
+        testScript.Should().Contain("MSBUILDDISABLENODEREUSE");
+        testScript.Should().Contain("-p:UseSharedCompilation=false");
+        testScript.Should().Contain("dotnet build-server shutdown");
         testScript.Should().Contain("SkipTestEnvGuard");
-        testScript.Should().Contain("[Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')");
+        testScript.Should().Contain("Set-ProcessEnvironmentVariable -Name 'LIBDB_SKIP_TEST_ENV_GUARD' -Value 'true'");
+        testScript.Should().Contain("Assert-VerificationEnvironmentConfigured");
+        testScript.Should().Contain("Test-AllEnvironmentVariablesPresent");
+        testScript.Should().Contain("FilterNamespace");
+        testScript.Should().Contain("[Alias('filter-namespace')]");
+        testScript.Should().Contain("'--filter-namespace'");
+        testScript.Should().Contain("[string] $Target = 'IntegrationTests'");
+        testScript.Should().Contain("function Get-SolutionMtpTestProjects");
+        testScript.Should().Contain("function Get-TestApplicationPath");
+        testScript.Should().Contain("Test-IsMtpTestProject");
+        testScript.Should().Contain("$testProjects = if ($Target -eq 'Solution') { Get-SolutionMtpTestProjects } else { @($integrationProject) }");
+        testScript.Should().Contain("Invoke-DirectMtpTestRun");
+        testScript.Should().Contain("Add-MtpVerbosityArguments");
+        testScript.Should().Contain("$buildArguments.Add(('-v:' + $Verbosity))");
+        testScript.Should().Contain("'--output'");
+        testScript.Should().Contain("'--no-progress'");
+        testScript.Should().Contain("Write-Host \"Verbosity=$Verbosity\"");
+        testScript.Should().Contain("-Verbosity $Verbosity");
+        testScript.Should().Contain("$buildTarget = if ($Target -eq 'Solution') { $solution } else { $integrationProject }");
+        testScript.Should().Contain("$execArguments.Add('exec')");
+        testScript.Should().Contain("Executing MTP test application: $displayAssembly");
+        testScript.Should().Contain("MtpExecution=DirectAppHostPreferred");
+        testScript.Should().NotContain("$dotnetArguments.Add('test')");
+        testScript.Should().NotContain("Invoke-Checked 'dotnet' $dotnetArgumentArray");
     }
 
     [Fact]
@@ -83,6 +120,7 @@ public sealed class VerificationEntryPointTests
         benchmarkScript.Should().Contain("TvpBenchmarks");
         benchmarkScript.Should().Contain("WideTvpBenchmarks");
         benchmarkScript.Should().Contain("'*Lib.Db.Benchmarks.WideTvpBenchmarks*'");
+        benchmarkScript.Should().Contain("--property:UseSharedCompilation=false");
         manifest.Should().Contain("artifactSecretScan");
         manifest.Should().Contain("artifactTrackingGate");
     }
@@ -99,8 +137,54 @@ public sealed class VerificationEntryPointTests
         string manifest = File.ReadAllText(Path.Combine(repoRoot.FullName, "Verification", "manifest.json"));
 
         verificationScript.Should().Contain("Invoke-ReleasePackage.ps1");
+        verificationScript.Should().Contain("-p:UseSharedCompilation=false");
+        string releasePackageScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-ReleasePackage.ps1"));
+        releasePackageScript.Should().Contain("-p:UseSharedCompilation=false");
         manifest.Should().Contain("releasePackage");
         manifest.Should().Contain("scripts/Invoke-ReleasePackage.ps1");
+    }
+
+    [Fact]
+    public void ReleaseAndCoverageVerification_ShouldUseDirectMtpTestWrapper()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string verificationScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Verification.ps1"));
+        string coverageScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Coverage.ps1"));
+
+        verificationScript.Should().Contain("Invoke-Tests.ps1");
+        verificationScript.Should().Contain("'-File', $testScript");
+        verificationScript.Should().Contain("'-Target', 'IntegrationTests'");
+        verificationScript.Should().Contain("'-FilterClass', '*V230TvpMatrixTests*'");
+        verificationScript.Should().NotContain("'test',");
+
+        coverageScript.Should().Contain("Get-IntegrationTestApplicationPath");
+        coverageScript.Should().Contain("$integrationProject");
+        coverageScript.Should().Contain("'--coverage'");
+        coverageScript.Should().Contain("'--coverage-output-format'");
+        coverageScript.Should().Contain("'--coverage-output'");
+        coverageScript.Should().Contain("'--coverage-settings'");
+        coverageScript.Should().Contain("TESTINGPLATFORM_TELEMETRY_OPTOUT");
+        coverageScript.Should().Contain("DOTNET_CLI_TELEMETRY_OPTOUT");
+        coverageScript.Should().Contain("MSBUILDDISABLENODEREUSE");
+        coverageScript.Should().Contain("-p:UseSharedCompilation=false");
+        coverageScript.Should().Contain("dotnet build-server shutdown");
+        coverageScript.Should().Contain("Format-RepoRelativePath");
+        coverageScript.Should().NotContain("Invoke-Tests.ps1");
+        coverageScript.Should().NotContain("'-File', $testScript");
+        coverageScript.Should().NotContain("'-Target', 'IntegrationTests'");
+        coverageScript.Should().NotContain("'test',");
     }
 
     [Fact]
@@ -144,6 +228,7 @@ public sealed class VerificationEntryPointTests
         script.Should().Contain("AOT analysis warning");
         script.Should().Contain("-p:GeneratePackageOnBuild=false");
         script.Should().Contain("-p:WarningsAsErrors=");
+        script.Should().Contain("-p:UseSharedCompilation=false");
         script.Should().Contain("-RequirePackageVersions");
         verificationPolicy.Should().Contain("AOT warning baseline");
         verificationPolicy.Should().Contain("Verification/baselines/aot-warnings.json");
@@ -178,9 +263,11 @@ public sealed class VerificationEntryPointTests
 
         process.Start();
 
-        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> errorTask = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
         string combined = output + error;
 
         process.ExitCode.Should().Be(0, combined);
@@ -246,9 +333,11 @@ public sealed class VerificationEntryPointTests
 
         process.Start();
 
-        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> errorTask = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
         string combined = output + error;
 
         process.ExitCode.Should().Be(0, combined);
@@ -294,9 +383,11 @@ public sealed class VerificationEntryPointTests
 
         process.Start();
 
-        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> errorTask = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
         string combined = output + error;
 
         process.ExitCode.Should().Be(0, combined);
@@ -334,9 +425,11 @@ public sealed class VerificationEntryPointTests
 
         process.Start();
 
-        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> errorTask = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
         string combined = output + error;
 
         process.ExitCode.Should().Be(0, combined);
@@ -468,6 +561,18 @@ public sealed class VerificationEntryPointTests
         project.Should().Contain("LIBDB_SKIP_TEST_ENV_GUARD");
         project.Should().Contain("-SkipTestEnvGuard");
         project.Should().NotContain("-p:LIBDB_SKIP_TEST_ENV_GUARD=true");
+
+        string testScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Tests.ps1"));
+        testScript.Should().Contain("MtpExecution=DirectAppHostPreferred");
+        testScript.Should().Contain("Get-SolutionMtpTestProjects");
+        testScript.Should().Contain("Get-TestAssemblyPath");
+        testScript.Should().Contain("Get-TestApplicationPath");
+        testScript.Should().Contain("'exec'");
+        testScript.Should().Contain("$assemblyName.dll");
     }
 
     [Fact]
@@ -477,7 +582,25 @@ public sealed class VerificationEntryPointTests
         string manifest = File.ReadAllText(Path.Combine(repoRoot.FullName, "Verification", "manifest.json"));
 
         manifest.Should().Contain("\"tests\"");
+        manifest.Should().Contain("\"version\": \"v2.6.0\"");
         manifest.Should().Contain("scripts/Invoke-Tests.ps1");
+    }
+
+    [Fact]
+    public void VerificationScripts_ShouldNotUseRawDotnetTest()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string scriptsRoot = Path.Combine(repoRoot.FullName, "Verification", "scripts");
+        string[] scripts = Directory.GetFiles(scriptsRoot, "*.ps1", SearchOption.TopDirectoryOnly);
+
+        scripts.Should().NotBeEmpty();
+        string combined = string.Join(Environment.NewLine, scripts.Select(File.ReadAllText));
+
+        combined.Should().NotContain("dotnet test");
+        combined.Should().NotContain("$dotnetArguments.Add('test')");
+        combined.Should().NotContain("Invoke-Checked 'dotnet' $dotnetArgumentArray");
+        combined.Should().NotContain("Invoke-Captured 'dotnet' @(" + Environment.NewLine + "        'test'");
+        combined.Should().NotContain("Invoke-Checked 'dotnet' @(" + Environment.NewLine + "        'test'");
     }
 
     [Fact]
@@ -494,6 +617,7 @@ public sealed class VerificationEntryPointTests
         string combined = string.Join(Environment.NewLine, workflows.Select(File.ReadAllText));
         combined.Should().Contain("Invoke-Verification.ps1");
         combined.Should().Contain("LIBDB_TEST_SQL_PASSWORD");
+        combined.Should().Contain("LibDb_CI_${{ github.run_id }}_${{ github.run_attempt }}!aA1");
         combined.Should().NotContain("dotnet test");
         combined.Should().Contain("NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}");
         combined.Should().Contain("--api-key \"$NUGET_API_KEY\"");
@@ -501,6 +625,27 @@ public sealed class VerificationEntryPointTests
         combined.Should().NotContain("NuGet/login@v1");
         combined.Should().NotContain("secrets.NUGET_USER");
         combined.Should().NotContain("--api-key ${{ secrets.NUGET_API_KEY }}");
+    }
+
+    [Fact]
+    public void GitHubWorkflows_ShouldNotExposeSqlSecretsAsJobWideEnvironment()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string workflowRoot = Path.Combine(repoRoot.FullName, ".github", "workflows");
+        string[] workflows = Directory.Exists(workflowRoot)
+            ? Directory.GetFiles(workflowRoot, "*.yml", SearchOption.TopDirectoryOnly)
+            : [];
+
+        workflows.Should().NotBeEmpty();
+
+        string combined = string.Join("\n", workflows.Select(File.ReadAllText))
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        combined.Should().NotContain("secrets.LIBDB_TEST_SQL_PASSWORD");
+        combined.Should().Contain("MSSQL_SA_PASSWORD: LibDb_CI_${{ github.run_id }}_${{ github.run_attempt }}!aA1");
+        combined.Should().Contain("LIBDB_TEST_SQL_PASSWORD: LibDb_CI_${{ github.run_id }}_${{ github.run_attempt }}!aA1");
+        combined.Should().Contain("$env:LIBDB_BENCHMARK_CONNECTION = \"Server=127.0.0.1;");
+        combined.Should().NotContain("LIBDB_BENCHMARK_CONNECTION: Server=127.0.0.1;");
     }
 
     private static DirectoryInfo FindRepoRoot()

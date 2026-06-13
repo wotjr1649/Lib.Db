@@ -7,6 +7,7 @@ param(
     [switch] $SkipSetup,
     [switch] $SkipRun,
     [switch] $SkipSecretScan,
+    [switch] $UseLocalEnvironment,
     [switch] $AllowPartial
 )
 
@@ -19,12 +20,32 @@ $artifactRoot = Join-Path $repoRoot 'Verification\artifacts\benchmarks\Benchmark
 $scanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
 
-if (Test-Path -LiteralPath $localEnvironmentScript) {
+function Format-RepoRelativePath {
+    param([Parameter(Mandatory = $true)] [string] $Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $rootPath = [System.IO.Path]::GetFullPath($repoRoot)
+    if (-not $rootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootPath += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    if ($fullPath.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $fullPath.Substring($rootPath.Length)
+    }
+
+    return [System.IO.Path]::GetFileName($fullPath)
+}
+
+if ($UseLocalEnvironment) {
+    if (-not (Test-Path -LiteralPath $localEnvironmentScript)) {
+        throw 'Local verification environment script was requested but not found.'
+    }
+
     . $localEnvironmentScript -NoBenchmarkReset
-    Write-Host "Loaded local verification environment script: $localEnvironmentScript"
+    Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
 }
 else {
-    Write-Host 'Local verification environment script not found; using existing process environment.'
+    Write-Host 'Local verification environment script not loaded; pass -UseLocalEnvironment to opt in, or use existing process environment.'
 }
 
 function Invoke-Checked {
@@ -135,7 +156,7 @@ function Assert-BenchmarkReportHasMeasurements {
     )
 
     if (-not (Test-Path -LiteralPath $artifactRoot)) {
-        throw "Benchmark artifact path was not created: $artifactRoot"
+        throw "Benchmark artifact path was not created: $(Format-RepoRelativePath -Path $artifactRoot)"
     }
 
     $reports = @(Get-ChildItem -LiteralPath (Join-Path $artifactRoot 'results') -File -Filter '*-report-github.md' -ErrorAction Stop |
@@ -166,7 +187,7 @@ function Assert-BenchmarkReportHasMeasurements {
         $content = [System.IO.File]::ReadAllText($report.FullName)
         if ($content.Contains('There are not any results runs', [System.StringComparison]::OrdinalIgnoreCase) -or
             $content.Contains('Build Error', [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "BenchmarkDotNet report contains no valid measurements: $($report.FullName)"
+            throw "BenchmarkDotNet report contains no valid measurements: $(Format-RepoRelativePath -Path $report.FullName)"
         }
 
         foreach ($method in $expectedMethods) {
@@ -188,7 +209,7 @@ function Assert-BenchmarkReportHasMeasurements {
                 Select-Object -First 1
 
             if ($null -eq $methodLine) {
-                throw "BenchmarkDotNet report did not contain measured method ${method}: $($report.FullName)"
+                throw "BenchmarkDotNet report did not contain measured method ${method}: $(Format-RepoRelativePath -Path $report.FullName)"
             }
         }
     }
@@ -199,7 +220,7 @@ Assert-BenchmarkConnectionConfigured
 Write-Host "SetupMode=$SetupMode"
 Write-Host "BenchmarkJob=$Job"
 Write-Host "Filter=$Filter"
-Write-Host "BenchmarkArtifacts=$artifactRoot"
+Write-Host "BenchmarkArtifacts=$(Format-RepoRelativePath -Path $artifactRoot)"
 
 $env:LIBDB_BENCHMARK_ARTIFACTS_PATH = $artifactRoot
 $runStartedUtc = [DateTime]::UtcNow.AddSeconds(-5)
@@ -225,7 +246,14 @@ if (-not $SkipSetup -or -not $SkipRun) {
 
 if (-not $SkipSetup) {
     $setupArgument = if ($SetupMode -eq 'FullMatrix') { '--setup-full-matrix' } else { '--setup-only' }
-    Invoke-Checked 'dotnet' @('run', '--no-restore', '--project', $project, '--', $setupArgument)
+    Invoke-Checked 'dotnet' @(
+        'run',
+        '--no-restore',
+        '--project', $project,
+        '--property:UseSharedCompilation=false',
+        '--',
+        $setupArgument
+    )
 }
 else {
     $skippedGates.Add('setup')
@@ -239,6 +267,7 @@ if (-not $SkipRun) {
             '-c', 'Release',
             '--no-restore',
             '--project', $project,
+            '--property:UseSharedCompilation=false',
             '--',
             '--filter', $benchmarkFilter
         )
@@ -267,7 +296,7 @@ if (Test-Path -LiteralPath $artifactRoot) {
         Select-Object -First 12
 
     foreach ($report in $reports) {
-        Write-Host "Report=$($report.FullName)"
+        Write-Host "Report=$(Format-RepoRelativePath -Path $report.FullName)"
     }
 }
 

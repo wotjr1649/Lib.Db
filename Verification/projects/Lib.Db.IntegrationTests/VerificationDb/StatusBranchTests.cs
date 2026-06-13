@@ -4,7 +4,9 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Data;
 using Lib.Db.IntegrationTests.Infrastructure;
+using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.VerificationDb;
 
@@ -39,11 +41,15 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
             .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue();
         int newUserId = insertResult.Value;
+        var status = new SqlParameter("@Status", SqlDbType.NVarChar, 20)
+        {
+            Direction = ParameterDirection.Output
+        };
 
         // Act — 상태 분기 호출
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("test.usp_Status_Branch_Logic")
-            .With(new { UserId = newUserId, Status = "" })
+            .With(new { UserId = newUserId, Status = status })
             .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
@@ -57,6 +63,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         }
         row.Should().NotBeNull();
         row!["Status"]?.ToString().Should().Be("NEW");
+        status.Value.ToString().Should().Be("NEW");
         Convert.ToInt32(row["OrderCount"]).Should().Be(0);
     }
 
@@ -78,6 +85,10 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
             .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue();
         int newUserId = insertResult.Value;
+        var status = new SqlParameter("@Status", SqlDbType.NVarChar, 20)
+        {
+            Direction = ParameterDirection.Output
+        };
 
         for (int i = 0; i < 3; i++)
         {
@@ -90,7 +101,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         // Act — 상태 분기 호출
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("test.usp_Status_Branch_Logic")
-            .With(new { UserId = newUserId, Status = "" })
+            .With(new { UserId = newUserId, Status = status })
             .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
@@ -104,6 +115,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         }
         row.Should().NotBeNull();
         row!["Status"]?.ToString().Should().Be("ACTIVE");
+        status.Value.ToString().Should().Be("ACTIVE");
         Convert.ToInt32(row["OrderCount"]).Should().BeInRange(1, 4);
     }
 
@@ -125,6 +137,10 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
             .ExecuteScalarAsync<int>(TestContext.Current.CancellationToken);
         insertResult.IsSuccess.Should().BeTrue();
         int newUserId = insertResult.Value;
+        var status = new SqlParameter("@Status", SqlDbType.NVarChar, 20)
+        {
+            Direction = ParameterDirection.Output
+        };
 
         for (int i = 0; i < 6; i++)
         {
@@ -137,7 +153,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         // Act — 상태 분기 호출
         DbResult<IAsyncEnumerable<Dictionary<string, object?>>> result = await _db
             .Procedure("test.usp_Status_Branch_Logic")
-            .With(new { UserId = newUserId, Status = "" })
+            .With(new { UserId = newUserId, Status = status })
             .QueryAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
         // Assert
@@ -151,6 +167,7 @@ public sealed class StatusBranchTests(MultiDbFixture fixture)
         }
         row.Should().NotBeNull();
         row!["Status"]?.ToString().Should().Be("VIP");
+        status.Value.ToString().Should().Be("VIP");
         Convert.ToInt32(row["OrderCount"]).Should().BeGreaterThanOrEqualTo(5);
     }
 

@@ -45,7 +45,7 @@ public sealed class DbDiagnosticsTests : IDisposable
         Assert.IsType<InvalidOperationException>(ex);
         Assert.Contains("오류가 발생했습니다", ex.Message);
         Assert.DoesNotContain("SELECT * FROM", ex.Message);
-        Assert.Same(inner, ex.InnerException);
+        Assert.Null(ex.InnerException);
     }
 
     [Fact]

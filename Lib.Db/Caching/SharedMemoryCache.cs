@@ -55,6 +55,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     private readonly ILogger<SharedMemoryCache> _logger;
     private readonly Lazy<Mutex[]> _mutexStripes;
     private readonly string _mutexPrefix;
+    private readonly string _mutexScope;
     private readonly bool _isFallbackMode;
     private volatile bool _disposed;
 
@@ -105,6 +106,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         _logger = logger;
         _basePath = CacheInternalHelpers.ResolveBasePath(_options);
         _mutexPrefix = CacheInternalHelpers.GetMutexPrefix(_options);
+        _mutexScope = _options.Scope.ToString();
 
         try
         {
@@ -115,13 +117,17 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             _mutexStripes = new Lazy<Mutex[]>(InitMutexes);
             _isFallbackMode = false;
 
-            _logger.LogInformation("[SharedMemoryCache] 초기화 완료: 경로={Path}, 범위={Scope}", _basePath, _options.Scope);
+            _logger.LogInformation(
+                "[SharedMemoryCache] 초기화 완료: 범위={Scope}, 경로해시={PathHash}",
+                _options.Scope, HashKeyForDiagnostics(_basePath));
         }
         catch (Exception ex)
         {
             _isFallbackMode = true;
             _mutexStripes = new Lazy<Mutex[]>(() => Array.Empty<Mutex>()); // Dummy
-            _logger.LogError(ex, "[SharedMemoryCache] 초기화 실패 -> Fallback 모드 전환");
+            _logger.LogError(
+                "[SharedMemoryCache] 초기화 실패 -> Fallback 모드 전환 (ErrorType: {ErrorType})",
+                ex.GetType().Name);
         }
     }
 
@@ -138,7 +144,11 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[Mutex] 생성 실패 (Local/Global 권한 확인 필요): {Name}", name);
+                _logger.LogWarning(
+                    "[Mutex] 생성 실패 (Scope: {Scope}, Stripe: {Stripe}, ErrorType: {ErrorType})",
+                    _mutexScope,
+                    i,
+                    ex.GetType().Name);
                 // Fallback: Unnamed (Process-local only)
                 mutexes[i] = new Mutex(false);
             }
@@ -174,7 +184,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             catch (AbandonedMutexException)
             {
                 acquired = true;
-                _logger.LogWarning("[Cache] Abandoned Mutex 복구됨 (Get): {Key}", key);
+                _logger.LogWarning(
+                    "[Cache] Abandoned Mutex 복구됨 (Get): {KeyHash}",
+                    HashKeyForDiagnostics(key));
             }
 
             if (!acquired)
@@ -228,7 +240,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             uint actualCrc = Crc32.HashToUInt32(data);
             if (actualCrc != header.Crc32)
             {
-                _logger.LogWarning("[Cache] CRC Mismatch: {Key}", key);
+                _logger.LogWarning(
+                    "[Cache] CRC Mismatch: {KeyHash}",
+                    HashKeyForDiagnostics(key));
                 return null;
             }
 
@@ -239,7 +253,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[Cache] Get 오류: {Key}", key);
+            _logger.LogError(
+                "[Cache] Get 오류: {KeyHash} (ErrorType: {ErrorType})",
+                HashKeyForDiagnostics(key), ex.GetType().Name);
             return _options.FallbackCache?.Get(key);
         }
         finally
@@ -288,7 +304,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             catch (AbandonedMutexException)
             {
                 acquired = true;
-                _logger.LogWarning("[Cache] Abandoned Mutex 복구됨 (Set): {Key}", key);
+                _logger.LogWarning(
+                    "[Cache] Abandoned Mutex 복구됨 (Set): {KeyHash}",
+                    HashKeyForDiagnostics(key));
             }
 
             if (!acquired)
@@ -341,7 +359,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[Cache] Set 오류: {Key}", key);
+            _logger.LogError(
+                "[Cache] Set 오류: {KeyHash} (ErrorType: {ErrorType})",
+                HashKeyForDiagnostics(key), ex.GetType().Name);
             // Error fallback
             _options.FallbackCache?.Set(key, value, options);
         }
@@ -387,7 +407,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             catch (AbandonedMutexException)
             {
                 acquired = true;
-                _logger.LogWarning("[Cache] Abandoned Mutex 복구됨 (Remove): {Key}", key);
+                _logger.LogWarning(
+                    "[Cache] Abandoned Mutex 복구됨 (Remove): {KeyHash}",
+                    HashKeyForDiagnostics(key));
             }
 
             if (!acquired)
@@ -487,7 +509,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[Cache] Compact 중 오류 발생");
+            _logger.LogError(
+                "[Cache] Compact 중 오류 발생 (ErrorType: {ErrorType})",
+                ex.GetType().Name);
         }
     }
 

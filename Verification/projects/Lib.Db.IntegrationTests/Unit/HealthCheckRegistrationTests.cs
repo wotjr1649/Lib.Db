@@ -9,6 +9,7 @@ using Lib.Db.IntegrationTests.Infrastructure;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using System.Reflection;
 
 namespace Lib.Db.IntegrationTests.Unit;
 
@@ -96,6 +97,55 @@ public sealed class HealthCheckRegistrationTests
         HealthReportEntry entry = report.Entries["sql_db"];
         entry.Data["libdb.cache.has_verified_provider_l2"].Should().Be(true);
         entry.Data["libdb.cache.warnings"].Should().BeEquivalentTo(Array.Empty<string>());
+    }
+
+    [Fact]
+    public void AddLibDbHealthCheck_ShouldRedactSensitiveMissingDefaultInstanceName()
+    {
+        const string sensitiveInstanceName = "Raw:Server=(localdb)\\MSSQLLocalDB;Database=MissingHealthDb;Encrypt=True";
+        ServiceCollection services = new();
+        using ServiceProvider provider = services.BuildServiceProvider();
+        LibDbOptions options = new()
+        {
+            ConnectionStringNames = [sensitiveInstanceName],
+            HealthCheckThrottleSeconds = 1
+        };
+        object healthCheck = CreateThrottledDbHealthCheck(new RecordingConnectionFactory(), options, provider);
+
+        TargetInvocationException exception = InvokeGetDefaultInstanceName(healthCheck).Should()
+            .Throw<TargetInvocationException>()
+            .Which;
+
+        exception.InnerException.Should().BeOfType<InvalidOperationException>();
+        string message = exception.InnerException!.Message;
+        message.Should().Contain("Raw:[redacted]");
+        message.Should().NotContain("MissingHealthDb");
+    }
+
+    private static object CreateThrottledDbHealthCheck(
+        IDbConnectionFactory factory,
+        LibDbOptions options,
+        IServiceProvider services)
+    {
+        Type healthCheckType = typeof(LibDbHealthCheckExtensions).GetNestedType(
+            "ThrottledDbHealthCheck",
+            BindingFlags.NonPublic) ?? throw new InvalidOperationException("HealthCheck type was not found.");
+
+        return Activator.CreateInstance(
+            healthCheckType,
+            BindingFlags.Instance | BindingFlags.Public,
+            binder: null,
+            args: [factory, options, services],
+            culture: null) ?? throw new InvalidOperationException("HealthCheck instance was not created.");
+    }
+
+    private static Action InvokeGetDefaultInstanceName(object healthCheck)
+    {
+        MethodInfo method = healthCheck.GetType().GetMethod(
+            "GetDefaultInstanceName",
+            BindingFlags.Instance | BindingFlags.NonPublic) ?? throw new InvalidOperationException("HealthCheck helper was not found.");
+
+        return () => method.Invoke(healthCheck, parameters: null);
     }
 
     private sealed class RecordingConnectionFactory : IDbConnectionFactory

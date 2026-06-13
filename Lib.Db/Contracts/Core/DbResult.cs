@@ -110,7 +110,7 @@ public readonly record struct DbError
     /// <summary>오류가 발생한 DB 객체 이름입니다. (예: "dbo.usp_GetList")</summary>
     public string? ObjectName { get; init; }
 
-    /// <summary>원본 예외 객체입니다. 로깅/디버깅용으로 보관합니다.</summary>
+    /// <summary>진단용 예외입니다. Lib.Db가 반환하는 public 실패 결과는 원본 provider 예외를 보관하지 않습니다.</summary>
     public Exception? InnerException { get; init; }
 
     #endregion

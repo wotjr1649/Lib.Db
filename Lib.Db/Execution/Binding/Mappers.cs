@@ -23,6 +23,7 @@ using System.Text.Json;
 
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
+using Lib.Db.Execution.Output;
 using Microsoft.Extensions.ObjectPool;
 
 namespace Lib.Db.Execution.Binding;
@@ -444,6 +445,24 @@ internal static class SqlIdentifierName
         return normalized.ToFrozenDictionary(StringComparer.Ordinal);
     }
 
+    public static FrozenSet<string> BuildAmbiguousNormalizedPropertySet(PropertyInfo[] properties)
+    {
+        HashSet<string> observed = new(StringComparer.Ordinal);
+        HashSet<string> ambiguous = new(StringComparer.Ordinal);
+
+        foreach (PropertyInfo property in properties)
+        {
+            string key = Normalize(property.Name);
+            if (key.Length == 0)
+                continue;
+
+            if (!observed.Add(key))
+                ambiguous.Add(key);
+        }
+
+        return ambiguous.ToFrozenSet(StringComparer.Ordinal);
+    }
+
     public static bool TryGetProperty(
         FrozenDictionary<string, PropertyInfo> exactMap,
         FrozenDictionary<string, PropertyInfo> normalizedMap,
@@ -455,6 +474,12 @@ internal static class SqlIdentifierName
 
         string normalized = Normalize(name);
         return normalizedMap.TryGetValue(normalized, out property);
+    }
+
+    public static bool IsAmbiguousNormalizedName(FrozenSet<string> ambiguousNormalizedNames, string name)
+    {
+        string normalized = Normalize(name);
+        return normalized.Length > 0 && ambiguousNormalizedNames.Contains(normalized);
     }
 
     private static string Normalize(string name)
@@ -476,6 +501,70 @@ internal static class SqlIdentifierName
         }
 
         return new string(buffer, 0, written);
+    }
+}
+
+#endregion
+
+#region 명시적 ReturnValue 후보 처리
+
+internal static class ExplicitReturnValueBinding
+{
+    public static void BindOrValidateCandidate(
+        SqlCommand cmd,
+        string fallbackName,
+        object? value,
+        ref bool observedCandidate)
+    {
+        if (value is not SqlParameter { Direction: ParameterDirection.ReturnValue } source)
+            return;
+
+        string candidateName = string.IsNullOrWhiteSpace(source.ParameterName)
+            ? fallbackName
+            : source.ParameterName;
+
+        if (TryGetExistingReturnValue(cmd, out SqlParameter? existing))
+        {
+            if (!observedCandidate &&
+                OutputParameterName.From(existing.ParameterName).Matches(candidateName) &&
+                SqlParameterCloneFactory.IsRegisteredSource(existing, source))
+            {
+                observedCandidate = true;
+                return;
+            }
+
+            ThrowDuplicate(candidateName);
+        }
+
+        if (observedCandidate)
+            ThrowDuplicate(candidateName);
+
+        if (DbBinder.TryBindExplicitReturnValueParameter(cmd, fallbackName, source))
+            observedCandidate = true;
+    }
+
+    private static bool TryGetExistingReturnValue(
+        SqlCommand cmd,
+        [NotNullWhen(true)] out SqlParameter? parameter)
+    {
+        foreach (SqlParameter existing in cmd.Parameters)
+        {
+            if (existing.Direction == ParameterDirection.ReturnValue)
+            {
+                parameter = existing;
+                return true;
+            }
+        }
+
+        parameter = null;
+        return false;
+    }
+
+    private static void ThrowDuplicate(string name)
+    {
+        string display = OutputParameterName.From(name).SafeDisplay();
+        throw new InvalidOperationException(
+            $"Only one ReturnValue parameter can be bound to a SqlCommand. Duplicate candidate: '{display}'.");
     }
 }
 
@@ -518,6 +607,9 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         /// <summary>snake_case/upper snake 컬럼명 조회용 정규화 맵 (충돌 항목 제외)</summary>
         public static readonly FrozenDictionary<string, PropertyInfo> NormalizedPropMap;
 
+        /// <summary>정규화 이름 충돌로 output target을 결정할 수 없는 프로퍼티 이름 집합</summary>
+        public static readonly FrozenSet<string> AmbiguousNormalizedPropNames;
+
         /// <summary>Raw SQL 바인딩용 전체 프로퍼티 메타데이터 배열 (선언 순서 유지)</summary>
         public static readonly PropertyMeta[] AllProps;
 
@@ -528,6 +620,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
 
             PropMap = allProps.ToFrozenDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
             NormalizedPropMap = SqlIdentifierName.BuildNormalizedPropertyMap(allProps);
+            AmbiguousNormalizedPropNames = SqlIdentifierName.BuildAmbiguousNormalizedPropertySet(allProps);
 
             // 2) Raw SQL 파라미터 바인딩용 AllProps는 "읽기 가능한" 프로퍼티만 대상
             AllProps = allProps
@@ -539,6 +632,9 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
 
         public static bool TryGetProperty(string name, [NotNullWhen(true)] out PropertyInfo? property)
             => SqlIdentifierName.TryGetProperty(PropMap, NormalizedPropMap, name, out property);
+
+        public static bool HasAmbiguousNormalizedName(string name)
+            => SqlIdentifierName.IsAmbiguousNormalizedName(AmbiguousNormalizedPropNames, name);
     }
 
     #endregion
@@ -569,25 +665,51 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         // [Case A] SP 스키마 기반 바인딩 (DB 정의 우선)
         if (schema is not null)
         {
+            SchemaOutputTargetValidator.ValidateUniqueOutputParameterNames(schema);
+
             foreach (SpParameterMetadata meta in schema.Parameters)
             {
-                // Output/ReturnValue는 값 없이 파라미터만 생성
-                if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
-                {
-                    DbBinder.BindParameter(cmd, meta, null, strict);
-                    continue;
-                }
-
                 string name = meta.Name.TrimStart('@');
+                bool hasProperty = Meta.TryGetProperty(name, out PropertyInfo? prop);
+                SchemaOutputTargetValidator.ValidateObjectTarget(
+                    meta,
+                    strict,
+                    hasProperty ? prop : null,
+                    Meta.HasAmbiguousNormalizedName(name));
 
-                if (Meta.TryGetProperty(name, out PropertyInfo? prop) && prop.CanRead)
+                if (hasProperty && prop!.CanRead)
                 {
                     Func<T, object?> getter = GetGetter(name, prop);
                     object? value = getter(param);
+                    SchemaOutputTargetValidator.ValidateObjectValue(meta, strict, prop, value);
+
+                    if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
+                        continue;
+
+                    if (meta.Direction == ParameterDirection.ReturnValue)
+                        continue;
+
+                    // Output은 값 없이 파라미터만 생성
+                    if (meta.Direction == ParameterDirection.Output)
+                    {
+                        DbBinder.BindParameter(cmd, meta, null, strict);
+                        continue;
+                    }
+
                     DbBinder.BindParameter(cmd, meta, value, strict);
                 }
                 else
                 {
+                    if (meta.Direction == ParameterDirection.ReturnValue)
+                        continue;
+
+                    // Output은 값 없이 파라미터만 생성
+                    if (meta.Direction == ParameterDirection.Output)
+                    {
+                        DbBinder.BindParameter(cmd, meta, null, strict);
+                        continue;
+                    }
+
                     // 필수 Input 파라미터 누락 검사
                     if (meta.Direction == ParameterDirection.Input &&
                         !meta.HasDefaultValue &&
@@ -602,6 +724,7 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                 }
             }
 
+            BindExtraReturnValueParameter(cmd, param);
             return;
         }
 
@@ -616,26 +739,96 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         }
     }
 
+    private static void BindExtraReturnValueParameter(SqlCommand cmd, T param)
+    {
+        PropertyMeta[] props = Meta.AllProps;
+        bool observedCandidate = false;
+        for (int i = 0; i < props.Length; i++)
+        {
+            ref readonly PropertyMeta meta = ref props[i];
+            if (!typeof(SqlParameter).IsAssignableFrom(meta.Info.PropertyType))
+                continue;
+
+            Func<T, object?> getter = GetGetter(meta.Info.Name, meta.Info);
+            object? value = getter(param);
+            ExplicitReturnValueBinding.BindOrValidateCandidate(cmd, meta.Info.Name, value, ref observedCandidate);
+        }
+    }
+
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, T param)
     {
         if (param is null)
             return;
 
+        List<ObjectOutputWrite<T>> writes = [];
+
         foreach (SqlParameter p in cmd.Parameters)
         {
-            if (p.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
-            {
-                string name = p.ParameterName.TrimStart('@');
+            if (!OutputWriteApplier.IsOutputParameter(p))
+                continue;
 
-                if (Meta.TryGetProperty(name, out PropertyInfo? prop) && prop.CanWrite)
+            string name = p.ParameterName.TrimStart('@');
+
+            SchemaOutputTargetValidator.ThrowIfAmbiguousObjectTarget(
+                p.Direction,
+                OutputParameterName.From(p.ParameterName),
+                Meta.HasAmbiguousNormalizedName(name));
+
+            if (Meta.TryGetProperty(name, out PropertyInfo? prop))
+            {
+                if (typeof(SqlParameter).IsAssignableFrom(prop.PropertyType))
                 {
-                    Action<T, object?> setter = GetSetter(name, prop);
-                    object? value = p.Value == DBNull.Value ? null : p.Value;
-                    setter(param, value);
+                    SqlParameter? sourceParameter = SqlParameterCloneFactory.TryGetRegisteredSource(p, out SqlParameter? registeredSource)
+                        ? registeredSource
+                        : prop.GetValue(param) as SqlParameter;
+
+                    if (sourceParameter is not null)
+                    {
+                        writes.Add(new ObjectOutputWrite<T>(
+                            null,
+                            null,
+                            sourceParameter,
+                            SqlParameterCloneFactory.CaptureValueState(sourceParameter),
+                            p,
+                            null));
+                    }
+
+                    continue;
                 }
+
+                if (p.Direction == ParameterDirection.ReturnValue)
+                    continue;
+
+                if (!prop.CanWrite)
+                {
+                    SchemaOutputTargetValidator.ThrowIfReadOnlyObjectTarget(
+                        p.Direction,
+                        OutputParameterName.From(p.ParameterName),
+                        strict,
+                        prop);
+                    continue;
+                }
+
+                Action<T, object?> setter = GetSetter(name, prop);
+                writes.Add(new ObjectOutputWrite<T>(
+                    setter,
+                    prop.GetValue(param),
+                    null,
+                    default,
+                    p,
+                    OutputWriteApplier.ToClrValue(p)));
+            }
+            else
+            {
+                SchemaOutputTargetValidator.ThrowIfMissingObjectTarget(
+                    p.Direction,
+                    OutputParameterName.From(p.ParameterName),
+                    strict);
             }
         }
+
+        OutputWriteApplier.ApplyObjectWrites(param, writes);
     }
 
     #endregion
@@ -1002,6 +1195,297 @@ internal sealed class ScalarSqlMapper<T> : ISqlMapper<T>
 
 #endregion
 
+internal readonly record struct ObjectOutputWrite<T>(
+    Action<T, object?>? AssignValue,
+    object? OriginalAssignedValue,
+    SqlParameter? SourceParameter,
+    SqlParameterValueState OriginalSourceState,
+    SqlParameter CommandParameter,
+    object? NewValue)
+{
+    public void Apply(T target)
+    {
+        if (SourceParameter is not null)
+            SqlParameterCloneFactory.CopyOutputValue(SourceParameter, CommandParameter);
+
+        AssignValue?.Invoke(target, NewValue);
+    }
+
+    public void Restore(T target)
+    {
+        if (AssignValue is not null)
+        {
+            try
+            {
+                AssignValue(target, OriginalAssignedValue);
+            }
+            catch
+            {
+            }
+        }
+
+        if (SourceParameter is not null)
+        {
+            try
+            {
+                SqlParameterCloneFactory.RestoreValueState(SourceParameter, OriginalSourceState);
+            }
+            catch
+            {
+            }
+        }
+    }
+}
+
+internal static class OutputWriteApplier
+{
+    public static bool IsOutputParameter(SqlParameter parameter)
+        => parameter.Direction is ParameterDirection.Output
+            or ParameterDirection.InputOutput
+            or ParameterDirection.ReturnValue;
+
+    public static object? ToClrValue(SqlParameter parameter)
+        => parameter.Value == DBNull.Value ? null : parameter.Value;
+
+    public static void ApplyObjectWrites<T>(T target, List<ObjectOutputWrite<T>> writes)
+    {
+        if (writes.Count == 0)
+            return;
+
+        int appliedCount = 0;
+        try
+        {
+            foreach (ObjectOutputWrite<T> write in writes)
+            {
+                appliedCount++;
+                write.Apply(target);
+            }
+        }
+        catch (Exception ex)
+        {
+            for (int i = appliedCount - 1; i >= 0; i--)
+                writes[i].Restore(target);
+
+            throw CreateObjectOutputApplyException(ex);
+        }
+    }
+
+    private static InvalidOperationException CreateObjectOutputApplyException(Exception ex)
+        => new(
+            "Output parameters could not be applied transactionally. " +
+            $"Cause: {ex.GetType().Name}.");
+}
+
+internal static class SchemaOutputTargetValidator
+{
+    public static void ValidateUniqueOutputParameterNames(SpSchema schema)
+    {
+        Dictionary<string, OutputParameterName>? seen = null;
+        foreach (SpParameterMetadata meta in schema.Parameters)
+        {
+            if (meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue))
+                continue;
+
+            OutputParameterName name = OutputParameterName.From(meta.Name);
+            seen ??= new Dictionary<string, OutputParameterName>(StringComparer.Ordinal);
+            if (seen.TryGetValue(name.Normalized, out OutputParameterName existing))
+            {
+                throw new InvalidOperationException(
+                    $"Output parameter name '{name.SafeDisplay()}' conflicts with '{existing.SafeDisplay()}'.");
+            }
+
+            seen.Add(name.Normalized, name);
+        }
+    }
+
+    public static void ValidateObjectTarget(
+        SpParameterMetadata meta,
+        bool strict,
+        [NotNullWhen(true)] PropertyInfo? property,
+        bool ambiguousTarget)
+    {
+        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(
+            meta.Name,
+            meta.SqlDbType,
+            meta.Direction,
+            meta.IsCursorRef);
+
+        if (ambiguousTarget)
+        {
+            ThrowIfAmbiguousObjectTarget(meta.Direction, OutputParameterName.From(meta.Name), ambiguousTarget);
+        }
+
+        if (meta.Direction == ParameterDirection.ReturnValue)
+        {
+            if (property is null)
+                return;
+
+            OutputParameterName returnName = OutputParameterName.From(meta.Name);
+            if (!property.CanRead || !typeof(SqlParameter).IsAssignableFrom(property.PropertyType))
+            {
+                throw new InvalidOperationException(
+                    $"ReturnValue parameter '{returnName.SafeDisplay()}' requires an explicit SqlParameter property.");
+            }
+
+            return;
+        }
+
+        if (meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
+            return;
+
+        if (meta.Direction == ParameterDirection.Output)
+        {
+            OutputParameterName outputName = OutputParameterName.From(meta.Name);
+            if (property is null)
+            {
+                if (strict)
+                {
+                    throw new InvalidOperationException(
+                        $"Strict output parameter '{outputName.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
+                }
+
+                return;
+            }
+
+            if (!property.CanRead)
+            {
+                throw new InvalidOperationException(
+                    $"Strict output parameter '{outputName.SafeDisplay()}' maps to unreadable DTO property '{property.Name}'.");
+            }
+
+            if (strict &&
+                !typeof(SqlParameter).IsAssignableFrom(property.PropertyType) &&
+                !property.CanWrite)
+            {
+                throw new InvalidOperationException(
+                    $"Strict output parameter '{outputName.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
+            }
+
+            return;
+        }
+
+        if (!strict)
+            return;
+
+        OutputParameterName name = OutputParameterName.From(meta.Name);
+        if (property is null)
+        {
+            throw new InvalidOperationException(
+                $"Strict input-output parameter '{name.SafeDisplay()}' requires a readable DTO property or explicit SqlParameter source.");
+        }
+
+        if (!property.CanRead)
+        {
+            throw new InvalidOperationException(
+                $"Strict input-output parameter '{name.SafeDisplay()}' maps to unreadable DTO property '{property.Name}'.");
+        }
+
+        if (!typeof(SqlParameter).IsAssignableFrom(property.PropertyType) &&
+            !property.CanWrite)
+        {
+            throw new InvalidOperationException(
+                $"Strict input-output parameter '{name.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
+        }
+    }
+
+    public static void ThrowIfAmbiguousObjectTarget(
+        ParameterDirection direction,
+        OutputParameterName name,
+        bool ambiguousTarget)
+    {
+        if (!ambiguousTarget ||
+            direction is not (ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"DTO output target '{name.SafeDisplay()}' is ambiguous.");
+    }
+
+    public static void ThrowIfMissingObjectTarget(
+        ParameterDirection direction,
+        OutputParameterName name,
+        bool strict)
+    {
+        if (!strict || direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
+            return;
+
+        throw new InvalidOperationException(
+            $"Strict {DescribeOutputDirection(direction)} parameter '{name.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
+    }
+
+    public static void ThrowIfReadOnlyObjectTarget(
+        ParameterDirection direction,
+        OutputParameterName name,
+        bool strict,
+        PropertyInfo property)
+    {
+        if (!strict || direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
+            return;
+
+        throw new InvalidOperationException(
+            $"Strict {DescribeOutputDirection(direction)} parameter '{name.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source, but DTO property '{property.Name}' is read-only.");
+    }
+
+    public static void ValidateDictionaryTarget(
+        SpParameterMetadata meta,
+        bool strict,
+        bool hasTarget)
+    {
+        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(
+            meta.Name,
+            meta.SqlDbType,
+            meta.Direction,
+            meta.IsCursorRef);
+
+        if (meta.Direction == ParameterDirection.ReturnValue)
+            return;
+
+        if (!strict || meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
+        {
+            return;
+        }
+
+        if (!hasTarget)
+        {
+            OutputParameterName name = OutputParameterName.From(meta.Name);
+            throw new InvalidOperationException(
+                $"Strict {DescribeOutputDirection(meta.Direction)} parameter '{name.SafeDisplay()}' requires a Dictionary target key or explicit SqlParameter source.");
+        }
+    }
+
+    public static void ValidateObjectValue(
+        SpParameterMetadata meta,
+        bool strict,
+        PropertyInfo property,
+        object? value)
+    {
+        if (!typeof(SqlParameter).IsAssignableFrom(property.PropertyType))
+            return;
+
+        if (value is SqlParameter)
+            return;
+
+        OutputParameterName name = OutputParameterName.From(meta.Name);
+        if (meta.Direction == ParameterDirection.ReturnValue)
+        {
+            throw new InvalidOperationException(
+                $"ReturnValue parameter '{name.SafeDisplay()}' requires a non-null explicit SqlParameter source.");
+        }
+
+        if (strict &&
+            meta.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
+        {
+            throw new InvalidOperationException(
+                $"Strict output parameter '{name.SafeDisplay()}' requires a non-null explicit SqlParameter source.");
+        }
+    }
+
+    private static string DescribeOutputDirection(ParameterDirection direction)
+        => direction == ParameterDirection.InputOutput ? "input-output" : "output";
+}
+
 #region [Dictionary 매퍼]
 
 /// <summary>
@@ -1040,22 +1524,40 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
         //   - parameters.Count == 0 이더라도 필수 파라미터 누락 검사를 수행해야 합니다.
         //   - Strict 모드에서 NOT NULL + DEFAULT 없음 + Key 없음이면 예외를 던집니다.
         // ---------------------------------------------------------------------
+        SchemaOutputTargetValidator.ValidateUniqueOutputParameterNames(schema);
+        ValidateSchemaOutputTargets(parameters, schema, strict);
+
         foreach (SpParameterMetadata meta in schema.Parameters)
         {
-            if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
-            {
-                DbBinder.BindParameter(cmd, meta, null, strict);
-                continue;
-            }
-
             string key = meta.Name.TrimStart('@');
 
             if (TryGet(parameters, key, out object? value))
             {
+                if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
+                    continue;
+
+                if (meta.Direction == ParameterDirection.ReturnValue)
+                    continue;
+
+                if (meta.Direction == ParameterDirection.Output)
+                {
+                    DbBinder.BindParameter(cmd, meta, null, strict);
+                    continue;
+                }
+
                 DbBinder.BindParameter(cmd, meta, value, strict);
             }
             else
             {
+                if (meta.Direction == ParameterDirection.ReturnValue)
+                    continue;
+
+                if (meta.Direction == ParameterDirection.Output)
+                {
+                    DbBinder.BindParameter(cmd, meta, null, strict);
+                    continue;
+                }
+
                 // Strict 모드: 필수 입력 파라미터 누락 시 명시적으로 예외
                 if (strict &&
                     !meta.IsNullable &&
@@ -1069,6 +1571,10 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
                 DbBinder.BindParameter(cmd, meta, null, strict);
             }
         }
+
+        bool observedCandidate = false;
+        foreach (KeyValuePair<string, object?> kv in parameters)
+            ExplicitReturnValueBinding.BindOrValidateCandidate(cmd, kv.Key, kv.Value, ref observedCandidate);
     }
 
     /// <inheritdoc />
@@ -1077,179 +1583,85 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
         if (parameters is null)
             return;
 
+        List<DictionaryOutputWrite> writes = [];
+
         foreach (SqlParameter param in cmd.Parameters)
         {
-            if (param.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
+            if (!OutputWriteApplier.IsOutputParameter(param))
+                continue;
+
+            OutputParameterName name = OutputParameterName.From(param.ParameterName);
+            bool hasTarget = TryGetUnique(parameters, name, out string? targetKey, out object? originalValue);
+            SqlParameter? sourceParameter = SqlParameterCloneFactory.TryGetRegisteredSource(param, out SqlParameter? registeredSource)
+                ? registeredSource
+                : originalValue as SqlParameter;
+
+            if (param.Direction == ParameterDirection.ReturnValue)
             {
-                string key = param.ParameterName.TrimStart('@');
-                parameters[key] = param.Value == DBNull.Value ? null : param.Value;
+                if (sourceParameter is not null)
+                {
+                    writes.Add(DictionaryOutputWrite.ForSourceOnly(
+                        sourceParameter,
+                        SqlParameterCloneFactory.CaptureValueState(sourceParameter),
+                        param));
+                }
+
+                continue;
             }
+
+            if (!hasTarget)
+            {
+                if (strict)
+                {
+                    throw new InvalidOperationException(
+                        $"Strict {DescribeOutputDirection(param.Direction)} parameter '{name.SafeDisplay()}' requires a Dictionary target key or explicit SqlParameter source.");
+                }
+
+                targetKey = name.Canonical;
+            }
+
+            writes.Add(DictionaryOutputWrite.ForDictionary(
+                targetKey!,
+                hasTarget,
+                originalValue,
+                OutputWriteApplier.ToClrValue(param),
+                sourceParameter,
+                sourceParameter is null ? default : SqlParameterCloneFactory.CaptureValueState(sourceParameter),
+                param));
         }
+
+        ApplyDictionaryOutputWrites(parameters, writes);
     }
 
     /// <inheritdoc />
     public Dictionary<string, object?> MapResult(DbDataReader reader)
     {
         Dictionary<string, object?> row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
-
-        // ⚙️ [PERFORMANCE FIX] ObjectPool을 이용한 중복 컬럼 처리 (O(N) & Zero Allocation)
-        // - 기존: 문자열 할당 + Dictionary 조회 반복 (O(N²))
-        // - 개선: Pooled Dictionary<string, int>로 등장 횟수 추적 (O(N))
         Dictionary<string, int> tracker = s_trackerPool.Get();
         try
         {
             for (int i = 0; i < reader.FieldCount; i++)
             {
-                string name = reader.GetName(i);
-                if (string.IsNullOrWhiteSpace(name))
-                    name = $"Column{i}";
+                string baseName = reader.GetName(i);
+                if (string.IsNullOrWhiteSpace(baseName))
+                    baseName = $"Column{i}";
 
-                if (tracker.TryGetValue(name, out int count))
+                string targetName = baseName;
+                if (row.ContainsKey(targetName))
                 {
-                    // 중복 발견: 횟수 증가 및 접미사 붙인 이름 생성
-                    count++;
-                    tracker[name] = count;
-                    name = $"{name}_{count - 1}"; // C# index convention adjustment if needed, but original logic was _1, _2...
-                                                  // Wait, original logic:
-                                                  // Col -> Col (1st)
-                                                  // Col -> Col_1 (2nd)
-                                                  // So if count becomes 2, we want _1.
-                                                  // Let's refine:
-                                                  // default count is 0 if not found? No, TryGetValue returns true/false.
-                                                  // If found, it means we saw it at least once. 
-                                                  // 1st time: Add(name, 1). Key = name.
-                                                  // 2nd time: Get name -> 1. New name = name + "_" + 1. Update to 2.
-                                                  // 3rd time: Get name -> 2. New name = name + "_" + 2. Update to 3.
+                    if (!tracker.TryGetValue(baseName, out int suffix))
+                        suffix = 1;
 
-                    // Logic check:
-                    // If I use the *modified* name for the row key? No, row key is unique.
-                    // I need to track the *original* name's frequency.
+                    do
+                    {
+                        targetName = $"{baseName}_{suffix++}";
+                    } while (row.ContainsKey(targetName));
+
+                    tracker[baseName] = suffix;
                 }
-                else
-                {
-                    tracker[name] = 1;
-                }
-
-                // But wait, what if "Col" and "Col_1" assume exist as columns?
-                // DB Columns: [Col, Col, Col_1]
-                // 1. "Col" -> Tracker["Col"]=1. Row["Col"] = val.
-                // 2. "Col" -> Tracker["Col"]=1 exists. New name "Col_1". Tracker["Col"]=2.
-                //    Row["Col_1"] = val.
-                // 3. "Col_1" -> Tracker["Col_1"] is empty. Tracker["Col_1"]=1. Row["Col_1"] = val.
-                //    COLLISION in Row! Row["Col_1"] already set by step 2!
-
-                // The previous implementation checked `row.ContainsKey(name)`.
-                // My tracker optimization only tracks *original* names.
-                // To be robust against mixed scenarios (implicit duplicates vs explicit duplicates),
-                // we must check `row.ContainsKey` eventually OR track *generated* names too.
-
-                // If I utilize `row.ContainsKey` *after* generation?
-                // The goal is to minimize simple duplicates.
-                // If I use the Tracker for the *base* name, I generate "Col_1".
-                // If "Col_1" actually exists in the columns later?
-                // Then step 3 will try to look up "Col_1". It finds "Col_1" in tracker? No.
-                // It inserts "Col_1".
-                // Then it tries to add to Row. `row.Add` will throw or `row[]` will overwrite?
-                // `row[name] = value` overwrites. The requirement is usually to preserve all data but with unique keys.
-                // Standard `Dapper` behavior: overwrite or rename? 
-                // The original code `while (row.ContainsKey(name))` handled ALL collisions, including generated ones.
-
-                // To maintain full correctness (handling [Col, Col, Col_1]), I should combine Tracker with a fallback check
-                // OR ensure Tracker tracks *everything*.
-
-                // Use `tracker` to guarantee uniqueness?
-                // We need to resolve the name to something unique.
-                // If "Col" comes, we want "Col".
-                // If "Col" comes again, we want "Col_1".
-                // If "Col_1" comes (originally), we want "Col_1".
-                //   If Row already has "Col_1" (from Step 2), we have a collision.
-
-                // So checking `tracker` is not enough if we only track original names.
-                // We need to check if the *target* name is taken.
-                // But checking `row.ContainsKey` is fast *if it returns false*.
-                // The expensive part was the loop `while(row.ContainsKey)` doing allocations.
-
-                // Hybrid approach:
-                // 1. Use Tracker to predict the next suffix for `originalName`.
-                //    Tracker["Col"] = 1. -> "Col".
-                //    Tracker["Col"] = 2. -> "Col_1".
-                // 2. Check `row.ContainsKey("Col_1")`.
-                //    If false, good.
-                //    If true (corner case: "Col_1" existed before "Col" appeared 2nd time? No, order matters.
-                //    OR "Col_1" was a real column that appeared *before* the 2nd "Col"?
-
-                // Example: [Col_1, Col, Col]
-                // 1. "Col_1" -> Row["Col_1"].
-                // 2. "Col" -> Row["Col"].
-                // 3. "Col" -> Tracker says 2nd. Gen "Col_1". Check Row["Col_1"] -> True!
-                //    We need "Col_2".
-
-                // So we DO need a loop if we want to be perfectly robust.
-                // BUT, in 99% of cases (just duplicates), the Tracker gives the correct next suffix immediately.
-                // So the loop will run 0 times.
-
-                // Refined Algorithm:
-                // 1. Get original name.
-                // 2. If !row.ContainsKey(original), use it.
-                // 3. Else (Collision):
-                //    Use Tracker to get hint. 
-                //    Start loop from Hint.
-                //    Update Tracker with new Hint.
-
-                // Wait, if I simply use `row.ContainsKey` inside the loop, I'm back to allocations?
-                // No, I can avoid the *failed* allocations by using the tracker to jump ahead.
-
-                // Actually, strict `DuplicateCase` benchmark just has [Col, Col, Col, Col, Col].
-                // 1. "Col". Row has it? No. Add. Tracker["Col"] = 1.
-                // 2. "Col". Row has it? Yes.
-                //    Tracker["Col"] is 1. Next candidate: "Col_1".
-                //    Row has "Col_1"? No. Add. Tracker["Col"] = 2.
-                // 3. "Col". Row has it? Yes.
-                //    Tracker["Col"] is 2. Next candidate: "Col_2".
-                //    Row has "Col_2"? No. Add. Tracker["Col"] = 3.
-
-                // This covers the benchmark case perfectly with 0 failed lookups/allocations.
-                // Corner case [Col_1, Col, Col]:
-                // 1. "Col_1". Row no. Add. Tracker["Col_1"]=1.
-                // 2. "Col". Row no. Add. Tracker["Col"]=1.
-                // 3. "Col". Row yes. Tracker["Col"]=1. Candidate "Col_1".
-                //    Row yes! Loop: Increment Tracker["Col"] to 2. Candidate "Col_2".
-                //    Row no. Add.
-
-                // Implementation Details:
-                // - Tracker stores *only* counts for attempted names?
-                // - Let's verify `originalName` is what we track.
-
-                string originalName = name;
-                if (!row.ContainsKey(originalName))
-                {
-                    row[originalName] = reader.GetValue(i) == DBNull.Value ? null : reader.GetValue(i);
-                    // Update tracker for this name just in case? 
-                    // Optimization: Only touch tracker if we *know* we have duplicates?
-                    // No, we don't know future columns.
-                    // But populating tracker for every unique column adds overhead (O(N) inserts).
-                    // Can we avoid using tracker until we hit a collision?
-                    // Yes. `if (row.ContainsKey)` -> then ensure tracker has a count.
-
-                    continue;
-                }
-
-                // Collision!
-                if (!tracker.TryGetValue(originalName, out int suffix))
-                {
-                    suffix = 1;
-                }
-
-                string newName;
-                do
-                {
-                    newName = $"{originalName}_{suffix++}";
-                } while (row.ContainsKey(newName));
-
-                tracker[originalName] = suffix; // Save for next time (Jump ahead)
 
                 object value = reader.GetValue(i);
-                row[newName] = value == DBNull.Value ? null : value;
+                row[targetName] = value == DBNull.Value ? null : value;
             }
         }
         finally
@@ -1260,7 +1672,6 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
         return row;
     }
 
-    // Pool Declaration
     private static readonly Microsoft.Extensions.ObjectPool.ObjectPool<Dictionary<string, int>> s_trackerPool =
         new Microsoft.Extensions.ObjectPool.DefaultObjectPool<Dictionary<string, int>>(new TrackerPolicy());
 
@@ -1273,6 +1684,132 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
             return true;
         }
     }
+
+    private readonly record struct DictionaryOutputWrite(
+        string? TargetKey,
+        bool TargetKeyExisted,
+        object? OriginalValue,
+        object? NewValue,
+        SqlParameter? SourceParameter,
+        SqlParameterValueState OriginalSourceState,
+        SqlParameter CommandParameter)
+    {
+        public static DictionaryOutputWrite ForDictionary(
+            string targetKey,
+            bool targetKeyExisted,
+            object? originalValue,
+            object? newValue,
+            SqlParameter? sourceParameter,
+            SqlParameterValueState originalSourceState,
+            SqlParameter commandParameter)
+            => new(
+                targetKey,
+                targetKeyExisted,
+                originalValue,
+                newValue,
+                sourceParameter,
+                originalSourceState,
+                commandParameter);
+
+        public static DictionaryOutputWrite ForSourceOnly(
+            SqlParameter sourceParameter,
+            SqlParameterValueState originalSourceState,
+            SqlParameter commandParameter)
+            => new(
+                null,
+                false,
+                null,
+                null,
+                sourceParameter,
+                originalSourceState,
+                commandParameter);
+
+        public void Apply(Dictionary<string, object?> parameters)
+        {
+            if (SourceParameter is not null)
+                SqlParameterCloneFactory.CopyOutputValue(SourceParameter, CommandParameter);
+
+            if (TargetKey is not null)
+                parameters[TargetKey] = NewValue;
+        }
+
+        public void Restore(Dictionary<string, object?> parameters)
+        {
+            if (TargetKey is not null)
+            {
+                try
+                {
+                    if (TargetKeyExisted)
+                        parameters[TargetKey] = OriginalValue;
+                    else
+                        parameters.Remove(TargetKey);
+                }
+                catch
+                {
+                }
+            }
+
+            if (SourceParameter is not null)
+            {
+                try
+                {
+                    SqlParameterCloneFactory.RestoreValueState(SourceParameter, OriginalSourceState);
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    private static void ValidateSchemaOutputTargets(
+        Dictionary<string, object?> parameters,
+        SpSchema schema,
+        bool strict)
+    {
+        foreach (SpParameterMetadata meta in schema.Parameters)
+        {
+            if (meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue))
+                continue;
+
+            OutputParameterName name = OutputParameterName.From(meta.Name);
+            bool hasTarget = TryGetUnique(parameters, name, out _, out _);
+            SchemaOutputTargetValidator.ValidateDictionaryTarget(meta, strict, hasTarget);
+        }
+    }
+
+    private static void ApplyDictionaryOutputWrites(
+        Dictionary<string, object?> parameters,
+        List<DictionaryOutputWrite> writes)
+    {
+        if (writes.Count == 0)
+            return;
+
+        int appliedCount = 0;
+        try
+        {
+            foreach (DictionaryOutputWrite write in writes)
+            {
+                appliedCount++;
+                write.Apply(parameters);
+            }
+        }
+        catch (Exception ex)
+        {
+            for (int i = appliedCount - 1; i >= 0; i--)
+                writes[i].Restore(parameters);
+
+            throw CreateDictionaryOutputApplyException(ex);
+        }
+    }
+
+    private static InvalidOperationException CreateDictionaryOutputApplyException(Exception ex)
+        => new(
+            "Dictionary output parameters could not be applied transactionally. " +
+            $"Cause: {ex.GetType().Name}.");
+
+    private static string DescribeOutputDirection(ParameterDirection direction)
+        => direction == ParameterDirection.InputOutput ? "input-output" : "output";
 
     /// <summary>
     /// Dictionary에서 대소문자를 무시하고 Key를 조회합니다.
@@ -1295,6 +1832,35 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
 
         value = null;
         return false;
+    }
+
+    private static bool TryGetUnique(
+        Dictionary<string, object?> dict,
+        OutputParameterName name,
+        [NotNullWhen(true)] out string? targetKey,
+        out object? value)
+    {
+        targetKey = null;
+        value = null;
+        int matches = 0;
+
+        foreach (KeyValuePair<string, object?> kv in dict)
+        {
+            if (!name.Matches(kv.Key))
+                continue;
+
+            matches++;
+            if (matches > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Output target '{name.SafeDisplay()}' is ambiguous.");
+            }
+
+            targetKey = kv.Key;
+            value = kv.Value;
+        }
+
+        return matches == 1;
     }
 }
 
@@ -1326,19 +1892,35 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
         }
 
         // [Case B] SP 스키마 기반 바인딩
+        SchemaOutputTargetValidator.ValidateUniqueOutputParameterNames(schema);
+        ValidateSchemaOutputTargets(row.Table, schema);
+
         foreach (SpParameterMetadata meta in schema.Parameters)
         {
+            string name = meta.Name.TrimStart('@');
+
             if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
             {
+                if (row.Table.Columns.Contains(name) &&
+                    DbBinder.TryBindExplicitParameter(cmd, meta, row[name], strict))
+                {
+                    continue;
+                }
+
+                if (meta.Direction == ParameterDirection.ReturnValue)
+                    continue;
+
                 DbBinder.BindParameter(cmd, meta, null, strict);
                 continue;
             }
 
-            string name = meta.Name.TrimStart('@');
-
             if (row.Table.Columns.Contains(name))
             {
-                DbBinder.BindParameter(cmd, meta, row[name], strict);
+                object value = row[name];
+                if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
+                    continue;
+
+                DbBinder.BindParameter(cmd, meta, value, strict);
             }
             else
             {
@@ -1353,19 +1935,308 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
                 DbBinder.BindParameter(cmd, meta, null, strict);
             }
         }
+
+        BindExtraReturnValueParameter(cmd, row);
     }
 
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, DataRow parameters)
     {
-        // DataRow에 Output 파라미터를 다시 반영하는 시나리오는 많지 않으므로 현재는 미지원.
-        // 필요 시 DataRow[column] = param.Value 패턴으로 확장 가능합니다.
+        if (parameters is null)
+            return;
+
+        List<DataRowOutputWrite> writes = [];
+
+        foreach (SqlParameter param in cmd.Parameters)
+        {
+            if (param.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue))
+                continue;
+
+            OutputParameterName name = OutputParameterName.From(param.ParameterName);
+            if (param.Direction == ParameterDirection.ReturnValue)
+            {
+                SqlParameter? returnSourceParameter = GetDataRowReturnValueSource(param, parameters, name);
+                if (returnSourceParameter is not null)
+                {
+                    writes.Add(DataRowOutputWrite.ForSourceOnly(
+                        returnSourceParameter,
+                        SqlParameterCloneFactory.CaptureValueState(returnSourceParameter),
+                        param));
+                }
+
+                continue;
+            }
+
+            DataColumn? column = TryGetUniqueOutputColumn(parameters.Table, name);
+            if (column is null)
+            {
+                if (strict &&
+                    param.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
+                {
+                    throw new InvalidOperationException(
+                        $"Strict {DescribeOutputDirection(param.Direction)} parameter '{name.SafeDisplay()}' requires a DataRow target column or explicit SqlParameter source.");
+                }
+
+                continue;
+            }
+
+            ValidateDataRowOutputColumn(column, name);
+
+            object originalValue = parameters[column];
+            SqlParameter? sourceParameter = GetDataRowOutputSource(
+                param,
+                originalValue);
+
+            writes.Add(DataRowOutputWrite.ForDataRow(
+                column,
+                originalValue,
+                param.Value ?? DBNull.Value,
+                sourceParameter,
+                sourceParameter is null ? default : SqlParameterCloneFactory.CaptureValueState(sourceParameter),
+                param));
+        }
+
+        ApplyDataRowOutputWrites(parameters, writes);
     }
 
     /// <inheritdoc />
     public DataRow MapResult(DbDataReader reader)
         => throw new NotSupportedException(
             "DataRow로의 결과 매핑은 지원하지 않습니다. DTO 또는 Dictionary 매핑을 사용해 주세요.");
+
+    private readonly record struct DataRowOutputWrite(
+        DataColumn? Column,
+        object? OriginalValue,
+        object Value,
+        SqlParameter? SourceParameter,
+        SqlParameterValueState OriginalSourceState,
+        SqlParameter CommandParameter)
+    {
+        public static DataRowOutputWrite ForDataRow(
+            DataColumn column,
+            object originalValue,
+            object value,
+            SqlParameter? sourceParameter,
+            SqlParameterValueState originalSourceState,
+            SqlParameter commandParameter)
+            => new(
+                column,
+                originalValue,
+                value,
+                sourceParameter,
+                originalSourceState,
+                commandParameter);
+
+        public static DataRowOutputWrite ForSourceOnly(
+            SqlParameter sourceParameter,
+            SqlParameterValueState originalSourceState,
+            SqlParameter commandParameter)
+            => new(
+                null,
+                null,
+                DBNull.Value,
+                sourceParameter,
+                originalSourceState,
+                commandParameter);
+    }
+
+    private static void BindExtraReturnValueParameter(SqlCommand cmd, DataRow row)
+    {
+        bool observedCandidate = false;
+        foreach (DataColumn column in row.Table.Columns)
+            ExplicitReturnValueBinding.BindOrValidateCandidate(
+                cmd,
+                column.ColumnName,
+                row[column],
+                ref observedCandidate);
+    }
+
+    private static DataColumn? TryGetUniqueOutputColumn(DataTable table, OutputParameterName name)
+    {
+        DataColumn? match = null;
+        foreach (DataColumn column in table.Columns)
+        {
+            if (!name.Matches(column.ColumnName))
+                continue;
+
+            if (match is not null)
+            {
+                throw new InvalidOperationException(
+                    $"DataRow output target '{name.SafeDisplay()}' is ambiguous.");
+            }
+
+            match = column;
+        }
+
+        return match;
+    }
+
+    private void ValidateSchemaOutputTargets(DataTable table, SpSchema schema)
+    {
+        foreach (SpParameterMetadata meta in schema.Parameters)
+        {
+            if (meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue))
+                continue;
+
+            SqlParameterCloneFactory.ValidateSupportedOutputMetadata(
+                meta.Name,
+                meta.SqlDbType,
+                meta.Direction,
+                meta.IsCursorRef);
+
+            if (meta.Direction == ParameterDirection.ReturnValue)
+                continue;
+
+            OutputParameterName name = OutputParameterName.From(meta.Name);
+            DataColumn? column = TryGetUniqueOutputColumn(table, name);
+            if (column is null)
+            {
+                if (strict &&
+                    meta.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
+                {
+                    throw new InvalidOperationException(
+                        $"Strict {DescribeOutputDirection(meta.Direction)} parameter '{name.SafeDisplay()}' requires a DataRow target column or explicit SqlParameter source.");
+                }
+
+                continue;
+            }
+
+            ValidateDataRowOutputColumn(column, name);
+        }
+    }
+
+    private static SqlParameter? GetDataRowReturnValueSource(
+        SqlParameter commandParameter,
+        DataRow row,
+        OutputParameterName name)
+    {
+        if (SqlParameterCloneFactory.TryGetRegisteredSource(commandParameter, out SqlParameter? sourceParameter))
+            return sourceParameter;
+
+        SqlParameter? match = null;
+        foreach (DataColumn column in row.Table.Columns)
+        {
+            if (!name.Matches(column.ColumnName) || row[column] is not SqlParameter source)
+                continue;
+
+            if (match is not null)
+            {
+                throw new InvalidOperationException(
+                    $"DataRow output source '{name.SafeDisplay()}' is ambiguous.");
+            }
+
+            match = source;
+        }
+
+        return match;
+    }
+
+    private static SqlParameter? GetDataRowOutputSource(
+        SqlParameter commandParameter,
+        object originalValue)
+    {
+        if (SqlParameterCloneFactory.TryGetRegisteredSource(commandParameter, out SqlParameter? sourceParameter))
+            return sourceParameter;
+
+        return originalValue as SqlParameter;
+    }
+
+    private static void ValidateDataRowOutputColumn(DataColumn column, OutputParameterName name)
+    {
+        if (!string.IsNullOrEmpty(column.Expression))
+        {
+            throw new InvalidOperationException(
+                $"DataRow output target '{name.SafeDisplay()}' is an expression column.");
+        }
+
+        if (column.ReadOnly)
+        {
+            throw new InvalidOperationException(
+                $"DataRow output target '{name.SafeDisplay()}' is read-only.");
+        }
+    }
+
+    private static void ApplyDataRowOutputWrites(DataRow row, List<DataRowOutputWrite> writes)
+    {
+        if (writes.Count == 0)
+            return;
+
+        bool editing = false;
+
+        try
+        {
+            row.BeginEdit();
+            editing = true;
+
+            foreach (DataRowOutputWrite write in writes)
+            {
+                if (write.Column is not null)
+                    row[write.Column] = write.Value;
+            }
+
+            row.EndEdit();
+            editing = false;
+
+            foreach (DataRowOutputWrite write in writes)
+            {
+                if (write.SourceParameter is not null)
+                    SqlParameterCloneFactory.CopyOutputValue(write.SourceParameter, write.CommandParameter);
+            }
+        }
+        catch (Exception ex)
+        {
+            RestoreDataRowOutputWrites(row, writes, editing);
+            throw CreateDataRowOutputApplyException(ex);
+        }
+    }
+
+    private static InvalidOperationException CreateDataRowOutputApplyException(Exception ex)
+        => new(
+            "DataRow output parameters could not be applied transactionally. " +
+            $"Cause: {ex.GetType().Name}.");
+
+    private static string DescribeOutputDirection(ParameterDirection direction)
+        => direction == ParameterDirection.InputOutput ? "input-output" : "output";
+
+    private static void RestoreDataRowOutputWrites(
+        DataRow row,
+        List<DataRowOutputWrite> writes,
+        bool editing)
+    {
+        try
+        {
+            if (editing)
+                row.CancelEdit();
+        }
+        catch
+        {
+        }
+
+        foreach (DataRowOutputWrite write in writes)
+        {
+            if (write.Column is not null)
+            {
+                try
+                {
+                    row[write.Column] = write.OriginalValue ?? DBNull.Value;
+                }
+                catch
+                {
+                }
+            }
+
+            if (write.SourceParameter is not null)
+            {
+                try
+                {
+                    SqlParameterCloneFactory.RestoreValueState(write.SourceParameter, write.OriginalSourceState);
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
 }
 
 #endregion
@@ -1396,6 +2267,7 @@ internal sealed class ReflectionParameterMapper<
     {
         public static readonly FrozenDictionary<string, PropertyInfo> Properties;
         public static readonly FrozenDictionary<string, PropertyInfo> NormalizedProperties;
+        public static readonly FrozenSet<string> AmbiguousNormalizedProperties;
         public static readonly PropertyMeta[] AllProperties;
         private static readonly bool s_canReadMetadataTokens = RuntimeFeatureSwitch.IsDynamicCodeSupported;
 
@@ -1405,6 +2277,7 @@ internal sealed class ReflectionParameterMapper<
             Properties = props
                 .ToFrozenDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
             NormalizedProperties = SqlIdentifierName.BuildNormalizedPropertyMap(props);
+            AmbiguousNormalizedProperties = SqlIdentifierName.BuildAmbiguousNormalizedPropertySet(props);
 
             AllProperties = props
                 .Where(p => p.CanRead)
@@ -1416,6 +2289,9 @@ internal sealed class ReflectionParameterMapper<
 
         public static bool TryGetProperty(string name, [NotNullWhen(true)] out PropertyInfo? property)
             => SqlIdentifierName.TryGetProperty(Properties, NormalizedProperties, name, out property);
+
+        public static bool HasAmbiguousNormalizedName(string name)
+            => SqlIdentifierName.IsAmbiguousNormalizedName(AmbiguousNormalizedProperties, name);
 
         private static int GetMetadataTokenOrMax(PropertyInfo property)
             => property.Module.Assembly.IsDynamic
@@ -1434,23 +2310,45 @@ internal sealed class ReflectionParameterMapper<
         // [Case A] SP 스키마 기반 바인딩
         if (schema is not null)
         {
+            SchemaOutputTargetValidator.ValidateUniqueOutputParameterNames(schema);
+
             foreach (SpParameterMetadata meta in schema.Parameters)
             {
-                if (meta.Direction is ParameterDirection.Output or ParameterDirection.ReturnValue)
-                {
-                    DbBinder.BindParameter(cmd, meta, null, strict);
-                    continue;
-                }
-
                 string name = meta.Name.TrimStart('@');
+                bool hasProperty = TypeCache.TryGetProperty(name, out PropertyInfo? prop);
+                SchemaOutputTargetValidator.ValidateObjectTarget(
+                    meta,
+                    strict,
+                    hasProperty ? prop : null,
+                    TypeCache.HasAmbiguousNormalizedName(name));
 
-                if (TypeCache.TryGetProperty(name, out PropertyInfo? prop) && prop.CanRead)
+                if (hasProperty && prop!.CanRead)
                 {
                     object? value = prop.GetValue(parameters);
+                    SchemaOutputTargetValidator.ValidateObjectValue(meta, strict, prop, value);
+
+                    if (DbBinder.TryBindExplicitParameter(cmd, meta, value, strict))
+                        continue;
+
+                    if (meta.Direction == ParameterDirection.Output)
+                    {
+                        DbBinder.BindParameter(cmd, meta, null, strict);
+                        continue;
+                    }
+
                     DbBinder.BindParameter(cmd, meta, value, strict);
                 }
                 else
                 {
+                    if (meta.Direction == ParameterDirection.ReturnValue)
+                        continue;
+
+                    if (meta.Direction == ParameterDirection.Output)
+                    {
+                        DbBinder.BindParameter(cmd, meta, null, strict);
+                        continue;
+                    }
+
                     if (meta.Direction == ParameterDirection.Input && meta.HasDefaultValue)
                         continue;
 
@@ -1466,6 +2364,7 @@ internal sealed class ReflectionParameterMapper<
                 }
             }
 
+            BindExtraReturnValueParameter(cmd, parameters);
             return;
         }
 
@@ -1479,25 +2378,94 @@ internal sealed class ReflectionParameterMapper<
         }
     }
 
+    private static void BindExtraReturnValueParameter(SqlCommand cmd, T parameters)
+    {
+        PropertyMeta[] props = TypeCache.AllProperties;
+        bool observedCandidate = false;
+        for (int i = 0; i < props.Length; i++)
+        {
+            ref readonly PropertyMeta meta = ref props[i];
+            if (!typeof(SqlParameter).IsAssignableFrom(meta.Info.PropertyType))
+                continue;
+
+            object? value = meta.Info.GetValue(parameters);
+            ExplicitReturnValueBinding.BindOrValidateCandidate(cmd, meta.Info.Name, value, ref observedCandidate);
+        }
+    }
+
     /// <inheritdoc />
     public void MapOutputParameters(SqlCommand cmd, T parameters)
     {
         if (parameters is null)
             return;
 
+        List<ObjectOutputWrite<T>> writes = [];
+
         foreach (SqlParameter p in cmd.Parameters)
         {
-            if (p.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
-            {
-                string name = p.ParameterName.TrimStart('@');
+            if (!OutputWriteApplier.IsOutputParameter(p))
+                continue;
 
-                if (TypeCache.TryGetProperty(name, out PropertyInfo? prop) && prop.CanWrite)
+            string name = p.ParameterName.TrimStart('@');
+
+            SchemaOutputTargetValidator.ThrowIfAmbiguousObjectTarget(
+                p.Direction,
+                OutputParameterName.From(p.ParameterName),
+                TypeCache.HasAmbiguousNormalizedName(name));
+
+            if (TypeCache.TryGetProperty(name, out PropertyInfo? prop))
+            {
+                if (typeof(SqlParameter).IsAssignableFrom(prop.PropertyType))
                 {
-                    object? value = p.Value == DBNull.Value ? null : p.Value;
-                    prop.SetValue(parameters, value);
+                    SqlParameter? sourceParameter = SqlParameterCloneFactory.TryGetRegisteredSource(p, out SqlParameter? registeredSource)
+                        ? registeredSource
+                        : prop.GetValue(parameters) as SqlParameter;
+
+                    if (sourceParameter is not null)
+                    {
+                        writes.Add(new ObjectOutputWrite<T>(
+                            null,
+                            null,
+                            sourceParameter,
+                            SqlParameterCloneFactory.CaptureValueState(sourceParameter),
+                            p,
+                            null));
+                    }
+
+                    continue;
                 }
+
+                if (p.Direction == ParameterDirection.ReturnValue)
+                    continue;
+
+                if (!prop.CanWrite)
+                {
+                    SchemaOutputTargetValidator.ThrowIfReadOnlyObjectTarget(
+                        p.Direction,
+                        OutputParameterName.From(p.ParameterName),
+                        strict,
+                        prop);
+                    continue;
+                }
+
+                writes.Add(new ObjectOutputWrite<T>(
+                    (target, value) => prop.SetValue(target, value),
+                    prop.GetValue(parameters),
+                    null,
+                    default,
+                    p,
+                    OutputWriteApplier.ToClrValue(p)));
+            }
+            else
+            {
+                SchemaOutputTargetValidator.ThrowIfMissingObjectTarget(
+                    p.Direction,
+                    OutputParameterName.From(p.ParameterName),
+                    strict);
             }
         }
+
+        OutputWriteApplier.ApplyObjectWrites(parameters, writes);
     }
 
     /// <inheritdoc />

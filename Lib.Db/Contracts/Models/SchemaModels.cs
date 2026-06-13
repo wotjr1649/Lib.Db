@@ -106,7 +106,14 @@ public readonly record struct SpParameterMetadata(
     byte Scale,
     bool IsNullable,
     bool HasDefaultValue
-);
+)
+{
+    /// <summary>
+    /// SQL Server catalog metadata marks cursor-reference parameters with
+    /// <c>sys.parameters.is_cursor_ref</c>. They are intentionally unsupported.
+    /// </summary>
+    public bool IsCursorRef { get; init; }
+}
 
 #endregion
 

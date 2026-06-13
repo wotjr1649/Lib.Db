@@ -4,7 +4,9 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Data;
 using Lib.Db.IntegrationTests.Infrastructure;
+using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.V230Matrix;
 
@@ -26,6 +28,14 @@ public sealed class V230TvpMatrixTests(MultiDbFixture fixture)
             new(1, 1, "SKU-RED", 2, 29.9900m, 0.0000m, 0.100000m),
             new(1, 2, "SKU-BLUE", 1, 70.0100m, 0.0000m, 0.100000m)
         ];
+        var insertedOrders = new SqlParameter("@InsertedOrders", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output
+        };
+        var insertedLines = new SqlParameter("@InsertedLines", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output
+        };
 
         DbResult<Dictionary<string, object?>?> result = await fixture.Verification
             .Procedure("verify.usp_Verification_UpsertOrders")
@@ -35,7 +45,9 @@ public sealed class V230TvpMatrixTests(MultiDbFixture fixture)
                 RequestedBy = "v230-matrix",
                 CorrelationId = correlationId,
                 Headers = LibDb.Tvp("verify.Tvp_VerificationOrderHeader", headers),
-                Lines = LibDb.Tvp("verify.Tvp_VerificationOrderLine", lines)
+                Lines = LibDb.Tvp("verify.Tvp_VerificationOrderLine", lines),
+                InsertedOrders = insertedOrders,
+                InsertedLines = insertedLines
             })
             .QuerySingleAsync<Dictionary<string, object?>>(TestContext.Current.CancellationToken);
 
@@ -43,6 +55,8 @@ public sealed class V230TvpMatrixTests(MultiDbFixture fixture)
         result.Value.Should().NotBeNull();
         Convert.ToInt32(result.Value!["InsertedOrders"]).Should().Be(1);
         Convert.ToInt32(result.Value!["InsertedLines"]).Should().Be(2);
+        Convert.ToInt32(insertedOrders.Value).Should().Be(1);
+        Convert.ToInt32(insertedLines.Value).Should().Be(2);
     }
 
     [Fact]

@@ -107,6 +107,107 @@ public sealed class MultiSchemaPreloadTests
     [Fact]
     [Trait("Category", "Integration")]
     [Trait("Feature", "SchemaCache")]
+    public async Task PreloadSchemaAsync_ShouldKeepSameProcedureNameSeparatedBySchema()
+    {
+        const string procedureName = "usp_WarmupCollision";
+        string dboSp = $"dbo.{procedureName}";
+        string coreSp = $"core.{procedureName}";
+
+        try
+        {
+            await _fixture.Verification.Sql($@"
+                CREATE OR ALTER PROCEDURE {dboSp}
+                    @DboValue int OUTPUT
+                AS
+                BEGIN
+                    SET @DboValue = 1;
+                END;
+            ").ExecuteAsync(TestContext.Current.CancellationToken);
+
+            await _fixture.Verification.Sql($@"
+                CREATE OR ALTER PROCEDURE {coreSp}
+                    @CoreValue nvarchar(16) OUTPUT
+                AS
+                BEGIN
+                    SET @CoreValue = N'core';
+                END;
+            ").ExecuteAsync(TestContext.Current.CancellationToken);
+
+            using IServiceScope scope = _fixture.Services.CreateScope();
+            ISchemaService schemaService = scope.ServiceProvider.GetRequiredService<ISchemaService>();
+            LibDbOptions options = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LibDbOptions>>().Value;
+            string instanceHash = options.ConnectionStringNames.Count > 0 ? options.ConnectionStringNames[0] : "Default";
+
+            await schemaService.PreloadSchemaAsync(["dbo", "core"], instanceHash, CancellationToken.None);
+
+            SpSchema dboSchema = await schemaService.GetSpSchemaAsync(dboSp, instanceHash, CancellationToken.None);
+            SpSchema coreSchema = await schemaService.GetSpSchemaAsync(coreSp, instanceHash, CancellationToken.None);
+
+            dboSchema.Parameters.Should().ContainSingle(parameter => parameter.Name == "@DboValue");
+            dboSchema.Parameters.Should().NotContain(parameter => parameter.Name == "@CoreValue");
+            coreSchema.Parameters.Should().ContainSingle(parameter => parameter.Name == "@CoreValue");
+            coreSchema.Parameters.Should().NotContain(parameter => parameter.Name == "@DboValue");
+        }
+        finally
+        {
+            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {dboSp}").ExecuteAsync(TestContext.Current.CancellationToken);
+            await _fixture.Verification.Sql($"DROP PROCEDURE IF EXISTS {coreSp}").ExecuteAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    [Trait("Feature", "SchemaCache")]
+    public async Task PreloadSchemaAsync_ShouldKeepSameTvpNameSeparatedBySchema()
+    {
+        const string typeName = "T_WarmupCollision";
+        string dboTvp = $"dbo.{typeName}";
+        string coreTvp = $"core.{typeName}";
+
+        try
+        {
+            await _fixture.Verification.Sql($"DROP TYPE IF EXISTS {dboTvp}").ExecuteAsync(TestContext.Current.CancellationToken);
+            await _fixture.Verification.Sql($"DROP TYPE IF EXISTS {coreTvp}").ExecuteAsync(TestContext.Current.CancellationToken);
+
+            await _fixture.Verification.Sql($@"
+                CREATE TYPE {dboTvp} AS TABLE
+                (
+                    DboValue int NOT NULL
+                );
+            ").ExecuteAsync(TestContext.Current.CancellationToken);
+
+            await _fixture.Verification.Sql($@"
+                CREATE TYPE {coreTvp} AS TABLE
+                (
+                    CoreValue nvarchar(16) NULL
+                );
+            ").ExecuteAsync(TestContext.Current.CancellationToken);
+
+            using IServiceScope scope = _fixture.Services.CreateScope();
+            ISchemaService schemaService = scope.ServiceProvider.GetRequiredService<ISchemaService>();
+            LibDbOptions options = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LibDbOptions>>().Value;
+            string instanceHash = options.ConnectionStringNames.Count > 0 ? options.ConnectionStringNames[0] : "Default";
+
+            await schemaService.PreloadSchemaAsync(["dbo", "core"], instanceHash, CancellationToken.None);
+
+            TvpSchema dboSchema = await schemaService.GetTvpSchemaAsync(dboTvp, instanceHash, CancellationToken.None);
+            TvpSchema coreSchema = await schemaService.GetTvpSchemaAsync(coreTvp, instanceHash, CancellationToken.None);
+
+            dboSchema.Columns.Should().ContainSingle(column => column.Name == "DboValue");
+            dboSchema.Columns.Should().NotContain(column => column.Name == "CoreValue");
+            coreSchema.Columns.Should().ContainSingle(column => column.Name == "CoreValue");
+            coreSchema.Columns.Should().NotContain(column => column.Name == "DboValue");
+        }
+        finally
+        {
+            await _fixture.Verification.Sql($"DROP TYPE IF EXISTS {dboTvp}").ExecuteAsync(TestContext.Current.CancellationToken);
+            await _fixture.Verification.Sql($"DROP TYPE IF EXISTS {coreTvp}").ExecuteAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    [Trait("Feature", "SchemaCache")]
     public async Task GetSpSchemaAsync_ShouldRecoverFromInvalidCachedSchemaPayload()
     {
         string spName = "dbo.usp_CacheRecovery";

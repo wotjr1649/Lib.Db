@@ -497,6 +497,7 @@ $publishArguments = @(
     '-p:TreatWarningsAsErrors=false',
     '-p:WarningsAsErrors=',
     '-p:TrimmerSingleWarn=false',
+    '-p:UseSharedCompilation=false',
     '-o', $publishDirectory,
     '-v:minimal'
 )

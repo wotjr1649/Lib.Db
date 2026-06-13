@@ -647,8 +647,10 @@ internal sealed class ResilientStrategy(
 
             DbMetrics.TrackRetry("Deadlock", info);
 
-            _logger.LogWarning(ex,
-                "[Resilient] 데드락(1205) 발생. 다음 시도에서 DEADLOCK_PRIORITY HIGH 로 재시도합니다.");
+            _logger.LogWarning(
+                "[Resilient] 데드락(1205) 발생. 다음 시도에서 DEADLOCK_PRIORITY HIGH 로 재시도합니다. (ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
+                ex.GetType().Name,
+                ex.Number);
 
             return; // Polly 재시도 정책에 위임
         }
@@ -658,22 +660,23 @@ internal sealed class ResilientStrategy(
         {
             DbMetrics.TrackRetry("FastFail", info);
 
-            _logger.LogWarning(ex,
-                "[Resilient] 치명적인 DB 오류(코드: {Code})를 감지했습니다. 재시도를 중단하고 회로를 차단합니다.",
-                ex.Number);
+            _logger.LogWarning(
+                "[Resilient] 치명적인 DB 오류(코드: {Code})를 감지했습니다. 재시도를 중단하고 회로를 차단합니다. (ErrorType: {ErrorType})",
+                ex.Number,
+                ex.GetType().Name);
 
             throw new BrokenCircuitException(
-                $"치명적인 데이터베이스 오류가 발생했습니다. (에러 코드: {ex.Number})",
-                ex);
+                $"치명적인 데이터베이스 오류가 발생했습니다. (에러 코드: {ex.Number})");
         }
 
         // 3) Self-Healing Schema: SP 스키마 불일치(주로 파라미터/컬럼) 감지 시 캐시 무효화 + 강제 재로딩
         if ((ex.Number is 201 or 207 or 8144)
             && request.CommandType == CommandType.StoredProcedure)
         {
-            _logger.LogWarning(ex,
-                "[Resilient/Schema] SP 스키마 불일치(코드: {Code}) 감지. 캐시 무효화 후 재로딩을 시도합니다.",
-                ex.Number);
+            _logger.LogWarning(
+                "[Resilient/Schema] SP 스키마 불일치(코드: {Code}) 감지. 캐시 무효화 후 재로딩을 시도합니다. (ErrorType: {ErrorType})",
+                ex.Number,
+                ex.GetType().Name);
 
             _schemaService.InvalidateSpSchema(request.CommandText, request.InstanceHash);
 
@@ -787,9 +790,10 @@ internal sealed class TransactionalStrategy(
                 Operation: request.CommandType.ToString(),
                 CommandKind: request.CommandType.ToString());
 
-            _logger.LogWarning(ex,
-                "[Transaction/Schema] 스키마 불일치(코드: {Code}) 감지. SP 캐시를 무효화합니다.",
-                ex.Number);
+            _logger.LogWarning(
+                "[Transaction/Schema] 스키마 불일치(코드: {Code}) 감지. SP 캐시를 무효화합니다. (ErrorType: {ErrorType})",
+                ex.Number,
+                ex.GetType().Name);
 
             _schemaService.InvalidateSpSchema(request.CommandText, request.InstanceHash);
 

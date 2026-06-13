@@ -70,6 +70,10 @@ FROM verify.ResultMappingRows;
 ```
 
 `Dictionary<string, object?>`, `DataRow`, scalar 매퍼는 각 타입의 기존 의미를 유지합니다.
+저장 프로시저 `Output`/`InputOutput` 값은 성공한 실행 뒤 원본 `SqlParameter` 또는 매개변수 객체에 복사됩니다.
+입력값을 함께 소비하는 `InputOutput` 계약은 명시적 `SqlParameter(Direction = InputOutput)`로 표현해야 합니다. 일반 DTO/Dictionary/DataRow scalar 값은 copy-back target이며 입력값 opt-in이 아닙니다. `ReturnValue`는 `SqlDbType.Int`여야 합니다.
+`DataRow`는 `Output` 값을 일치하는 `DataColumn`에 반영하지만, strict 스키마 바인딩에서는 모든 `Output`/`InputOutput` 파라미터가 일치하는 `DataColumn` 또는 명시적 `SqlParameter` 셀을 가져야 합니다. 입력값을 함께 전달해야 하는 `OUTPUT` 파라미터와 `ReturnValue`는 셀에 명시적 `SqlParameter`를 넣어 사용하세요. `ReturnValue`는 scalar 컬럼에 쓰지 않습니다.
+`QueryAsync<T>()`는 반환된 async sequence가 끝까지 소비되거나 정상 dispose된 뒤에 output 값을 읽어야 합니다. raw `QueryMultipleAsync()`는 `IMultipleResultReader.DisposeAsync()`가 성공한 뒤에만 output 값을 읽어야 하며, `ReadMultipleAsync(...)` helper는 내부에서 reader를 dispose하므로 helper 성공 뒤가 copy-back 시점입니다. 취소, reader 열거 실패, reader dispose 실패 뒤에는 output 값을 사용하지 마세요.
 
 ## 2-3. DateOnly/TimeOnly 파라미터 바인딩
 
@@ -176,7 +180,7 @@ DB 오류 정보를 담는 불변 구조체입니다 (`readonly record struct`).
 | `Message` | `string` (required) | 사용자 표시 오류 메시지 |
 | `Hint` | `string?` | 해결 힌트 메시지 |
 | `ObjectName` | `string?` | 오류 발생 DB 객체 이름 |
-| `InnerException` | `Exception?` | 원본 예외 (로깅/디버깅용) |
+| `InnerException` | `Exception?` | 진단용 예외. Lib.Db가 반환하는 public 실패 결과는 원본 provider 예외를 보관하지 않습니다. |
 
 ---
 

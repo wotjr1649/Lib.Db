@@ -11,6 +11,8 @@
 
 #nullable enable
 
+using System.Security.Cryptography;
+using System.Text;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Infrastructure;
 
@@ -177,13 +179,14 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
             throw new ArgumentOutOfRangeException(nameof(maxSlots), maxSlots, "Max slots must be greater than zero.");
 
         _logger = logger;
+        string diagnosticIsolationKey = HashIsolationKeyForDiagnostics(isolationKey);
 
         // ====================================================================
         // 슬롯 획득 루프 (0번부터 31번까지 순차 탐색)
         // ====================================================================
         for (int i = 0; i < maxSlots; i++)
         {
-            string mutexName = $"Lib.Db.{isolationKey}.Slot.{i}";
+            string mutexName = BuildMutexLogicalName(isolationKey, i);
             Mutex mutex = mutexFactory(mutexName, logger);
 
             try
@@ -198,8 +201,8 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
                     _slotMutex = mutex;
 
                     logger.LogInformation(
-                        "[ProcessSlot] Slot {SlotId} 획득 성공 (Leader={IsLeader}, IsolationKey={Key})",
-                        i, IsLeader, isolationKey);
+                        "[ProcessSlot] Slot {SlotId} 획득 성공 (Leader={IsLeader}, IsolationKeyHash={IsolationKeyHash})",
+                        i, IsLeader, diagnosticIsolationKey);
 
                     return; // 성공, 반복 종료
                 }
@@ -216,8 +219,8 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
                 _slotMutex = mutex;
 
                 logger.LogWarning(
-                    "[ProcessSlot] Slot {SlotId} 복구 완료 (Abandoned Mutex 획득, IsolationKey={Key})",
-                    i, isolationKey);
+                    "[ProcessSlot] Slot {SlotId} 복구 완료 (Abandoned Mutex 획득, IsolationKeyHash={IsolationKeyHash})",
+                    i, diagnosticIsolationKey);
 
                 return; // 복구 성공, 반복 종료
             }
@@ -227,8 +230,8 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
                 // 기타 예외: 일시적 오류 또는 이미 사용 중
                 // ============================================================
                 logger.LogDebug(
-                    "[ProcessSlot] Slot {SlotId} 점유 중 또는 오류 (IsolationKey={Key}): {Error}",
-                    i, isolationKey, ex.Message);
+                    "[ProcessSlot] Slot {SlotId} 점유 중 또는 오류 (IsolationKeyHash={IsolationKeyHash}, ErrorType: {ErrorType})",
+                    i, diagnosticIsolationKey, ex.GetType().Name);
 
                 // 실패한 Mutex는 즉시 해제 (메모리 누수 방지)
                 mutex.Dispose();
@@ -240,9 +243,18 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
         // ====================================================================
         logger.LogWarning(
             "[ProcessSlot] ⚠️ 모든 슬롯({MaxSlots})이 사용 중입니다. " +
-            "Passive Mode로 전환합니다. (SlotId=-1, IsLeader=false, IsolationKey={Key})",
-            maxSlots, isolationKey);
+            "Passive Mode로 전환합니다. (SlotId=-1, IsLeader=false, IsolationKeyHash={IsolationKeyHash})",
+            maxSlots, diagnosticIsolationKey);
     }
+
+    private static string HashIsolationKeyForDiagnostics(string isolationKey)
+    {
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(isolationKey));
+        return Convert.ToHexString(digest, 0, 8).ToLowerInvariant();
+    }
+
+    internal static string BuildMutexLogicalName(string isolationKey, int slot)
+        => $"Lib.Db.{HashIsolationKeyForDiagnostics(isolationKey)}.Slot.{slot}";
 
     #endregion
 
@@ -290,9 +302,9 @@ public sealed class ProcessSlotAllocator : IProcessSlotAllocator, IDisposable
         {
             // ReleaseMutex 실패는 치명적이지 않음 (앱 종료 중이므로)
             // 로그만 남기고 계속 진행
-            _logger.LogError(ex,
-                "[ProcessSlot] Slot {SlotId} 반납 중 예외 발생 (무시됨)",
-                _slotId);
+            _logger.LogError(
+                "[ProcessSlot] Slot {SlotId} 반납 중 예외 발생 (무시됨, ErrorType: {ErrorType})",
+                _slotId, ex.GetType().Name);
         }
         finally
         {

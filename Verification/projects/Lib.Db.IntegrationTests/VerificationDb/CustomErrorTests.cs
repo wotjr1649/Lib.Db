@@ -145,12 +145,10 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
     #region CE05: 한국어 메시지 전파
 
     /// <summary>
-    /// 50001 에러의 InnerException.Message에 한국어 '주문' 키워드가 포함되는지 검증한다.
-    /// <para>Lib.Db는 DbError.Message를 표준 형식으로 래핑하므로,
-    /// 원본 SQL THROW 메시지는 InnerException에서 확인한다.</para>
+    /// 50001 에러가 표준 사용자 정의 오류로 매핑되고, 원본 SQL THROW 메시지는 public 오류에 노출되지 않는지 검증한다.
     /// </summary>
     [Fact]
-    public async Task CE05_Custom_Error_MessagePropagation_ShouldContainKorean()
+    public async Task CE05_Custom_Error_ShouldReturnRedactedPublicError()
     {
         // Act
         DbResult<int> result = await _db
@@ -165,10 +163,10 @@ public sealed class CustomErrorTests(MultiDbFixture fixture)
         // Lib.Db가 래핑한 메시지에서 "사용자 정의 오류" 키워드 확인
         result.Error!.Value.Message.Should().Contain("사용자 정의 오류");
 
-        // InnerException에서 원본 한국어 THROW 메시지 확인
-        result.Error!.Value.InnerException.Should().NotBeNull();
-        result.Error!.Value.InnerException!.Message.Should().Contain("주문",
-            "SQL THROW 원본 메시지에 한국어 '주문' 키워드가 포함되어야 합니다.");
+        result.Error!.Value.Message.Should().NotContain("주문",
+            "원본 SQL THROW 메시지는 public DbError에 노출하지 않아야 합니다.");
+        result.Error!.Value.InnerException.Should().BeNull(
+            "provider 예외 객체는 소비자 로그/응답으로 직렬화될 수 있는 public 실패 결과에 보관하지 않습니다.");
     }
 
     #endregion

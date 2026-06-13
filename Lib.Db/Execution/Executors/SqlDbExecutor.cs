@@ -18,6 +18,7 @@ using Lib.Db.Contracts.Schema;
 using Lib.Db.Core;
 using Lib.Db.Diagnostics;
 using Lib.Db.Execution.Executors;
+using Lib.Db.Execution.Output;
 
 namespace Lib.Db.Execution;
 
@@ -348,11 +349,6 @@ internal sealed partial class SqlDbExecutor(
         return ExecutePipelineAsync(req, options, async (cmd, token) =>
         {
             int affected = await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-
-            _mapperFactory
-                .GetMapper<TParams>()
-                .MapOutputParameters(cmd, parameters);
-
             return affected;
         });
     }
@@ -405,6 +401,7 @@ internal sealed partial class SqlDbExecutor(
         DbRequest<TParams> req = new DbRequest<TParams>(instanceHash, commandText, commandType, parameters, ct, _strategy.IsTransactional);
 
         System.Data.Common.DbDataReader? rawReader;
+        SqlCommand? leasedCommand = null;
         long startTicks = Stopwatch.GetTimestamp();
 
         using (Activity? activity = _options.EnableObservability
@@ -428,39 +425,54 @@ internal sealed partial class SqlDbExecutor(
                             CommandType = commandType,
                             CommandTimeout = options.CommandTimeout ?? _options.DefaultCommandTimeoutSeconds
                         };
+                        leasedCommand = cmd;
 
-                        _strategy.EnlistTransaction(cmd);
-
-                        // [MARS Validation] QueryMultipleAsync 사용 시 MARS 설정 필수 검증
-                        // (성능 영향을 줄이기 위해 최초 1회만 파싱 후 캐싱)
-                        ValidateMarsEnabled(conn);
-
-                        await PrepareParametersAsync(cmd, parameters, instanceHash, options, token)
-                            .ConfigureAwait(false);
-
-                        DbCommandInterceptionContext ctx = new DbCommandInterceptionContext(instanceHash, token);
-                        await _interceptorChain.OnExecutingAsync(cmd, ctx).ConfigureAwait(false);
-
-                        if (ctx.SuppressExecution)
+                        try
                         {
-                            LogMockingExecution(_logger, diagnosticCommandText);
-                            return (ctx.MockResult as SqlDataReader)!;
+                            _strategy.EnlistTransaction(cmd);
+
+                            // [MARS Validation] QueryMultipleAsync 사용 시 MARS 설정 필수 검증
+                            // (성능 영향을 줄이기 위해 최초 1회만 파싱 후 캐싱)
+                            ValidateMarsEnabled(conn);
+
+                            await PrepareParametersAsync(cmd, parameters, instanceHash, options, token)
+                                .ConfigureAwait(false);
+
+                            DbCommandInterceptionContext ctx = new DbCommandInterceptionContext(instanceHash, token);
+                            await _interceptorChain.OnExecutingAsync(cmd, ctx).ConfigureAwait(false);
+
+                            if (ctx.SuppressExecution)
+                            {
+                                LogMockingExecution(_logger, diagnosticCommandText);
+                                SqlDataReader? mockReader = ctx.MockResult as SqlDataReader;
+                                leasedCommand = null;
+                                await DisposeCommandQuietlyAsync(cmd).ConfigureAwait(false);
+                                return mockReader!;
+                            }
+
+                            CommandBehavior behavior = CommandBehavior.Default;
+                            if (!_strategy.IsTransactional)
+                                behavior |= CommandBehavior.CloseConnection;
+
+                            return await cmd.ExecuteReaderAsync(behavior, token).ConfigureAwait(false);
                         }
-
-                        CommandBehavior behavior = CommandBehavior.Default;
-                        if (!_strategy.IsTransactional)
-                            behavior |= CommandBehavior.CloseConnection;
-
-                        return await cmd.ExecuteReaderAsync(behavior, token).ConfigureAwait(false);
+                        catch
+                        {
+                            leasedCommand = null;
+                            await DisposeCommandQuietlyAsync(cmd).ConfigureAwait(false);
+                            throw;
+                        }
                     },
                     ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 activity?.SetStatus(ActivityStatusCode.Error, ActivityErrorDescription);
-                _logger.LogWarning(ex,
-                    "다중 결과 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                    diagnosticCommandText);
+                _logger.LogWarning(
+                    "다중 결과 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
+                    diagnosticCommandText,
+                    GetExceptionType(ex),
+                    GetSqlErrorCode(ex));
                 throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
             }
         }
@@ -482,12 +494,16 @@ internal sealed partial class SqlDbExecutor(
 
         if (rawReader is null)
         {
+            if (leasedCommand is not null)
+                await DisposeCommandQuietlyAsync(leasedCommand).ConfigureAwait(false);
+
             LibDbExceptionFactory.ThrowInvalidOperation(
                 "QueryMultipleAsync 실행 결과가 null입니다. " +
                 "인터셉터에서 SuppressExecution 되었는지 확인해 주세요.");
         }
 
-        SqlGridReader gridReader = new SqlGridReader(rawReader, _mapperFactory);
+        DbCommandLease lease = CreateOutputCommandLease(rawReader, leasedCommand, parameters);
+        SqlGridReader gridReader = new SqlGridReader(lease, _mapperFactory);
 
         // Resilient 경로에서는 MonitoredSqlDataReader가 연결 수명/메트릭을 관리하고,
         // Transactional 경로에서는 외부 트랜잭션이 연결 수명을 관리합니다.
@@ -512,7 +528,8 @@ internal sealed partial class SqlDbExecutor(
     /// 6. Interceptor Executing: 실행 전 인터셉터 체인 호출 (로깅, 모킹, 검증 등)<br/>
     /// 7. 명령 실행: 실제 DbCommand.ExecuteXxxAsync 호출<br/>
     /// 8. 메트릭 기록: 실행 시간(Duration)을 DbMetrics에 기록<br/>
-    /// 9. Interceptor Executed: 실행 후 인터셉터 체인 호출 (성능 로깅, 결과 변환 등)<br/><br/>
+    /// 9. Interceptor Executed: 실행 후 인터셉터 체인 호출 (성능 로깅, 결과 변환 등)<br/>
+    /// 10. OUTPUT 역매핑: 실행 후 인터셉터까지 성공한 경우에만 caller-owned 출력 대상에 복사<br/><br/>
     /// <b>[예외 처리 전략]</b><br/>
     /// - SqlException은 Polly Resilience Pipeline이 처리할 수 있도록 그대로 전파합니다.<br/>
     /// - 기타 예외는 LibDbExceptionFactory를 통해 원문 SQL을 제외한 예외로 래핑합니다.<br/>
@@ -564,9 +581,10 @@ internal sealed partial class SqlDbExecutor(
                 catch (Exception interceptEx)
                 {
                     // 인터셉터 예외는 로깅 후 무시 (실행 파이프라인 차단하지 않음)
-                    _logger.LogWarning(interceptEx,
-                        "[UserInterceptor] OnExecutingAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                        diagnosticCommandText);
+                    _logger.LogWarning(
+                        "[UserInterceptor] OnExecutingAsync 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType})",
+                        diagnosticCommandText,
+                        GetExceptionType(interceptEx));
                 }
             }
         }
@@ -644,6 +662,10 @@ internal sealed partial class SqlDbExecutor(
 
                 await _interceptorChain.OnExecutedAsync(cmd, executedEvent).ConfigureAwait(false);
 
+                _mapperFactory
+                    .GetMapper<TParams>()
+                    .MapOutputParameters(cmd, request.Parameters);
+
                 return innerResult;
             }, request.CancellationToken).ConfigureAwait(false);
 
@@ -663,9 +685,10 @@ internal sealed partial class SqlDbExecutor(
                     }
                     catch (Exception interceptEx)
                     {
-                        _logger.LogWarning(interceptEx,
-                            "[UserInterceptor] OnExecutedAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                            diagnosticCommandText);
+                        _logger.LogWarning(
+                            "[UserInterceptor] OnExecutedAsync 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType})",
+                            diagnosticCommandText,
+                            GetExceptionType(interceptEx));
                     }
                 }
             }
@@ -692,19 +715,22 @@ internal sealed partial class SqlDbExecutor(
                     }
                     catch (Exception interceptEx)
                     {
-                        _logger.LogWarning(interceptEx,
-                            "[UserInterceptor] OnErrorAsync 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                            diagnosticCommandText);
+                        _logger.LogWarning(
+                            "[UserInterceptor] OnErrorAsync 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType})",
+                            diagnosticCommandText,
+                            GetExceptionType(interceptEx));
                     }
                 }
             }
 
-            _logger.LogWarning(ex,
+            _logger.LogWarning(
                 "[Executor] DB 파이프라인 실행 중 오류가 발생했습니다. " +
-                "(Command: {CommandText}, Instance: {InstanceId}, CommandType: {CommandType})",
+                "(Command: {CommandText}, Instance: {InstanceId}, CommandType: {CommandType}, ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
                 diagnosticCommandText,
                 DbDiagnosticRedactor.RedactInstanceId(request.InstanceHash),
-                request.CommandType);
+                request.CommandType,
+                GetExceptionType(ex),
+                GetSqlErrorCode(ex));
 
             // [Modify] SqlException은 포장하지 않고 그대로 전파해야 Polly/Test가 정상 동작함
             if (ex is SqlException)
@@ -752,9 +778,11 @@ internal sealed partial class SqlDbExecutor(
                     if (mode == SchemaResolutionMode.SnapshotOnly)
                         throw;
 
-                    _logger.LogWarning(ex,
-                        "[Schema] SP 스키마 조회 실패. 스키마 없이 파라미터 매핑을 진행합니다. (Command: {CommandText})",
-                        GetDiagnosticCommandText(cmd.CommandText, cmd.CommandType));
+                    _logger.LogWarning(
+                        "[Schema] SP 스키마 조회 실패. 스키마 없이 파라미터 매핑을 진행합니다. (Command: {CommandText}, ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
+                        GetDiagnosticCommandText(cmd.CommandText, cmd.CommandType),
+                        GetExceptionType(ex),
+                        GetSqlErrorCode(ex));
                 }
             }
         }
@@ -793,6 +821,7 @@ internal sealed partial class SqlDbExecutor(
         DbRequest<TParams> req = new DbRequest<TParams>(instanceHash, commandText, commandType, parameters, ct, _strategy.IsTransactional);
 
         System.Data.Common.DbDataReader? reader;
+        SqlCommand? leasedCommand = null;
         long startTicks = Stopwatch.GetTimestamp();
 
         using (Activity? activity = _options.EnableObservability
@@ -816,39 +845,54 @@ internal sealed partial class SqlDbExecutor(
                             CommandType = commandType,
                             CommandTimeout = options.CommandTimeout ?? _options.DefaultCommandTimeoutSeconds
                         };
+                        leasedCommand = cmd;
 
-                        _strategy.EnlistTransaction(cmd);
-
-                        await PrepareParametersAsync(cmd, parameters, instanceHash, options, token)
-                            .ConfigureAwait(false);
-
-                        DbCommandInterceptionContext ctx = new DbCommandInterceptionContext(instanceHash, token);
-                        await _interceptorChain.OnExecutingAsync(cmd, ctx).ConfigureAwait(false);
-
-                        if (ctx.SuppressExecution)
+                        try
                         {
-                            LogMockingExecution(_logger, diagnosticCommandText);
-                            return default(SqlDataReader)!;
+                            _strategy.EnlistTransaction(cmd);
+
+                            await PrepareParametersAsync(cmd, parameters, instanceHash, options, token)
+                                .ConfigureAwait(false);
+
+                            DbCommandInterceptionContext ctx = new DbCommandInterceptionContext(instanceHash, token);
+                            await _interceptorChain.OnExecutingAsync(cmd, ctx).ConfigureAwait(false);
+
+                            if (ctx.SuppressExecution)
+                            {
+                                LogMockingExecution(_logger, diagnosticCommandText);
+                                SqlDataReader? mockReader = ctx.MockResult as SqlDataReader;
+                                leasedCommand = null;
+                                await DisposeCommandQuietlyAsync(cmd).ConfigureAwait(false);
+                                return mockReader!;
+                            }
+
+                            CommandBehavior behavior = CommandBehavior.Default;
+                            if (!_strategy.IsTransactional)
+                                behavior |= CommandBehavior.CloseConnection;
+
+                            // BLOB/Stream 매핑 시 SequentialAccess 활성화
+                            if (typeof(TResult) == typeof(Stream) || typeof(TResult) == typeof(byte[]))
+                                behavior |= CommandBehavior.SequentialAccess;
+
+                            return await cmd.ExecuteReaderAsync(behavior, token).ConfigureAwait(false);
                         }
-
-                        CommandBehavior behavior = CommandBehavior.Default;
-                        if (!_strategy.IsTransactional)
-                            behavior |= CommandBehavior.CloseConnection;
-
-                        // BLOB/Stream 매핑 시 SequentialAccess 활성화
-                        if (typeof(TResult) == typeof(Stream) || typeof(TResult) == typeof(byte[]))
-                            behavior |= CommandBehavior.SequentialAccess;
-
-                        return await cmd.ExecuteReaderAsync(behavior, token).ConfigureAwait(false);
+                        catch
+                        {
+                            leasedCommand = null;
+                            await DisposeCommandQuietlyAsync(cmd).ConfigureAwait(false);
+                            throw;
+                        }
                     },
                     ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 activity?.SetStatus(ActivityStatusCode.Error, ActivityErrorDescription);
-                _logger.LogWarning(ex,
-                    "Streaming 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText})",
-                    diagnosticCommandText);
+                _logger.LogWarning(
+                    "Streaming 쿼리 실행 중 오류가 발생했습니다. (Command: {CommandText}, ErrorType: {ErrorType}, SqlErrorCode: {SqlErrorCode})",
+                    diagnosticCommandText,
+                    GetExceptionType(ex),
+                    GetSqlErrorCode(ex));
                 throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
             }
         }
@@ -869,20 +913,66 @@ internal sealed partial class SqlDbExecutor(
         #endregion
 
         if (reader is null)
+        {
+            if (leasedCommand is not null)
+                await DisposeCommandQuietlyAsync(leasedCommand).ConfigureAwait(false);
+
             yield break;
+        }
 
         ISqlMapper<TResult> mapper = _mapperFactory.GetMapper<TResult>();
+        DbCommandLease lease = CreateOutputCommandLease(reader, leasedCommand, parameters);
 
         try
         {
-            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            while (await lease.ReadAsync(ct).ConfigureAwait(false))
             {
-                yield return mapper.MapResult(reader);
+                yield return lease.Map(mapper.MapResult);
             }
+
+            lease.MarkFullyConsumed();
         }
         finally
         {
-            await reader.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await lease.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
+            }
+        }
+    }
+
+    private DbCommandLease CreateOutputCommandLease<TParams>(
+        DbDataReader reader,
+        SqlCommand? command,
+        TParams parameters)
+        => new(reader, command, () =>
+        {
+            if (command is not null)
+            {
+                _mapperFactory
+                    .GetMapper<TParams>()
+                    .MapOutputParameters(command, parameters);
+            }
+
+            return ValueTask.CompletedTask;
+        });
+
+    private static async ValueTask DisposeCommandQuietlyAsync(SqlCommand command)
+    {
+        try
+        {
+            await command.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
         }
     }
 
@@ -1141,6 +1231,11 @@ internal sealed partial class SqlDbExecutor(
             CommandType.TableDirect => "TableDirect",
             _ => RedactedCommandText
         };
+
+    private static string GetExceptionType(Exception ex) => ex.GetType().Name;
+
+    private static int GetSqlErrorCode(Exception ex)
+        => ex is SqlException sqlException ? sqlException.Number : 0;
 
     /// <summary>
     /// MarsPolicy에 따라 MARS 활성화 여부를 검증합니다.

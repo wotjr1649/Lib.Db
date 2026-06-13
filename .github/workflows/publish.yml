@@ -18,13 +18,11 @@ jobs:
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_PID: Developer
-          MSSQL_SA_PASSWORD: ${{ secrets.LIBDB_TEST_SQL_PASSWORD }}
+          MSSQL_SA_PASSWORD: LibDb_CI_${{ github.run_id }}_${{ github.run_attempt }}!aA1
         ports:
           - 1433:1433
     env:
       DOTNET_NOLOGO: true
-      LIBDB_TEST_SQL_PASSWORD: ${{ secrets.LIBDB_TEST_SQL_PASSWORD }}
-      LIBDB_BENCHMARK_CONNECTION: Server=127.0.0.1;Database=LIBDB_BENCH_TEST;User ID=SA;Password=${{ secrets.LIBDB_TEST_SQL_PASSWORD }};Encrypt=False;TrustServerCertificate=True;MultipleActiveResultSets=True;
 
     steps:
     - uses: actions/checkout@v6
@@ -66,10 +64,6 @@ jobs:
         NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
       run: |
         set -euo pipefail
-        if [[ -z "${LIBDB_TEST_SQL_PASSWORD}" ]]; then
-          echo "ERROR: LIBDB_TEST_SQL_PASSWORD secret is required for release verification." >&2
-          exit 1
-        fi
         if [[ -z "${NUGET_API_KEY}" ]]; then
           echo "ERROR: NUGET_API_KEY secret is required for NuGet publishing." >&2
           exit 1
@@ -77,6 +71,8 @@ jobs:
 
     - name: Wait for SQL Server
       shell: bash
+      env:
+        LIBDB_TEST_SQL_PASSWORD: LibDb_CI_${{ github.run_id }}_${{ github.run_attempt }}!aA1
       run: |
         set -euo pipefail
         container_id="$(docker ps --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest --format '{{.ID}}' | head -n 1)"
@@ -126,7 +122,11 @@ jobs:
 
     - name: Run release verification gate
       shell: pwsh
-      run: pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
+      env:
+        LIBDB_TEST_SQL_PASSWORD: LibDb_CI_${{ github.run_id }}_${{ github.run_attempt }}!aA1
+      run: |
+        $env:LIBDB_BENCHMARK_CONNECTION = "Server=127.0.0.1;Database=LIBDB_BENCH_TEST;User ID=SA;Password=$env:LIBDB_TEST_SQL_PASSWORD;Encrypt=False;TrustServerCertificate=True;MultipleActiveResultSets=True;"
+        pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
 
     - name: Build allowlisted release package
       shell: pwsh

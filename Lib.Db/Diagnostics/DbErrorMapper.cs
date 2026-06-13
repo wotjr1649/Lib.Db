@@ -266,7 +266,7 @@ internal static class DbErrorMapper
     /// <param name="sqlErrorCode">SQL Server 오류 번호입니다. (-2 = 타임아웃, 50000+ = 사용자 정의)</param>
     /// <param name="objectName">오류가 발생한 DB 객체 이름입니다. (예: "dbo.usp_GetList")</param>
     /// <param name="severity">SQL Server 오류 심각도(Severity) 수준입니다. (0~25, 기본값: 0)</param>
-    /// <param name="innerException">원본 예외 객체입니다. (기본값: null)</param>
+    /// <param name="innerException">호환성 유지를 위한 매개변수입니다. public DbError에는 보관하지 않습니다.</param>
     /// <returns>매핑된 <see cref="DbError"/> 구조체입니다.</returns>
     public static DbError FromSqlErrorCode(
         int sqlErrorCode,
@@ -290,7 +290,7 @@ internal static class DbErrorMapper
                 Message = message,
                 Hint = mapping.Hint,
                 ObjectName = objectName,
-                InnerException = innerException
+                InnerException = null
             };
         }
 
@@ -310,7 +310,7 @@ internal static class DbErrorMapper
                 Message = userMessage,
                 Hint = "RAISERROR 또는 THROW로 발생한 사용자 정의 오류입니다. 프로시저 로직을 확인하세요.",
                 ObjectName = objectName,
-                InnerException = innerException
+                InnerException = null
             };
         }
 
@@ -328,7 +328,7 @@ internal static class DbErrorMapper
             Message = unknownMessage,
             Hint = null,
             ObjectName = objectName,
-            InnerException = innerException
+            InnerException = null
         };
     }
 
@@ -345,20 +345,20 @@ internal static class DbErrorMapper
     /// </para>
     /// </summary>
     /// <param name="sqlException">변환할 <see cref="SqlException"/> 인스턴스입니다.</param>
-    /// <param name="objectName">
-    /// DB 객체 이름입니다. null이면 <see cref="SqlException"/>의 Procedure 속성을 사용합니다.
-    /// </param>
+    /// <param name="objectName">호출자가 공개해도 되는 안전한 DB 객체 라벨입니다.</param>
     /// <returns>매핑된 <see cref="DbError"/> 구조체입니다.</returns>
     public static DbError FromSqlException(SqlException sqlException, string? objectName = null)
     {
-        string? resolvedObjectName = objectName ?? sqlException.Procedure;
+        string? resolvedObjectName = string.IsNullOrWhiteSpace(objectName)
+            ? null
+            : objectName.Trim();
         byte severity = sqlException.Class;
 
         return FromSqlErrorCode(
             sqlException.Number,
             resolvedObjectName,
             severity,
-            sqlException);
+            innerException: null);
     }
 
     #endregion

@@ -619,6 +619,22 @@ BEGIN
     SET @OutputVal = @InputVal * 2;
     SET @InOutVal = ISNULL(@InOutVal, 0) + @InputVal;
     SELECT @InputVal AS [InputVal], @OutputVal AS [OutputVal], @InOutVal AS [InOutVal];
+    RETURN @InputVal;
+END;
+GO
+
+CREATE OR ALTER PROCEDURE [adv].[usp_Adv_OutputParameters_Multiple]
+    @InputVal INT,
+    @OutputVal INT OUTPUT,
+    @InOutVal INT OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET @OutputVal = @InputVal * 2;
+    SET @InOutVal = ISNULL(@InOutVal, 0) + @InputVal;
+    SELECT @InputVal AS [InputVal], @OutputVal AS [OutputVal], @InOutVal AS [InOutVal];
+    SELECT 1 AS [Marker];
+    RETURN @InputVal;
 END;
 GO
 

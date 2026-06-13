@@ -63,6 +63,17 @@ public sealed class DbErrorMapperTests
     }
 
     [Fact]
+    public void FromSqlErrorCode_ShouldNotRetainInnerException()
+    {
+        var inner = new InvalidOperationException("provider detail");
+
+        DbError error = DbErrorMapper.FromSqlErrorCode(50001, "stored procedure", innerException: inner);
+
+        error.InnerException.Should().BeNull();
+        error.Message.Should().NotContain("provider detail");
+    }
+
+    [Fact]
     public void FromSqlErrorCode_SchemaNotFound_ShouldHaveHint()
     {
         DbError error = DbErrorMapper.FromSqlErrorCode(2812, "usp_GetUser");

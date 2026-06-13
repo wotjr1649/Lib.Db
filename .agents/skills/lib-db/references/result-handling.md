@@ -25,7 +25,7 @@ Important members:
 - `Message`: safe user-facing message from the library.
 - `Hint`: optional remediation hint.
 - `ObjectName`: optional database object name.
-- `InnerException`: exception for controlled diagnostics.
+- `InnerException`: diagnostic exception slot. Public failures returned by Lib.Db do not retain raw provider exceptions.
 
 `DbErrorKind` includes schema not found, authentication failed, connection lost, timeout, deadlock, constraint violation, data conversion, parameter mismatch, permission denied, resource exhausted, transaction aborted, query syntax, user-defined, cloud transient, and unknown.
 
@@ -50,7 +50,7 @@ if (!result.IsSuccess)
 return result.Value;
 ```
 
-Do not log full connection strings, raw credentials, or parameter values containing secrets.
+Do not log full connection strings, raw credentials, raw SQL text, provider exception details, or parameter values containing secrets.
 
 ## Null Is Not Failure
 

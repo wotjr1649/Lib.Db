@@ -130,12 +130,12 @@ Evidence:
 - `references/verification.md:40` recommends raw `dotnet test Tests/Lib.Db.IntegrationTests/...`.
 - `references/verification.md:46` recommends raw `dotnet test ... V221BlockerVerificationTests`.
 - `Lib.Db/Verification/README.md:18` says not to run database-backed tests through raw `dotnet test`; use `Invoke-Tests.ps1` for focused tests and `Invoke-Verification.ps1` for release gates.
-- `Lib.Db/Verification/README.md:16` says the verification scripts load local environment setup automatically and print only key presence, not values.
+- `Lib.Db/Verification/README.md:16` now requires explicit `-UseLocalEnvironment` before loading local environment setup and still prints only key presence, not values.
 - `Lib.Db/Verification/README.md:27` says direct SQL execution is restricted to allowlisted files under `Verification/databases/<DB>/`.
 
 Impact:
 
-An agent following the skill may choose the wrong test path, miss the wrapper scripts that enforce environment loading and redaction behavior, or report false blockers from the MSBuild guard.
+An agent following stale skill guidance may choose the wrong test path, miss the wrapper scripts that enforce explicit environment loading and redaction behavior, or report false blockers from the MSBuild guard.
 
 Security calibration:
 

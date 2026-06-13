@@ -50,6 +50,17 @@ var stage = db.Default
 | `QueryMultipleAsync(ct)` | `Task<DbResult<IMultipleResultReader>>` |
 | `ExecuteAsync(ct)` | `Task<DbResult<int>>` |
 
+## Output Parameter Timing
+
+| API | Output availability |
+| --- | --- |
+| `ExecuteAsync`, `QuerySingleAsync`, `ExecuteScalarAsync` | After the returned `DbResult` is successful. |
+| `QueryAsync<T>` | After the returned async sequence is fully consumed or cleanly disposed. |
+| `QueryMultipleAsync` / raw `IMultipleResultReader` | After `IMultipleResultReader.DisposeAsync()` completes successfully. |
+| `ReadMultipleAsync(...)` helpers | After the helper succeeds, because the helper disposes the reader internally. |
+
+If command execution, row reading, cancellation, or reader disposal fails, treat output values as unavailable. Clean early disposal is allowed; failed disposal is not. Dictionary, DTO, Reflection, and DataRow copy-back is transactional: Lib.Db avoids partially mutating caller-owned output targets when a later output target fails validation or conversion. Strict schema binding requires every `Output` or `InputOutput` parameter to have a writable caller-owned target or explicit `SqlParameter` before execution. Non-strict binding keeps compatibility for targetless output-only execution: targetless DTO outputs are ignored and dictionary bags may receive a missing non-return output key after success. Anonymous/read-only parameter properties are not copy-back targets. SQL Server cursor-reference (`sys.parameters.is_cursor_ref`), structured, and legacy LOB output parameters are intentionally unsupported; pass advanced metadata with an explicit `SqlParameter` only when Lib.Db documents the type as supported.
+
 ## Stream Rows
 
 ```csharp

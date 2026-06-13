@@ -5,7 +5,9 @@
 // ============================================================================
 
 using Lib.Db.IntegrationTests.Infrastructure;
+using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Infrastructure;
+using Lib.Db.Core;
 using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.Unit;
@@ -13,6 +15,46 @@ namespace Lib.Db.IntegrationTests.Unit;
 [Trait("Category", "Unit")]
 public sealed class DbSessionSecurityTests
 {
+    [Fact]
+    public async Task DisposeAsync_ShouldRedactCleanupFailures()
+    {
+        const string secretMarker = "Server=prod;User Id=sa;Password=dispose-secret";
+        Mock<IDbExecutor> executor = new();
+        executor.As<IAsyncDisposable>()
+            .Setup(x => x.DisposeAsync())
+            .Returns(ValueTask.FromException(new InvalidOperationException(secretMarker)));
+
+        var session = new DbSession(
+            Mock.Of<IDbExecutorFactory>(),
+            Mock.Of<IDbConnectionFactory>(),
+            TestOptionsFactory.CreateValidOptions());
+        var state = new DbInstanceState
+        {
+            InstanceName = secretMarker,
+            ConnectionHash = "hash",
+            ActiveExecutor = executor.Object
+        };
+
+        System.Reflection.FieldInfo field = typeof(DbSession)
+            .GetField("_instances", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var instances = (System.Collections.Concurrent.ConcurrentDictionary<string, DbInstanceState>)field.GetValue(session)!;
+        instances.TryAdd(secretMarker, state).Should().BeTrue();
+
+        Func<Task> act = async () => await session.DisposeAsync();
+
+        AggregateException exception = (await act.Should()
+            .ThrowAsync<AggregateException>())
+            .Which;
+        string rendered = exception.ToString();
+        rendered.Should().NotContain(secretMarker);
+        rendered.Should().NotContain("dispose-secret");
+        rendered.Should().NotContain("Password=");
+        exception.InnerExceptions.Should().ContainSingle();
+        exception.InnerExceptions[0].InnerException.Should().BeNull();
+        exception.InnerExceptions[0].Message.Should().Contain(nameof(InvalidOperationException));
+        exception.InnerExceptions[0].Message.Should().Contain("ConnectionString:[redacted]");
+    }
+
     [Theory]
     [InlineData("Raw:Server=localhost;Database=TEST;Encrypt=False")]
     [InlineData("raw:Server=localhost;Database=TEST;Encrypt=False")]

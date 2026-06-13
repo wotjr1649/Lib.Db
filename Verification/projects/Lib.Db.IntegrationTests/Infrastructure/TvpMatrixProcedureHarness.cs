@@ -163,10 +163,13 @@ public static class TvpMatrixProcedureHarness
 
         foreach (ProcedureParameterMetadata parameter in procedure.Parameters)
         {
-            if (parameter.IsOutput)
-                continue;
-
             string key = parameter.ParameterName.TrimStart('@');
+            if (parameter.IsOutput)
+            {
+                parameters[key] = CreateOutputParameter(parameter);
+                continue;
+            }
+
             if (parameter.IsTableType)
             {
                 parameters[key] = await BuildTvpDataTableAsync(
@@ -355,6 +358,29 @@ public static class TvpMatrixProcedureHarness
         };
     }
 
+    private static SqlParameter CreateOutputParameter(ProcedureParameterMetadata parameter)
+    {
+        SqlDbType dbType = MapSqlDbType(parameter.SystemTypeName);
+        SqlParameter output = new(parameter.ParameterName, dbType)
+        {
+            Direction = ParameterDirection.Output
+        };
+
+        int size = GetOutputParameterSize(dbType, parameter.MaxLength);
+        if (size != 0)
+            output.Size = size;
+
+        if (dbType is SqlDbType.Decimal or SqlDbType.Money or SqlDbType.SmallMoney)
+        {
+            if (parameter.Precision > 0)
+                output.Precision = parameter.Precision;
+
+            output.Scale = parameter.Scale;
+        }
+
+        return output;
+    }
+
     private static object CreateColumnValue(
         TvpProcedureMetadata procedure,
         ProcedureParameterMetadata parameter,
@@ -477,6 +503,56 @@ public static class TvpMatrixProcedureHarness
             "binary" or "varbinary" or "image" or "timestamp" or "rowversion" => typeof(byte[]),
             _ => typeof(string)
         };
+    }
+
+    private static SqlDbType MapSqlDbType(string systemTypeName)
+    {
+        return systemTypeName.ToLowerInvariant() switch
+        {
+            "bigint" => SqlDbType.BigInt,
+            "int" => SqlDbType.Int,
+            "smallint" => SqlDbType.SmallInt,
+            "tinyint" => SqlDbType.TinyInt,
+            "bit" => SqlDbType.Bit,
+            "decimal" or "numeric" => SqlDbType.Decimal,
+            "money" => SqlDbType.Money,
+            "smallmoney" => SqlDbType.SmallMoney,
+            "float" => SqlDbType.Float,
+            "real" => SqlDbType.Real,
+            "date" => SqlDbType.Date,
+            "datetime" => SqlDbType.DateTime,
+            "datetime2" => SqlDbType.DateTime2,
+            "smalldatetime" => SqlDbType.SmallDateTime,
+            "datetimeoffset" => SqlDbType.DateTimeOffset,
+            "time" => SqlDbType.Time,
+            "uniqueidentifier" => SqlDbType.UniqueIdentifier,
+            "binary" => SqlDbType.Binary,
+            "varbinary" => SqlDbType.VarBinary,
+            "timestamp" or "rowversion" => SqlDbType.Timestamp,
+            "char" => SqlDbType.Char,
+            "varchar" => SqlDbType.VarChar,
+            "nchar" => SqlDbType.NChar,
+            "nvarchar" or "sysname" => SqlDbType.NVarChar,
+            "xml" => SqlDbType.Xml,
+            _ => SqlDbType.Variant
+        };
+    }
+
+    private static int GetOutputParameterSize(SqlDbType dbType, short maxLength)
+    {
+        if (dbType is not (SqlDbType.Char or SqlDbType.VarChar or SqlDbType.NChar or SqlDbType.NVarChar
+            or SqlDbType.Binary or SqlDbType.VarBinary))
+        {
+            return 0;
+        }
+
+        if (maxLength < 0)
+            return -1;
+
+        if (dbType is SqlDbType.NChar or SqlDbType.NVarChar)
+            return Math.Max(1, (int)maxLength / 2);
+
+        return Math.Max(1, (int)maxLength);
     }
 
     private static bool IsTextType(string systemTypeName)

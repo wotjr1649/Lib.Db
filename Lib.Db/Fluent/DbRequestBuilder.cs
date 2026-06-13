@@ -494,6 +494,7 @@ internal sealed class ExecutionStage<TParams> : IExecutionStage<TParams>
     public Task<DbResult<IAsyncEnumerable<TResult>>> QueryAsync<TResult>(CancellationToken ct = default)
         => ExecutionHelper.WrapSync(
             _commandText,
+            _commandType,
             () => _executor.QueryAsync<TParams, TResult>(
                 _commandText, _parameters, _instanceName, _commandType, CreateOptions(), ct));
 
@@ -503,6 +504,7 @@ internal sealed class ExecutionStage<TParams> : IExecutionStage<TParams>
     public Task<DbResult<TResult?>> QuerySingleAsync<TResult>(CancellationToken ct = default)
         => ExecutionHelper.WrapAsync(
             _commandText,
+            _commandType,
             async () =>
             {
                 TResult? value = await _executor.QuerySingleAsync<TParams, TResult>(
@@ -516,6 +518,7 @@ internal sealed class ExecutionStage<TParams> : IExecutionStage<TParams>
     public Task<DbResult<TScalar?>> ExecuteScalarAsync<TScalar>(CancellationToken ct = default)
         => ExecutionHelper.WrapAsync(
             _commandText,
+            _commandType,
             async () =>
             {
                 TScalar? value = await _executor.ExecuteScalarAsync<TParams, TScalar>(
@@ -529,6 +532,7 @@ internal sealed class ExecutionStage<TParams> : IExecutionStage<TParams>
     public Task<DbResult<IMultipleResultReader>> QueryMultipleAsync(CancellationToken ct = default)
         => ExecutionHelper.WrapAsync(
             _commandText,
+            _commandType,
             async () =>
             {
                 IMultipleResultReader reader = await _executor.QueryMultipleAsync<TParams>(
@@ -542,6 +546,7 @@ internal sealed class ExecutionStage<TParams> : IExecutionStage<TParams>
     public Task<DbResult<int>> ExecuteAsync(CancellationToken ct = default)
         => ExecutionHelper.WrapAsync(
             _commandText,
+            _commandType,
             async () =>
             {
                 int rows = await _executor.ExecuteNonQueryAsync(

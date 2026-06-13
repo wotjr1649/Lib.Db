@@ -98,9 +98,9 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
         catch (Exception ex)
         {
             activity?.SetTag("error", ex.GetType().Name);
-            _logger.LogError(ex,
-                "[SchemaFlush] 오류 발생: {Instance}",
-                diagnosticInstance);
+            _logger.LogError(
+                "[SchemaFlush] 오류 발생: {Instance} (ErrorType: {ErrorType})",
+                diagnosticInstance, ex.GetType().Name);
             throw;
         }
     }
@@ -148,9 +148,9 @@ public sealed class SchemaFlushService : ISchemaFlushCoordinator, IDisposable
         catch (Exception ex)
         {
             activity?.SetTag("error", ex.GetType().Name);
-            _logger.LogError(ex,
-                "[SchemaFlush] TVP 오류 발생: {Instance}, TVP={TvpName}",
-                diagnosticInstance, tvpName);
+            _logger.LogError(
+                "[SchemaFlush] TVP 오류 발생: {Instance}, TVP={TvpName} (ErrorType: {ErrorType})",
+                diagnosticInstance, tvpName, ex.GetType().Name);
             throw;
         }
     }
@@ -307,7 +307,9 @@ public sealed class EpochWatcherService : BackgroundService
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogError(ex, "[EpochWatcher] Epoch 체크 중 오류");
+                _logger.LogError(
+                    "[EpochWatcher] Epoch 체크 중 오류 (ErrorType: {ErrorType})",
+                    ex.GetType().Name);
             }
 
             await Task.Delay(_checkInterval, stoppingToken).ConfigureAwait(false);

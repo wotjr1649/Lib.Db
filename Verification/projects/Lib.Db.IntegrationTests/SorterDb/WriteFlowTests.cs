@@ -4,7 +4,9 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Data;
 using Lib.Db.IntegrationTests.Infrastructure;
+using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.SorterDb;
 
@@ -27,6 +29,10 @@ public sealed class WriteFlowTests(MultiDbFixture fixture)
     [Fact]
     public async Task W02_Barcode_ReturnsOutputParams()
     {
+        SqlParameter totalOrderQty = OutputInt("@O_T_OQTY");
+        SqlParameter itemCode = OutputText("@O_ITEM_CD", 50);
+        SqlParameter errorNo = OutputInt("@ERROR_NO");
+
         DbResult<int> result = await _db
             .Procedure("IF_SP_BARCODE")
             .With(new
@@ -37,23 +43,26 @@ public sealed class WriteFlowTests(MultiDbFixture fixture)
                 V_INVOICE = "TEST_INV",
                 V_BARCODE = "TEST_BC",
                 V_INPUT_STATUS = "A",
-                O_T_OQTY = 0,
-                O_T_WQTY = 0,
-                O_T_RQTY = 0,
-                O_ITEM_CD = "",
-                O_ITEM_STYLE = "",
-                O_ITEM_COLOR = "",
-                O_ITEM_SIZE = "",
-                O_ITEM_NM = "",
-                O_SORT_TYPE = "",
-                O_SKU_OQTY = 0,
-                O_SKU_WQTY = 0,
-                O_SKU_RQTY = 0,
-                ERROR_NO = 0
+                O_T_OQTY = totalOrderQty,
+                O_T_WQTY = OutputInt("@O_T_WQTY"),
+                O_T_RQTY = OutputInt("@O_T_RQTY"),
+                O_ITEM_CD = itemCode,
+                O_ITEM_STYLE = OutputText("@O_ITEM_STYLE", 50),
+                O_ITEM_COLOR = OutputText("@O_ITEM_COLOR", 50),
+                O_ITEM_SIZE = OutputText("@O_ITEM_SIZE", 50),
+                O_ITEM_NM = OutputText("@O_ITEM_NM", 100),
+                O_SORT_TYPE = OutputText("@O_SORT_TYPE", 50),
+                O_SKU_OQTY = OutputInt("@O_SKU_OQTY"),
+                O_SKU_WQTY = OutputInt("@O_SKU_WQTY"),
+                O_SKU_RQTY = OutputInt("@O_SKU_RQTY"),
+                ERROR_NO = errorNo
             })
             .ExecuteAsync(TestContext.Current.CancellationToken);
         // Fluent API로 SP + OUTPUT 매개변수 실행 검증
         result.IsSuccess.Should().BeTrue();
+        Convert.ToInt32(totalOrderQty.Value).Should().Be(0);
+        itemCode.Value.ToString().Should().Be("TEST_ITEM");
+        Convert.ToInt32(errorNo.Value).Should().Be(0);
     }
 
     [Fact]
@@ -75,4 +84,16 @@ public sealed class WriteFlowTests(MultiDbFixture fixture)
             .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
     }
+
+    private static SqlParameter OutputInt(string name)
+        => new(name, SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output
+        };
+
+    private static SqlParameter OutputText(string name, int size)
+        => new(name, SqlDbType.NVarChar, size)
+        {
+            Direction = ParameterDirection.Output
+        };
 }

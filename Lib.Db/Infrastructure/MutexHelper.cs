@@ -10,6 +10,8 @@
 
 #nullable enable
 
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Lib.Db.Infrastructure;
@@ -146,16 +148,18 @@ public static class MutexHelper
         ArgumentNullException.ThrowIfNull(logicalName);
         ArgumentNullException.ThrowIfNull(logger);
 
+        string safeName = BuildSafeMutexName(logicalName);
+
         // ====================================================================
         // 1순위: Global 네임스페이스 시도
         // ====================================================================
         try
         {
-            Mutex globalMutex = new Mutex(false, $"Global\\{logicalName}");
+            Mutex globalMutex = new Mutex(false, $"Global\\{safeName}");
 
             logger.LogDebug(
-                "[MutexHelper] Global Mutex 생성 성공 - 이름: {Name}",
-                logicalName);
+                "[MutexHelper] Global Mutex 생성 성공 - 이름해시: {NameHash}",
+                safeName);
 
             return globalMutex;
         }
@@ -164,15 +168,15 @@ public static class MutexHelper
             // Global 네임스페이스 접근 권한 없음 (예상된 케이스)
             logger.LogWarning(
                 "[MutexHelper] Global 네임스페이스 권한 없음. Local로 전환합니다. " +
-                "이름: {Name}, 영향: 동일 세션 내 프로세스만 동기화됨",
-                logicalName);
+                "이름해시: {NameHash}, 영향: 동일 세션 내 프로세스만 동기화됨",
+                safeName);
         }
         catch (Exception ex)
         {
             // 예상치 못한 예외 (플랫폼 문제, 이름 규칙 위반 등)
-            logger.LogError(ex,
-                "[MutexHelper] Global Mutex 생성 중 예외 발생. Local로 폴백 시도. 이름: {Name}",
-                logicalName);
+            logger.LogError(
+                "[MutexHelper] Global Mutex 생성 중 예외 발생. Local로 폴백 시도. 이름해시: {NameHash} (ErrorType: {ErrorType})",
+                safeName, ex.GetType().Name);
         }
 
         // ====================================================================
@@ -180,22 +184,22 @@ public static class MutexHelper
         // ====================================================================
         try
         {
-            Mutex localMutex = new Mutex(false, $"Local\\{logicalName}");
+            Mutex localMutex = new Mutex(false, $"Local\\{safeName}");
 
             logger.LogInformation(
-                "[MutexHelper] Local Mutex 생성 성공 - 이름: {Name}, " +
+                "[MutexHelper] Local Mutex 생성 성공 - 이름해시: {NameHash}, " +
                 "영향: 동일 세션 내 프로세스 간 동기화",
-                logicalName);
+                safeName);
 
             return localMutex;
         }
         catch (Exception ex)
         {
             // Local도 실패 (매우 드문 케이스: OS 리소스 고갈, 플랫폼 비호환 등)
-            logger.LogError(ex,
+            logger.LogError(
                 "[MutexHelper] Local Mutex 생성 실패. Unnamed Mutex로 최종 폴백. " +
-                "이름: {Name}, 영향: 프로세스 내부만 동기화 (프로세스 간 공유 불가)",
-                logicalName);
+                "이름해시: {NameHash}, 영향: 프로세스 내부만 동기화 (프로세스 간 공유 불가), ErrorType: {ErrorType}",
+                safeName, ex.GetType().Name);
         }
 
         // ====================================================================
@@ -203,12 +207,18 @@ public static class MutexHelper
         // ====================================================================
         logger.LogWarning(
             "[MutexHelper] ⚠️ Unnamed Mutex 사용 - 프로세스 간 동기화가 작동하지 않습니다. " +
-            "원래 이름: {Name}",
-            logicalName);
+            "원래 이름해시: {NameHash}",
+            safeName);
 
         // ⚠️ 중요: 이름이 없으므로 다른 프로세스와 공유되지 않습니다.
         // 하지만 앱이 죽지 않도록 최소한의 동기화는 제공합니다.
         return new Mutex(false);
+    }
+
+    internal static string BuildSafeMutexName(string logicalName)
+    {
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(logicalName));
+        return "Lib.Db." + Convert.ToHexString(digest, 0, 12).ToLowerInvariant();
     }
 
     #endregion

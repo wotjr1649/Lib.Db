@@ -161,13 +161,23 @@ public static class FastLogger
     /// <see cref="LogLevel.Warning"/> 이 활성화된 경우에만 보간 문자열을 평가하여 경고 로그를 기록합니다.
     /// </summary>
     /// <param name="logger">로그를 기록할 <see cref="ILogger"/> 인스턴스입니다.</param>
-    /// <param name="ex">로그에 첨부할 예외입니다.</param>
+    /// <param name="ex">오류 타입만 구조화 필드로 남길 예외입니다.</param>
     /// <param name="handler">컴파일러가 생성하는 보간 문자열 핸들러입니다.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void LogFastWarn(this ILogger logger, Exception? ex, [InterpolatedStringHandlerArgument("logger", "ex")] ref FastWarnLogHandler handler)
     {
         if (handler.IsEnabled)
-            logger.LogWarning(ex, handler.GetFormattedText());
+        {
+            string message = handler.GetFormattedText();
+            if (ex is null)
+            {
+                logger.LogWarning("{Message}", message);
+            }
+            else
+            {
+                logger.LogWarning("{Message} (ErrorType: {ErrorType})", message, ex.GetType().Name);
+            }
+        }
     }
 }
 
@@ -302,7 +312,7 @@ public ref struct FastWarnLogHandler
     /// <param name="literalLength">보간 문자열의 리터럴 문자 길이입니다.</param>
     /// <param name="formattedCount">보간 문자열에 포함된 형식 지정 값 개수입니다.</param>
     /// <param name="logger">로그 레벨 확인에 사용할 로거입니다.</param>
-    /// <param name="ex">경고 로그에 첨부할 예외입니다. 레벨 확인에는 사용하지 않습니다.</param>
+    /// <param name="ex">오류 타입 필드 계산에만 사용하는 예외입니다. 레벨 확인에는 사용하지 않습니다.</param>
     /// <param name="isEnabled">경고 로그 활성 여부입니다.</param>
     public FastWarnLogHandler(int literalLength, int formattedCount, ILogger logger, Exception? ex, out bool isEnabled)
     {
