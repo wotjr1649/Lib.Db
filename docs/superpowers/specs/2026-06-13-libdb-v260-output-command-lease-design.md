@@ -27,7 +27,7 @@ Lib.Db v2.6.0 expands stored procedure output parameter support from the v2.5.1 
 
 - Do not add automatic DTO/attribute support for every `SqlParameter` provider property.
 - Do not expose or copy output values after failed, canceled, timed-out, read-faulted, dispose-faulted, interceptor-faulted, or partially failed commands.
-- Do not support TVP output parameters, cursor output parameters, or legacy `text`/`ntext`/`image` output combinations.
+- Do not support TVP output parameters, SQL Server cursor-reference output parameters, or legacy `text`/`ntext`/`image` output combinations.
 - Do not change public result types to carry output values separately from caller-owned parameter objects.
 - Do not buffer streaming results as a workaround for output lifecycle timing.
 - Do not add caller-owned `SqlParameter` instances directly to an executing `SqlCommand`; preserve caller object identity through clone-and-copy-back.
@@ -144,7 +144,7 @@ DTO and anonymous-object-like parameters:
 
 - Writable properties matching output/input-output parameters are updated only after all output targets validate.
 - Properties of type `SqlParameter` preserve the caller's object reference externally, but command execution uses a cloned command-bound parameter.
-- Non-writable properties are ignored in non-strict mode and fail in strict mode when they are required output targets.
+- Anonymous-object and read-only scalar properties may declare stored-procedure `OUTPUT` parameters for execution compatibility, but they are not output copy-back targets. Use a writable property or explicit `SqlParameter` when the caller must observe the output value.
 - DTO copy-back must roll back any Lib.Db-written property values if a later output target fails. Custom setter side effects outside the written property values are outside Lib.Db's guarantee and should be avoided by consumers.
 
 DataRow parameters:
@@ -185,7 +185,7 @@ Lib.Db must fail before execution when a parameter contract is known unsupported
 
 - `SqlDbType.Structured` with `Output`, `InputOutput`, or `ReturnValue`.
 - Metadata or explicit parameters representing TVP output.
-- Cursor output parameters detected from stored procedure metadata.
+- Cursor-reference output parameters detected from stored procedure metadata, including `sys.parameters.is_cursor_ref` and raw SQL Server type names before `SqlDbType` enum conversion.
 - `SqlDbType.Text`, `SqlDbType.NText`, or `SqlDbType.Image` with `Output`, `InputOutput`, or `ReturnValue`, including explicit `SqlParameter` paths.
 - Duplicate return-value parameters.
 - Return-value parameters whose SQL type is not `SqlDbType.Int` or equivalent `DbType.Int32`.
@@ -235,23 +235,28 @@ Required tests:
 - Explicit `SqlParameter` clone metadata preservation, return-value propagation, duplicate reference rejection, and unsupported direction/type guard coverage.
 - Explicit `InputOutput SqlParameter` bind-time `Value`/`SqlValue` cloning.
 - Non-`int` explicit return-value fail-fast coverage.
-- TVP output, cursor output, duplicate return value, legacy LOB output, and structured output fail-fast guards.
+- TVP output, cursor-reference output, duplicate return value, legacy LOB output, and structured output fail-fast guards.
 - Output mapping failure rollback for DTO, dictionary, DataRow, and explicit `SqlParameter` targets.
 - A fake/controlled reader memory guard that proves streaming output completion does not call `ToList`, materialize all rows, or enumerate beyond the caller's requested rows except for provider close/dispose behavior.
 
 Minimum verification gates:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~OutputParameterTests|FullyQualifiedName~MapperCoverageTests|FullyQualifiedName~SqlGridReaderCoverageTests|FullyQualifiedName~MultipleResultExtensionsTests|FullyQualifiedName~RuntimeTvpBindingTests|FullyQualifiedName~OutputCommandLeaseMemoryGuardTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MapperCoverageTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*SqlGridReaderCoverageTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MultipleResultExtensionsTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*RuntimeTvpBindingTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputCommandLeaseMemoryGuardTests*"
 dotnet build Lib.Db/Lib.Db.csproj
 ```
 
 Extended verification gates:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~OutputParameterTests"
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj
-powershell -NoProfile -ExecutionPolicy Bypass -File Verification/scripts/Invoke-Tests.ps1
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1
 ```
 
 Extended gates require local SQL Server prerequisites for DB-backed verification. If those prerequisites are unavailable, the final report must state that DB-backed gates were not run.
@@ -305,7 +310,7 @@ Docs and skills must cover:
 - explicit `SqlParameter` clone-and-copy-back behavior
 - explicit return-value support and DTO/dictionary/DataRow exclusion
 - DataRow strict/non-strict and transactional rollback behavior
-- unsupported TVP, cursor, structured, and legacy LOB output combinations
+- unsupported TVP, cursor-reference, structured, and legacy LOB output combinations
 - memory-safe streaming expectations
 
 ## Implementation Sequence
@@ -315,7 +320,7 @@ Implement as green vertical slices. Do not commit tests that are intentionally l
 1. Non-reader output lifecycle: tests and implementation for `ExecuteAsync`, `QuerySingleAsync`, `ExecuteScalarAsync`, explicit return values, interceptor failure, exactly-once copy-back, and no-copy-back failure cases.
 2. Two-phase reverse mapping: tests and implementation for canonical names, DTO/dictionary rollback, `DataRow` transactional copy-back, strict/non-strict behavior, and mapping failure rollback.
 3. Explicit `SqlParameter` clone/copy-back: tests and implementation for metadata preservation, duplicate reference rejection, return values, and unsupported explicit direction/type guards.
-4. Unsupported SQL Server edge guards: tests and implementation for structured/TVP output, cursor output metadata, legacy LOB output, duplicate return values, and redacted errors.
+4. Unsupported SQL Server edge guards: tests and implementation for structured/TVP output, cursor-reference metadata (`sys.parameters.is_cursor_ref`), legacy LOB output, duplicate return values, and redacted errors.
 5. `QueryAsync` command lease: tests and implementation for full enumeration, clean early disposal, cancellation/read/timeout/dispose failures, exactly-once completion, and memory guard.
 6. `QueryMultipleAsync` command lease: tests and implementation for raw `DisposeAsync`, helper completion, helper/read/dispose failures, return values, and late failure policy.
 7. Documentation and skill updates: docs/skills/tests updated with the final public contract.

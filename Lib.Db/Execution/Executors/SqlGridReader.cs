@@ -8,6 +8,7 @@
 
 using Lib.Db.Contracts.Execution;
 using Lib.Db.Contracts.Mapping;
+using Lib.Db.Diagnostics;
 using Lib.Db.Execution.Output;
 
 namespace Lib.Db.Execution.Executors;
@@ -111,7 +112,18 @@ internal sealed class SqlGridReader(
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        await lease.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            await lease.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
+        }
     }
 }
 

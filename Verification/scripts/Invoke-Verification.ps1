@@ -15,6 +15,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $integrationProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj'
 $benchmarkProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.Benchmarks\Lib.Db.Benchmarks.csproj'
+$testScript = Join-Path $PSScriptRoot 'Invoke-Tests.ps1'
 $coverageScript = Join-Path $PSScriptRoot 'Invoke-Coverage.ps1'
 $benchmarkScript = Join-Path $PSScriptRoot 'Invoke-Benchmarks.ps1'
 $aotScript = Join-Path $PSScriptRoot 'Invoke-Aot.ps1'
@@ -27,9 +28,25 @@ $releasePackageArtifactsDirectory = 'Verification\artifacts\release-package'
 
 $skippedGates = [System.Collections.Generic.List[string]]::new()
 
+function Format-RepoRelativePath {
+    param([Parameter(Mandatory = $true)] [string] $Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $rootPath = [System.IO.Path]::GetFullPath($repoRoot)
+    if (-not $rootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootPath += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    if ($fullPath.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $fullPath.Substring($rootPath.Length)
+    }
+
+    return [System.IO.Path]::GetFileName($fullPath)
+}
+
 if (Test-Path -LiteralPath $localEnvironmentScript) {
     . $localEnvironmentScript -NoBenchmarkReset
-    Write-Host "Loaded local verification environment script: $localEnvironmentScript"
+    Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
 }
 
 function Invoke-Checked {
@@ -73,16 +90,18 @@ if (-not $SkipMatrixDbTests) {
         Remove-Item -LiteralPath $matrixResultsDirectory -Recurse -Force
     }
 
-    Invoke-Checked 'dotnet' @(
-        'test',
-        '--project', $integrationProject,
-        '--no-build',
-        '--filter-class', '*V230TvpMatrixTests*',
-        '--minimum-expected-tests', '1',
-        '--report-trx',
-        '--report-trx-filename', 'v230-matrix.trx',
-        '--results-directory', $matrixResultsDirectory,
-        '-v:minimal'
+    Invoke-Checked 'pwsh' @(
+        '-NoProfile',
+        '-File', $testScript,
+        '-Target', 'IntegrationTests',
+        '-NoRestore',
+        '-NoBuild',
+        '-FilterClass', '*V230TvpMatrixTests*',
+        '-ReportTrx',
+        '-TrxFileName', 'v230-matrix.trx',
+        '-ResultsDirectory', $matrixResultsDirectory,
+        '-Verbosity', 'minimal',
+        '-KeepBuildServers'
     )
 
     $matrixTrx = Get-ChildItem -LiteralPath $matrixResultsDirectory -Recurse -Filter 'v230-matrix.trx' -File |
@@ -91,7 +110,7 @@ if (-not $SkipMatrixDbTests) {
         throw 'MTP matrix test gate did not produce v230-matrix.trx.'
     }
 
-    Write-Host "MatrixTrx=$($matrixTrx.FullName)"
+    Write-Host "MatrixTrx=$(Format-RepoRelativePath -Path $matrixTrx.FullName)"
 }
 else {
     $skippedGates.Add('matrix-db-tests')

@@ -11,14 +11,30 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$testProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj'
 $coverageSettings = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\mtp-codecoverage.config.xml'
 $assertScript = Join-Path $PSScriptRoot 'Assert-LibDbCoverage.ps1'
+$testScript = Join-Path $PSScriptRoot 'Invoke-Tests.ps1'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
+
+function Format-RepoRelativePath {
+    param([Parameter(Mandatory = $true)] [string] $Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $rootPath = [System.IO.Path]::GetFullPath($repoRoot)
+    if (-not $rootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootPath += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    if ($fullPath.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $fullPath.Substring($rootPath.Length)
+    }
+
+    return [System.IO.Path]::GetFileName($fullPath)
+}
 
 if (Test-Path -LiteralPath $localEnvironmentScript) {
     . $localEnvironmentScript -NoBenchmarkReset
-    Write-Host "Loaded local verification environment script: $localEnvironmentScript"
+    Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
 }
 else {
     Write-Host 'Local verification environment script not found; using existing process environment.'
@@ -68,7 +84,7 @@ function Get-LatestCoverageFile {
         Select-Object -First 1
 
     if ($null -eq $coverage) {
-        throw "coverage.cobertura.xml was not produced under $Root."
+        throw "coverage.cobertura.xml was not produced under $(Format-RepoRelativePath -Path $Root)."
     }
 
     return $coverage.FullName
@@ -87,21 +103,23 @@ if (Test-Path -LiteralPath $resultsPath) {
 }
 New-Item -ItemType Directory -Path $resultsPath -Force | Out-Null
 
-Invoke-Checked 'dotnet' @(
-    'test',
-    '--project', $testProject,
-    '-c', $Configuration,
-    '--no-restore',
+Invoke-Checked 'pwsh' @(
+    '-NoProfile',
+    '-File', $testScript,
+    '-Target', 'IntegrationTests',
+    '-Configuration', $Configuration,
+    '-NoRestore',
+    '-ResultsDirectory', $resultsPath,
+    '-Verbosity', 'minimal',
+    '-KeepBuildServers',
     '--coverage',
     '--coverage-output-format', 'cobertura',
     '--coverage-output', $coverageOutput,
-    '--coverage-settings', $coverageSettings,
-    '--results-directory', $resultsPath,
-    '-v:minimal'
+    '--coverage-settings', $coverageSettings
 )
 
 $coveragePath = Get-LatestCoverageFile -Root $resultsPath
-Write-Host "Cobertura=$coveragePath"
+Write-Host "Cobertura=$(Format-RepoRelativePath -Path $coveragePath)"
 
 if (-not $SkipReport) {
     if ($RestoreTools) {
@@ -120,7 +138,7 @@ if (-not $SkipReport) {
         '-assemblyfilters:+Lib.Db;-Lib.Db.IntegrationTests;-Lib.Db.Benchmarks;-Lib.Db.AotVerification'
     )
 
-    Write-Host "CoverageReport=$reportPath"
+    Write-Host "CoverageReport=$(Format-RepoRelativePath -Path $reportPath)"
 }
 
 if (-not $SkipGate) {

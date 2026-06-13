@@ -51,7 +51,7 @@ WHERE TYPE_ID(e.[Name]) IS NULL;
 
 DECLARE @ExpectedProcedures TABLE ([Name] SYSNAME NOT NULL PRIMARY KEY);
 INSERT INTO @ExpectedProcedures ([Name]) VALUES
-(N'adv.usp_Adv_GenerateLogs'), (N'adv.usp_Adv_OutputParameters'),
+(N'adv.usp_Adv_GenerateLogs'), (N'adv.usp_Adv_OutputParameters'), (N'adv.usp_Adv_OutputParameters_Multiple'),
 (N'core.usp_Core_Bulk_Insert_Users'), (N'core.usp_Core_Get_Dashboard'), (N'core.usp_Core_Get_User'),
 (N'core.usp_Core_Insert_User'), (N'core.usp_Core_Search_Users'), (N'core.usp_Core_Transaction_Test'),
 (N'dbo.IF_SP_BARCODE'), (N'dbo.IF_SP_CHUTE_BTN_LOG'), (N'dbo.IF_SP_DAS_SELECT'), (N'dbo.IF_SP_EMR_LOG'),

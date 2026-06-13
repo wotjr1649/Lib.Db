@@ -50,6 +50,17 @@ var stage = db.Default
 | `QueryMultipleAsync(ct)` | `Task<DbResult<IMultipleResultReader>>` |
 | `ExecuteAsync(ct)` | `Task<DbResult<int>>` |
 
+## Output Parameter Timing
+
+| API | Output availability |
+| --- | --- |
+| `ExecuteAsync`, `QuerySingleAsync`, `ExecuteScalarAsync` | After the returned `DbResult` is successful. |
+| `QueryAsync<T>` | After the returned async sequence is fully consumed or cleanly disposed. |
+| `QueryMultipleAsync` / raw `IMultipleResultReader` | After `IMultipleResultReader.DisposeAsync()` completes successfully. |
+| `ReadMultipleAsync(...)` helpers | After the helper succeeds, because the helper disposes the reader internally. |
+
+If command execution, row reading, cancellation, or reader disposal fails, treat output values as unavailable. Clean early disposal is allowed; failed disposal is not. Dictionary, DTO, Reflection, and DataRow copy-back is transactional: Lib.Db avoids partially mutating caller-owned output targets when a later output target fails validation or conversion. Anonymous/read-only parameter properties can declare output parameters for execution, but they are not copy-back targets. SQL Server cursor-reference (`sys.parameters.is_cursor_ref`), structured, and legacy LOB output parameters are intentionally unsupported; pass advanced metadata with an explicit `SqlParameter` only when Lib.Db documents the type as supported.
+
 ## Stream Rows
 
 ```csharp

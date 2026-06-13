@@ -526,7 +526,8 @@ internal sealed partial class SqlDbExecutor(
     /// 6. Interceptor Executing: 실행 전 인터셉터 체인 호출 (로깅, 모킹, 검증 등)<br/>
     /// 7. 명령 실행: 실제 DbCommand.ExecuteXxxAsync 호출<br/>
     /// 8. 메트릭 기록: 실행 시간(Duration)을 DbMetrics에 기록<br/>
-    /// 9. Interceptor Executed: 실행 후 인터셉터 체인 호출 (성능 로깅, 결과 변환 등)<br/><br/>
+    /// 9. Interceptor Executed: 실행 후 인터셉터 체인 호출 (성능 로깅, 결과 변환 등)<br/>
+    /// 10. OUTPUT 역매핑: 실행 후 인터셉터까지 성공한 경우에만 caller-owned 출력 대상에 복사<br/><br/>
     /// <b>[예외 처리 전략]</b><br/>
     /// - SqlException은 Polly Resilience Pipeline이 처리할 수 있도록 그대로 전파합니다.<br/>
     /// - 기타 예외는 LibDbExceptionFactory를 통해 원문 SQL을 제외한 예외로 래핑합니다.<br/>
@@ -922,7 +923,18 @@ internal sealed partial class SqlDbExecutor(
         }
         finally
         {
-            await lease.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await lease.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
+            }
         }
     }
 

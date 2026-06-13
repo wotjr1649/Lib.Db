@@ -1466,19 +1466,29 @@ internal sealed class TvpSchemaValidator(
 /// <summary>
 /// DB 메타데이터 DTO를 런타임에서 사용하는 스키마 모델로 변환하는 매퍼입니다.
 /// </summary>
-file static class SchemaMapper
+internal static class SchemaMapper
 {
     public static SpParameterMetadata MapToSpParameter(SpParameterInfo info)
-        => new(
+    {
+        bool isCursorRef = info.IsCursorRef || SqlServerSqlTypeMapper.IsCursorTypeName(info.TypeName);
+        SqlDbType sqlDbType = SqlServerSqlTypeMapper.MapToSqlDbType(
+            info.TypeName,
+            isCursorRef);
+
+        return new SpParameterMetadata(
             Name: info.Name,
             UdtTypeName: info.UdtName ?? string.Empty,
             Size: (short)info.MaxLength,
-            SqlDbType: MapToSql(info.TypeName),
+            SqlDbType: sqlDbType,
             Direction: info.IsOutput ? ParameterDirection.Output : ParameterDirection.Input,
             Precision: (byte)info.Precision,
             Scale: (byte)info.Scale,
             IsNullable: info.IsNullable,
-            HasDefaultValue: info.HasDefault);
+            HasDefaultValue: info.HasDefault)
+        {
+            IsCursorRef = isCursorRef
+        };
+    }
 
     public static TvpColumnMetadata MapToTvpColumn(TvpColumnInfo info)
         => new(
@@ -1486,23 +1496,13 @@ file static class SchemaMapper
             NameHash: TvpNameHash.Compute(info.Name),
             MaxLength: (short)info.MaxLength,
             Ordinal: info.Ordinal,
-            SqlDbType: MapToSql(info.TypeName),
+            SqlDbType: SqlServerSqlTypeMapper.MapToSqlDbType(info.TypeName),
             Precision: (byte)info.Precision,
             Scale: (byte)info.Scale,
             IsIdentity: info.IsIdentity,
             IsComputed: info.IsComputed,
             IsNullable: info.IsNullable);
 
-    private static SqlDbType MapToSql(string typeName)
-        => Enum.TryParse<SqlDbType>(typeName, ignoreCase: true, out SqlDbType parsed)
-            ? parsed
-            : typeName.ToLowerInvariant() switch
-            {
-                "numeric" => SqlDbType.Decimal,
-                "rowversion" => SqlDbType.Timestamp,
-                "sysname" => SqlDbType.NVarChar,
-                _ => SqlDbType.Variant
-            };
 }
 
 #endregion

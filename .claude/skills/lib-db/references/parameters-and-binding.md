@@ -118,7 +118,7 @@ DbResult<int> result = await db.Default
 
 ## Output Parameters
 
-For output parameters, keep a reference to the `SqlParameter` you supplied and read it only after a successful command. Prefer `QuerySingleAsync<T>()` or `ExecuteScalarAsync<T>()` for new application contracts when you control the stored procedure shape.
+For output parameters, keep a reference to the `SqlParameter` you supplied and read it only after a successful command. Use `Direction = InputOutput` when the stored procedure `OUTPUT` parameter also consumes an input value. `ReturnValue` parameters must use `SqlDbType.Int`. Prefer `QuerySingleAsync<T>()` or `ExecuteScalarAsync<T>()` for new application contracts when you control the stored procedure shape.
 
 ```csharp
 var total = new SqlParameter("@Total", SqlDbType.Int)
@@ -148,4 +148,17 @@ int? totalValue = total.Value is DBNull ? null : (int?)total.Value;
 int statusCode = returnValue.Value is DBNull ? 0 : (int)returnValue.Value;
 ```
 
-Do not read output or return parameters after a failed command unless the stored procedure contract explicitly guarantees them.
+Output and return values are copied back for non-streaming execution APIs after successful command completion. For `QueryAsync<T>()`, copy-back happens when the returned async sequence is fully consumed or disposed cleanly, including clean early disposal. For raw `QueryMultipleAsync()`, copy-back happens only after `IMultipleResultReader.DisposeAsync()` completes successfully; `ReadMultipleAsync(...)` helpers dispose the reader internally, so helper success is the copy-back point. Do not read output values before the relevant completion point. If the command is canceled, enumeration fails, or reader disposal fails, treat output values as unavailable.
+
+Anonymous objects and read-only DTO properties may declare stored-procedure `OUTPUT` parameters so the command can execute, but scalar values cannot be copied back into read-only members. Use a mutable DTO property, dictionary entry, `DataRow` column, or explicit `SqlParameter` when the caller needs the output value. `ReturnValue` is explicit `SqlParameter` only; scalar object or `DataRow` members named like a return value are not updated.
+
+SQL Server cursor-reference output parameters are unsupported and are detected from stored procedure metadata (`sys.parameters.is_cursor_ref`) before execution. Structured/TVP outputs and legacy `text`, `ntext`, or `image` outputs are also rejected.
+
+`DataRow` parameter bags also support output copy-back:
+
+- `Output` and `InputOutput` parameters write back to the matching `DataColumn`; `InputOutput` may also carry an input value.
+- `ReturnValue` is not written to a scalar `DataRow` column; use an explicit `SqlParameter` cell with `SqlDbType.Int` when you need the return value.
+- When a `DataRow` cell contains an explicit `SqlParameter`, Lib.Db clones it for the command and copies output values back to the original only after the row update succeeds.
+- Failed `DataRow` copy-back restores row values and explicit `SqlParameter.Value` values as a single rollback boundary.
+
+Do not read output or return parameters after a failed or canceled command, failed reader enumeration, or failed reader disposal.

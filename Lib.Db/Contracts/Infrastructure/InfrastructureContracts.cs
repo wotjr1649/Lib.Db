@@ -49,6 +49,7 @@ public sealed record SpMetadata(
 /// <param name="Precision">정밀도(Decimal 계열)</param>
 /// <param name="Scale">스케일(Decimal 계열)</param>
 /// <param name="IsOutput">OUTPUT 또는 INPUTOUTPUT 여부</param>
+/// <param name="IsCursorRef">커서 참조 파라미터 여부</param>
 /// <param name="IsNullable">NULL 허용 여부</param>
 /// <param name="HasDefault">DEFAULT 값 존재 여부</param>
 /// <param name="UdtName">사용자 정의 타입 이름(UDT/TVP, 해당 시)</param>
@@ -59,6 +60,7 @@ public readonly record struct SpParameterInfo(
     int Precision,
     int Scale,
     bool IsOutput,
+    bool IsCursorRef,
     bool IsNullable,
     bool HasDefault,
     string? UdtName
@@ -118,7 +120,7 @@ public sealed class SchemaBulkData
 {
     /// <summary>
     /// 저장 프로시저 버전 정보
-    /// <para>Key: SP 이름, Value: 버전</para>
+    /// <para>Key: schema-qualified SP 이름, Value: 버전</para>
     /// </summary>
     public Dictionary<string, long> SpVersions { get; init; } = [];
 
@@ -130,7 +132,7 @@ public sealed class SchemaBulkData
 
     /// <summary>
     /// 저장 프로시저 파라미터 정보
-    /// <para>Key: SP 이름, Value: 파라미터 목록</para>
+    /// <para>Key: schema-qualified SP 이름, Value: 파라미터 목록</para>
     /// </summary>
     public Dictionary<string, List<SpParameterInfo>> SpParameters { get; init; } = [];
 

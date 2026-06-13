@@ -15,6 +15,7 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis; // [AOT] NotNullWhen 등
+using System.Data.SqlTypes;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -208,7 +209,11 @@ public static partial class DbBinder
         if (!NormalizeExplicitParameterValue(parameter, meta, strictCheck))
             return true;
 
-        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(parameter);
+        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(
+            parameter.ParameterName,
+            parameter.SqlDbType,
+            parameter.Direction,
+            meta.IsCursorRef);
         SqlParameterCloneFactory.ValidateNoDuplicateReturnValue(cmd, parameter);
         SqlParameterCloneFactory.RegisterClone(cmd, parameter, source, meta.Name);
         cmd.Parameters.Add(parameter);
@@ -287,9 +292,11 @@ public static partial class DbBinder
             return true;
         }
 
+        object? originalValue = parameter.Value;
+        bool preserveProviderValue = IsProviderValueForInput(originalValue);
         NormalizedParameterValue normalized = NormalizeParameterValueForMetadata(
             meta,
-            parameter.Value,
+            originalValue,
             parameter.Direction,
             strictCheck);
 
@@ -297,9 +304,46 @@ public static partial class DbBinder
             return false;
 
         ApplyStructuredTypeName(parameter, meta, normalized.StructuredTypeNameOverride);
-        parameter.Value = normalized.Value;
+        if (preserveProviderValue && normalized.Value is not DBNull)
+            parameter.SqlValue = originalValue;
+        else
+            parameter.Value = normalized.Value;
         return true;
     }
+
+    private static object? UnwrapProviderValueForInput(object? value)
+    {
+        if (value is null or DBNull)
+            return value;
+
+        if (value is INullable nullable && nullable.IsNull)
+            return DBNull.Value;
+
+        return value switch
+        {
+            SqlBinary sqlBinary => sqlBinary.Value,
+            SqlBoolean sqlBoolean => sqlBoolean.Value,
+            SqlByte sqlByte => sqlByte.Value,
+            SqlBytes => value,
+            SqlChars => value,
+            SqlDateTime sqlDateTime => sqlDateTime.Value,
+            SqlDecimal sqlDecimal => sqlDecimal.Value,
+            SqlDouble sqlDouble => sqlDouble.Value,
+            SqlGuid sqlGuid => sqlGuid.Value,
+            SqlInt16 sqlInt16 => sqlInt16.Value,
+            SqlInt32 sqlInt32 => sqlInt32.Value,
+            SqlInt64 sqlInt64 => sqlInt64.Value,
+            SqlMoney sqlMoney => sqlMoney.Value,
+            SqlSingle sqlSingle => sqlSingle.Value,
+            SqlString sqlString => sqlString.Value,
+            SqlXml => value,
+            _ => value
+        };
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsProviderValueForInput(object? value)
+        => value is INullable or SqlBytes or SqlChars or SqlXml;
 
     [UnconditionalSuppressMessage(
         "Trimming",
@@ -315,7 +359,10 @@ public static partial class DbBinder
         ParameterDirection direction,
         bool strictCheck)
     {
-        bool isNullOrDbNull = rawValue is null || rawValue == DBNull.Value;
+        object? inputValue = DirectionConsumesInput(direction)
+            ? UnwrapProviderValueForInput(rawValue)
+            : rawValue;
+        bool isNullOrDbNull = inputValue is null || inputValue == DBNull.Value;
         if (isNullOrDbNull && meta.HasDefaultValue && direction == ParameterDirection.Input)
             return new NormalizedParameterValue(false, DBNull.Value, null);
 
@@ -331,7 +378,7 @@ public static partial class DbBinder
             throw new ArgumentException(ctx.CreateErrorMessage(baseMsg), meta.Name);
         }
 
-        object finalValue = rawValue ?? DBNull.Value;
+        object finalValue = inputValue ?? DBNull.Value;
         string? structuredTypeNameOverride = null;
         bool explicitTvpBound = false;
 
@@ -478,8 +525,15 @@ public static partial class DbBinder
                 sqlParam.Scale = meta.Scale;
         }
 
-        sqlParam.Value = normalized.Value;
-        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(sqlParam);
+        if (IsProviderValueForInput(normalized.Value))
+            sqlParam.SqlValue = normalized.Value;
+        else
+            sqlParam.Value = normalized.Value;
+        SqlParameterCloneFactory.ValidateSupportedOutputMetadata(
+            sqlParam.ParameterName,
+            sqlParam.SqlDbType,
+            sqlParam.Direction,
+            meta.IsCursorRef);
         cmd.Parameters.Add(sqlParam);
     }
 
@@ -535,7 +589,7 @@ public static partial class DbBinder
             return;
         }
 
-        object finalValue = value ?? DBNull.Value;
+        object finalValue = UnwrapProviderValueForInput(value) ?? DBNull.Value;
         SqlDbType? inferredDbType = null;
 
         // 2. 명시적 런타임 TVP wrapper는 JSON/복합 객체 처리보다 우선합니다.
@@ -599,10 +653,10 @@ public static partial class DbBinder
             dbType = finalValue is DBNull ? SqlDbType.Variant : inferredDbType ?? InferSqlDbType(finalValue);
 
             // 자동 추론 보정 (LOB)
-            if (finalValue is byte[] or Stream)
+            if (finalValue is byte[] or Stream or SqlBytes or SqlChars)
             {
-                // Stream은 무조건 -1(MAX), byte[]는 VarBinary인 경우에만 MAX로 처리
-                if (finalValue is Stream)
+                // Stream/provider LOB는 무조건 -1(MAX), byte[]는 VarBinary인 경우에만 MAX로 처리
+                if (finalValue is Stream or SqlBytes or SqlChars)
                     size = -1;
                 else if (dbType == SqlDbType.VarBinary)
                     size = -1;
@@ -643,6 +697,12 @@ public static partial class DbBinder
         else if (finalValue is Stream stream)
         {
             p.Value = stream;
+            if (size <= 0)
+                p.Size = -1;
+        }
+        else if (finalValue is SqlBytes or SqlChars or SqlXml)
+        {
+            p.SqlValue = finalValue;
             if (size <= 0)
                 p.Size = -1;
         }
@@ -906,6 +966,7 @@ public static partial class DbBinder
         v is not (
             null or DBNull or string or DateTime or DateOnly or TimeOnly or Guid or decimal or Enum or
             DataTable or IDataReader or System.Data.Common.DbParameter or Stream or
+            INullable or SqlBytes or SqlChars or SqlXml or
             byte[] // byte[]는 JSON 직렬화 대상에서 제외
         )
         && !v.GetType().IsPrimitive;
@@ -951,6 +1012,9 @@ public static partial class DbBinder
         Guid => SqlDbType.UniqueIdentifier,
         byte[] => SqlDbType.VarBinary,
         Stream => SqlDbType.VarBinary,
+        SqlBytes => SqlDbType.VarBinary,
+        SqlChars => SqlDbType.NVarChar,
+        SqlXml => SqlDbType.Xml,
         // [수정] Half는 SQL Server의 Real(4byte float)로 매핑
         Half => SqlDbType.Real,
         _ => SqlDbType.Variant

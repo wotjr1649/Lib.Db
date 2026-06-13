@@ -1041,6 +1041,21 @@ internal static class SchemaInitializer
             """).ExecuteAsync().ConfigureAwait(false);
 
         await db.Sql("""
+            CREATE OR ALTER PROCEDURE [adv].[usp_Adv_OutputParameters_Multiple]
+                @InputVal INT,
+                @OutputVal INT OUTPUT,
+                @InOutVal INT OUTPUT
+            AS
+            BEGIN
+                SET @OutputVal = @InputVal * 2;
+                SET @InOutVal = @InOutVal + @InputVal;
+                SELECT @InputVal AS [InputVal], @OutputVal AS [OutputVal], @InOutVal AS [InOutVal];
+                SELECT 1 AS [Marker];
+                RETURN @InputVal;
+            END
+            """).ExecuteAsync().ConfigureAwait(false);
+
+        await db.Sql("""
             CREATE OR ALTER PROCEDURE [adv].[usp_Adv_GenerateLogs]
                 @Count INT
             AS

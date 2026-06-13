@@ -6,6 +6,7 @@
 
 using System.Data;
 using Lib.Db.Contracts.Execution;
+using Lib.Db.Extensions;
 using Lib.Db.IntegrationTests.Infrastructure;
 using Microsoft.Data.SqlClient;
 
@@ -361,6 +362,113 @@ public sealed class OutputParameterTests(MultiDbFixture fixture)
 
     #endregion
 
+    #region OP11: QueryMultipleAsync + ReadMultipleAsync helper — OUTPUT 역매핑
+
+    /// <summary>
+    /// ReadMultipleAsync helper는 내부적으로 raw reader를 성공적으로 dispose한 뒤
+    /// OUTPUT/RETURN_VALUE를 호출자 SqlParameter에 역매핑한다.
+    /// </summary>
+    [Fact]
+    public async Task OP11_ReadMultipleAsync_WithExplicitSqlParameterOutput_ShouldPopulateAfterHelperSuccess()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+
+        // Act
+        Task<DbResult<IMultipleResultReader>> multiple = _db
+            .Procedure("adv.usp_Adv_OutputParameters_Multiple")
+            .With(new
+            {
+                InputVal = 10,
+                output.OutputVal,
+                output.InOutVal,
+                output.ReturnValue
+            })
+            .QueryMultipleAsync(TestContext.Current.CancellationToken);
+
+        DbResult<DbMultiple<AdvancedOutputRow, MarkerRow>> result = await multiple
+            .ReadMultipleAsync<AdvancedOutputRow, MarkerRow>(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue(result.Error?.Message);
+        result.Value.First.Should().ContainSingle(row =>
+            row.InputVal == 10 && row.OutputVal == 20 && row.InOutVal == 15);
+        result.Value.Second.Should().ContainSingle(row => row.Marker == 1);
+        AssertAdvancedOutputValues(output);
+    }
+
+    /// <summary>
+    /// ReadMultipleAsync helper가 필요한 결과 셋을 읽지 못하면 reader dispose는 수행하되
+    /// OUTPUT/RETURN_VALUE 역매핑은 수행하지 않는다.
+    /// </summary>
+    [Fact]
+    public async Task OP12_ReadMultipleAsync_WhenReadFails_ShouldNotPopulateOutputValues()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+
+        // Act
+        Task<DbResult<IMultipleResultReader>> multiple = _db
+            .Procedure("adv.usp_Adv_OutputParameters")
+            .With(new
+            {
+                InputVal = 10,
+                output.OutputVal,
+                output.InOutVal,
+                output.ReturnValue
+            })
+            .QueryMultipleAsync(TestContext.Current.CancellationToken);
+
+        DbResult<DbMultiple<AdvancedOutputRow, MarkerRow>> result = await multiple
+            .ReadMultipleAsync<AdvancedOutputRow, MarkerRow>(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeFalse();
+        result.Error!.Value.Message.Should().Be("Reading multiple result sets failed.");
+        AssertAdvancedOutputValuesNotPopulated(output);
+    }
+
+    #endregion
+
+    #region OP13: Procedure + DataRow explicit SqlParameter cells — OUTPUT 역매핑
+
+    /// <summary>
+    /// DataRow 파라미터 bag에 명시적 SqlParameter cell을 넣어도
+    /// Fluent API + schema binding + executor completion 후 OUTPUT/RETURN_VALUE가 역매핑되는지 검증한다.
+    /// </summary>
+    [Fact]
+    public async Task OP11_ExecuteAsync_WithDataRowExplicitSqlParameterCells_ShouldPopulateValues()
+    {
+        // Arrange
+        AdvancedOutputParameters output = CreateAdvancedOutputParameters();
+        using DataTable table = new();
+        table.Columns.Add("InputVal", typeof(int));
+        table.Columns.Add("OutputVal", typeof(object));
+        table.Columns.Add("InOutVal", typeof(object));
+        table.Columns.Add("ReturnValue", typeof(object));
+        DataRow row = table.NewRow();
+        row["InputVal"] = 10;
+        row["OutputVal"] = output.OutputVal;
+        row["InOutVal"] = output.InOutVal;
+        row["ReturnValue"] = output.ReturnValue;
+        table.Rows.Add(row);
+
+        // Act
+        DbResult<int> result = await _db
+            .Procedure("adv.usp_Adv_OutputParameters")
+            .With(row)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        Convert.ToInt32(row["OutputVal"]).Should().Be(20);
+        Convert.ToInt32(row["InOutVal"]).Should().Be(15);
+        row["ReturnValue"].Should().BeSameAs(output.ReturnValue);
+        AssertAdvancedOutputValues(output);
+    }
+
+    #endregion
+
     private static AdvancedOutputParameters CreateAdvancedOutputParameters()
         => new(
             new SqlParameter("@OutputVal", SqlDbType.Int)
@@ -395,4 +503,8 @@ public sealed class OutputParameterTests(MultiDbFixture fixture)
         SqlParameter OutputVal,
         SqlParameter InOutVal,
         SqlParameter ReturnValue);
+
+    private sealed record AdvancedOutputRow(int InputVal, int OutputVal, int InOutVal);
+
+    private sealed record MarkerRow(int Marker);
 }

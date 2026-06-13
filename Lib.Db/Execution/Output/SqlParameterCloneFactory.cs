@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Diagnostics.CodeAnalysis;
+using System.Data.SqlTypes;
 using System.Runtime.CompilerServices;
 
 namespace Lib.Db.Execution.Output;
@@ -12,6 +13,10 @@ namespace Lib.Db.Execution.Output;
 internal static class SqlParameterCloneFactory
 {
     private static readonly ConditionalWeakTable<SqlParameter, SqlParameter> s_cloneSources = new();
+    private static readonly SqlDbType? s_cursorSqlDbType =
+        Enum.TryParse("Cursor", ignoreCase: true, out SqlDbType cursor)
+            ? cursor
+            : null;
 
     public static SqlParameter CloneForCommand(SqlParameter source, string parameterName)
     {
@@ -22,11 +27,11 @@ internal static class SqlParameterCloneFactory
             IsNullable = source.IsNullable,
             SourceColumn = source.SourceColumn,
             SourceColumnNullMapping = source.SourceColumnNullMapping,
-            SourceVersion = source.SourceVersion,
-            Value = source.Value ?? DBNull.Value
+            SourceVersion = source.SourceVersion
         };
 
         CopyTypeMetadata(source, clone);
+        CopyValueState(source, clone);
         return clone;
     }
 
@@ -60,37 +65,73 @@ internal static class SqlParameterCloneFactory
 
     public static void ValidateSupportedOutputMetadata(SqlParameter parameter)
     {
-        if (parameter.Direction == ParameterDirection.Input)
+        bool isCursorRef = IsCursorReferenceTypeName(parameter.TypeName)
+            || IsCursorReferenceTypeName(parameter.UdtTypeName);
+        ValidateSupportedOutputMetadata(
+            parameter.ParameterName,
+            parameter.SqlDbType,
+            parameter.Direction,
+            isCursorRef);
+    }
+
+    public static void ValidateSupportedOutputMetadata(
+        string parameterName,
+        SqlDbType sqlDbType,
+        ParameterDirection direction)
+        => ValidateSupportedOutputMetadata(parameterName, sqlDbType, direction, isCursorRef: false);
+
+    public static void ValidateSupportedOutputMetadata(
+        string parameterName,
+        SqlDbType sqlDbType,
+        ParameterDirection direction,
+        bool isCursorRef)
+    {
+        if (direction == ParameterDirection.Input)
             return;
 
-        OutputParameterName name = OutputParameterName.From(parameter.ParameterName);
+        OutputParameterName name = OutputParameterName.From(parameterName);
 
-        if (parameter.Direction == ParameterDirection.ReturnValue && parameter.SqlDbType != SqlDbType.Int)
+        if (direction == ParameterDirection.ReturnValue && sqlDbType != SqlDbType.Int)
         {
             throw new InvalidOperationException(
                 $"ReturnValue parameter '{name.SafeDisplay()}' must use SqlDbType.Int.");
         }
 
-        if (parameter.SqlDbType is SqlDbType.Structured or SqlDbType.Text or SqlDbType.NText or SqlDbType.Image)
+        if (isCursorRef)
         {
             throw new InvalidOperationException(
-                $"Output parameter '{name.SafeDisplay()}' uses unsupported SqlDbType '{parameter.SqlDbType}'.");
+                $"Output parameter '{name.SafeDisplay()}' is a SQL Server cursor-reference parameter, which Lib.Db does not support.");
+        }
+
+        if (sqlDbType is SqlDbType.Structured
+            or SqlDbType.Text
+            or SqlDbType.NText
+            or SqlDbType.Image
+            || IsCursorOutputType(sqlDbType))
+        {
+            throw new InvalidOperationException(
+                $"Output parameter '{name.SafeDisplay()}' uses unsupported SqlDbType '{sqlDbType}'.");
         }
     }
 
     public static void CopyOutputValue(SqlParameter target, SqlParameter source)
     {
         if (source.Direction is ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue)
-            target.Value = source.Value;
+            CopyValueState(source, target);
     }
 
-    public static bool TryCopyOutputValueToRegisteredSource(SqlParameter commandParameter)
-    {
-        if (!s_cloneSources.TryGetValue(commandParameter, out SqlParameter? source))
-            return false;
+    public static SqlParameterValueState CaptureValueState(SqlParameter parameter)
+        => new(parameter.Value, IsProviderValue(parameter.Value));
 
-        CopyOutputValue(source, commandParameter);
-        return true;
+    public static void RestoreValueState(SqlParameter parameter, SqlParameterValueState state)
+    {
+        if (state.IsProviderValue && state.Value is not null and not DBNull)
+        {
+            parameter.SqlValue = state.Value;
+            return;
+        }
+
+        parameter.Value = state.Value;
     }
 
     public static bool TryGetRegisteredSource(
@@ -101,6 +142,13 @@ internal static class SqlParameterCloneFactory
     public static bool IsRegisteredSource(SqlParameter commandParameter, SqlParameter source)
         => s_cloneSources.TryGetValue(commandParameter, out SqlParameter? registeredSource) &&
            ReferenceEquals(registeredSource, source);
+
+    private static bool IsCursorOutputType(SqlDbType sqlDbType)
+        => s_cursorSqlDbType is SqlDbType cursor && sqlDbType == cursor;
+
+    private static bool IsCursorReferenceTypeName(string? typeName)
+        => typeName is not null &&
+           typeName.Trim().Equals("cursor", StringComparison.OrdinalIgnoreCase);
 
     private static void CopyTypeMetadata(SqlParameter source, SqlParameter clone)
     {
@@ -126,5 +174,29 @@ internal static class SqlParameterCloneFactory
         clone.LocaleId = source.LocaleId;
         clone.CompareInfo = source.CompareInfo;
         clone.Offset = source.Offset;
+        clone.ForceColumnEncryption = source.ForceColumnEncryption;
     }
+
+    private static void CopyValueState(SqlParameter source, SqlParameter target)
+    {
+        object? value = source.Value;
+        if (value is null or DBNull)
+        {
+            target.Value = DBNull.Value;
+            return;
+        }
+
+        if (IsProviderValue(value))
+        {
+            target.SqlValue = value;
+            return;
+        }
+
+        target.Value = value;
+    }
+
+    private static bool IsProviderValue(object value)
+        => value is INullable or SqlBytes or SqlChars or SqlXml;
 }
+
+internal readonly record struct SqlParameterValueState(object? Value, bool IsProviderValue);

@@ -110,7 +110,7 @@ public void DbBinder_ShouldRejectNonIntReturnValueParameter()
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~MapperCoverageTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MapperCoverageTests*"
 ```
 
 Expected: FAIL because ambiguous name validation and non-`int` return-value guard are not implemented.
@@ -215,7 +215,7 @@ In `DbBinder.TryBindExplicitReturnValueParameter`, clone and validate the return
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~MapperCoverageTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MapperCoverageTests*"
 ```
 
 Expected: PASS for the new guard tests and existing mapper tests.
@@ -279,7 +279,7 @@ public void DataRowSqlMapper_ShouldRollbackWhenSecondOutputColumnFails()
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~MapperCoverageTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MapperCoverageTests*"
 ```
 
 Expected: FAIL because `DataRowSqlMapper.MapOutputParameters` is currently not implemented and other mappers write directly.
@@ -329,7 +329,7 @@ For `ExpressionTreeMapper<T>` and `ReflectionParameterMapper<T>`, route through 
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~MapperCoverageTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MapperCoverageTests*"
 ```
 
 Expected: PASS.
@@ -391,7 +391,7 @@ public async Task ExecuteScalarAsync_WithOutputParameters_ShouldPopulateAfterSuc
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~OutputParameterTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
 ```
 
 Expected: FAIL for scalar/single-row output propagation gaps.
@@ -415,7 +415,8 @@ Add a unit or DB-backed test that makes a failure-capable interceptor throw afte
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~OutputParameterTests|FullyQualifiedName~MapperCoverageTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MapperCoverageTests*"
 dotnet build Lib.Db/Lib.Db.csproj
 ```
 
@@ -465,7 +466,8 @@ public async Task QueryAsync_OutputLease_ShouldNotMaterializeAllRowsForEarlyDisp
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~OutputCommandLeaseMemoryGuardTests|FullyQualifiedName~OutputParameterTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputCommandLeaseMemoryGuardTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
 ```
 
 Expected: FAIL because no lease exists.
@@ -529,7 +531,8 @@ finally
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~OutputCommandLeaseMemoryGuardTests|FullyQualifiedName~OutputParameterTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputCommandLeaseMemoryGuardTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
 dotnet build Lib.Db/Lib.Db.csproj
 ```
 
@@ -562,7 +565,9 @@ Add tests for raw `DisposeAsync`, helper completion, read failure no-copy-back, 
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~SqlGridReaderCoverageTests|FullyQualifiedName~MultipleResultExtensionsTests|FullyQualifiedName~OutputParameterTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*SqlGridReaderCoverageTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MultipleResultExtensionsTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
 ```
 
 Expected: FAIL for output-aware dispose behavior.
@@ -589,7 +594,9 @@ In multiple-result helper extensions, keep `await using` inside the `try` block 
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~SqlGridReaderCoverageTests|FullyQualifiedName~MultipleResultExtensionsTests|FullyQualifiedName~OutputParameterTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*SqlGridReaderCoverageTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MultipleResultExtensionsTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
 dotnet build Lib.Db/Lib.Db.csproj
 ```
 
@@ -618,6 +625,7 @@ Cover:
 - full enumeration and clean early dispose
 - cancellation/read failure no-copy-back
 - structured/TVP output rejection
+- cursor-reference metadata rejection via `sys.parameters.is_cursor_ref`
 - legacy LOB output rejection
 - non-`int` return-value rejection
 
@@ -626,24 +634,16 @@ Cover:
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~OutputParameterTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
 ```
 
 Expected: PASS when local SQL Server verification prerequisites are available.
 
-- [ ] **Step 3: Update the verification script targeted group**
+- [x] **Step 3: Keep targeted verification explicit**
 
-Ensure `Invoke-Tests.ps1` includes:
-
-```powershell
-$OutputFilters = @(
-    'FullyQualifiedName~OutputParameterTests',
-    'FullyQualifiedName~MapperCoverageTests',
-    'FullyQualifiedName~SqlGridReaderCoverageTests',
-    'FullyQualifiedName~MultipleResultExtensionsTests',
-    'FullyQualifiedName~OutputCommandLeaseMemoryGuardTests'
-)
-```
+`Invoke-Tests.ps1` now runs the MTP test application directly and accepts explicit native
+MTP filters such as `-FilterClass` and `-FilterNamespace`. v2.6.0 verification uses explicit
+commands instead of a hidden output filter preset.
 
 - [ ] **Step 4: Review and commit Task 6**
 
@@ -708,24 +708,39 @@ git commit -m "docs: document output parameter lifecycle"
 **Files:**
 - No planned source edits unless verification finds defects.
 
-- [ ] **Step 1: Run minimum verification**
+- [x] **Step 1: Run minimum verification**
 
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj --filter "FullyQualifiedName~OutputParameterTests|FullyQualifiedName~MapperCoverageTests|FullyQualifiedName~SqlGridReaderCoverageTests|FullyQualifiedName~MultipleResultExtensionsTests|FullyQualifiedName~RuntimeTvpBindingTests|FullyQualifiedName~OutputCommandLeaseMemoryGuardTests"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputParameterTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MapperCoverageTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*SqlDbExecutorTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*SqlGridReaderCoverageTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*VerificationEntryPointTests*" -SkipTestEnvGuard
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*StatusBranchTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*WriteFlowTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*MultipleResultExtensionsTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*RuntimeTvpBindingTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterClass "*OutputCommandLeaseMemoryGuardTests*"
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild -FilterNamespace "Lib.Db.IntegrationTests.Unit" -SkipTestEnvGuard
 dotnet build Lib.Db/Lib.Db.csproj
 ```
 
 Expected: PASS.
+
+2026-06-13 status: PASS for current targeted builds, direct-MTP wrapper,
+mapper, executor, grid-reader, multiple-result helper, runtime TVP, memory
+guard, output-parameter, schema-preload, status/write-flow, solution-target,
+and unit-namespace verification commands.
 
 - [ ] **Step 2: Run extended verification when local SQL Server is available**
 
 Run:
 
 ```powershell
-dotnet test Verification/projects/Lib.Db.IntegrationTests/Lib.Db.IntegrationTests.csproj
-powershell -NoProfile -ExecutionPolicy Bypass -File Verification/scripts/Invoke-Tests.ps1
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild
+pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1
 ```
 
 Expected: PASS. If local SQL Server prerequisites are unavailable, record the skipped DB-backed gate in the final report.

@@ -6,12 +6,17 @@
 
 using System.Data;
 using System.Data.Common;
+using System.Data.SqlTypes;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Xml;
+using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution.Binding;
+using Lib.Db.Execution.Output;
+using Lib.Db.Schema;
 using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.Unit;
@@ -25,7 +30,8 @@ public sealed class MapperCoverageTests
         using var command = new SqlCommand();
         var values = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["Id"] = 7
+            ["Id"] = 7,
+            ["OutValue"] = null
         };
 
         mapper.MapParameters(command, null!, schema: null);
@@ -204,6 +210,102 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DictionarySqlMapper_ShouldRejectAmbiguousSchemaOutputTargetBeforeBinding()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["OutputVal"] = null,
+            ["outputval"] = null
+        };
+
+        Action act = () => mapper.MapParameters(command, values, CreateSchema(
+            Param("@OutputVal", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*OutputVal*ambiguous*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRollbackOutputWritesWhenLaterTargetFails()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var firstSource = new SqlParameter("@First", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 1
+        };
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["First"] = firstSource,
+            ["Second"] = null,
+            ["second"] = null
+        };
+
+        command.Parameters.Add(new SqlParameter("@First", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 10
+        });
+        command.Parameters.Add(new SqlParameter("@Second", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 20
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, values);
+
+        InvalidOperationException exception = act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Second*ambiguous*")
+            .Which;
+        exception.InnerException.Should().BeNull();
+        values["First"].Should().BeSameAs(firstSource);
+        values["Second"].Should().BeNull();
+        values["second"].Should().BeNull();
+        firstSource.Value.Should().Be(1);
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRestoreProviderValueStateWhenOutputRollbackFails()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var firstSource = new SqlParameter("@First", SqlDbType.NVarChar, 32)
+        {
+            Direction = ParameterDirection.Output
+        };
+        firstSource.SqlValue = new SqlString("original-state");
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["First"] = firstSource,
+            ["Second"] = null,
+            ["second"] = null
+        };
+
+        var firstCommandParameter = new SqlParameter("@First", SqlDbType.NVarChar, 32)
+        {
+            Direction = ParameterDirection.Output
+        };
+        firstCommandParameter.SqlValue = new SqlString("returned-state");
+        command.Parameters.Add(firstCommandParameter);
+        command.Parameters.Add(new SqlParameter("@Second", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 20
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, values);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Second*ambiguous*");
+        firstSource.SqlValue.Should().BeOfType<SqlString>()
+            .Which.Value.Should().Be("original-state");
+    }
+
+    [Fact]
     public void DictionarySqlMapper_ShouldRejectUnsupportedExplicitReturnValueType()
     {
         var mapper = new DictionarySqlMapper(strict: true);
@@ -221,6 +323,122 @@ public sealed class MapperCoverageTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*ReturnValue*Int*");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectUnsupportedCursorOutputParameter()
+    {
+        if (!Enum.TryParse("Cursor", ignoreCase: true, out SqlDbType cursorType))
+        {
+            Enum.GetNames<SqlDbType>().Should().NotContain("Cursor");
+            return;
+        }
+
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["CursorOut"] = new SqlParameter("@CursorOut", cursorType)
+            {
+                Direction = ParameterDirection.Output
+            }
+        };
+
+        Action act = () => mapper.MapParameters(command, values, CreateSchema(
+            Param("@CursorOut", cursorType, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*CursorOut*Cursor*");
+    }
+
+    [Fact]
+    public void DbBinder_ShouldRejectRawOutputParameterWithCursorTypeName()
+    {
+        using var command = new SqlCommand();
+        var parameter = new SqlParameter("@CursorOut", SqlDbType.Variant)
+        {
+            Direction = ParameterDirection.Output,
+            TypeName = "cursor"
+        };
+
+        Action act = () => DbBinder.BindRawParameter(command, "CursorOut", parameter);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*CursorOut*cursor-reference*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void SqlServerSqlTypeMapper_ShouldPreserveCursorMetadataForBindTimeRejection()
+        => SqlServerSqlTypeMapper.MapToSqlDbType("cursor").Should().Be(SqlDbType.Variant);
+
+    [Fact]
+    public void SqlServerSqlTypeMapper_ShouldPreserveCursorReferenceFlagForBindTimeRejection()
+        => SqlServerSqlTypeMapper.MapToSqlDbType("int", isCursorRef: true).Should().Be(SqlDbType.Variant);
+
+    [Fact]
+    public void SchemaMapper_ShouldTreatCursorTypeNameAsCursorReference()
+    {
+        SpParameterMetadata metadata = SchemaMapper.MapToSpParameter(new SpParameterInfo(
+            Name: "@CursorOut",
+            TypeName: "cursor",
+            MaxLength: 0,
+            Precision: 0,
+            Scale: 0,
+            IsOutput: true,
+            IsCursorRef: false,
+            IsNullable: true,
+            HasDefault: false,
+            UdtName: null));
+
+        metadata.SqlDbType.Should().Be(SqlDbType.Variant);
+        metadata.IsCursorRef.Should().BeTrue();
+
+        using var command = new SqlCommand();
+        Action act = () => DbBinder.BindParameter(command, metadata, null, strictCheck: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*CursorOut*cursor-reference*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectCursorReferenceSchemaOutputBeforeBinding()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["CursorOut"] = null
+        };
+
+        Action act = () => mapper.MapParameters(command, values, CreateSchema(
+            Param(
+                "@CursorOut",
+                SqlDbType.Variant,
+                direction: ParameterDirection.Output,
+                isCursorRef: true)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*CursorOut*cursor-reference*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldSanitizeOutputApplyFailure()
+    {
+        MethodInfo factory = typeof(DictionarySqlMapper).GetMethod(
+            "CreateDictionaryOutputApplyException",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        var exception = (InvalidOperationException)factory.Invoke(
+            null,
+            [new InvalidOperationException("raw dictionary failure")])!;
+
+        exception.Message.Should().Contain("transactionally");
+        exception.Message.Should().Contain(nameof(InvalidOperationException));
+        exception.Message.Should().NotContain("raw dictionary failure");
+        exception.InnerException.Should().BeNull();
     }
 
     [Fact]
@@ -385,6 +603,99 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DbBinder_ShouldPreserveExplicitSqlParameterProviderValueState()
+    {
+        using var command = new SqlCommand();
+        var parameter = new SqlParameter("@EncryptedText", SqlDbType.NVarChar, 64)
+        {
+            Direction = ParameterDirection.InputOutput,
+            ForceColumnEncryption = true
+        };
+        parameter.SqlValue = new SqlString("secret-state");
+
+        DbBinder.BindRawParameter(command, "EncryptedText", parameter);
+
+        SqlParameter clone = command.Parameters["@EncryptedText"];
+        clone.Should().NotBeSameAs(parameter);
+        clone.Direction.Should().Be(ParameterDirection.InputOutput);
+        clone.ForceColumnEncryption.Should().BeTrue();
+        clone.SqlValue.Should().BeOfType<SqlString>()
+            .Which.Value.Should().Be("secret-state");
+
+        clone.SqlValue = new SqlString("returned-state");
+        SqlParameterCloneFactory.CopyOutputValue(parameter, clone);
+
+        parameter.SqlValue.Should().BeOfType<SqlString>()
+            .Which.Value.Should().Be("returned-state");
+    }
+
+    [Fact]
+    public void DbBinder_ShouldPreserveExplicitSqlParameterProviderValueStateInSchemaBinding()
+    {
+        using var command = new SqlCommand();
+        var parameter = new SqlParameter("@EncryptedText", SqlDbType.NVarChar, 64)
+        {
+            Direction = ParameterDirection.InputOutput,
+            ForceColumnEncryption = true
+        };
+        parameter.SqlValue = new SqlString("secret-state");
+
+        bool handled = DbBinder.TryBindExplicitParameter(
+            command,
+            Param("@EncryptedText", SqlDbType.NVarChar, direction: ParameterDirection.Output, size: 64),
+            parameter,
+            strictCheck: true);
+
+        handled.Should().BeTrue();
+        SqlParameter clone = command.Parameters["@EncryptedText"];
+        clone.Should().NotBeSameAs(parameter);
+        clone.Direction.Should().Be(ParameterDirection.InputOutput);
+        clone.ForceColumnEncryption.Should().BeTrue();
+        clone.SqlValue.Should().BeOfType<SqlString>()
+            .Which.Value.Should().Be("secret-state");
+    }
+
+    [Fact]
+    public void DbBinder_ShouldNormalizeNonExplicitSqlTypesWithoutJsonFallback()
+    {
+        using var command = new SqlCommand();
+
+        DbBinder.BindParameter(
+            command,
+            Param("@TextValue", SqlDbType.NVarChar, size: 64),
+            new SqlString("plain-text"),
+            strictCheck: true);
+        DbBinder.BindParameter(
+            command,
+            Param("@CharsValue", SqlDbType.NVarChar, size: -1),
+            new SqlChars("wide-text".ToCharArray()),
+            strictCheck: true);
+        DbBinder.BindParameter(
+            command,
+            Param("@BytesValue", SqlDbType.VarBinary, size: -1),
+            new SqlBytes([1, 2, 3]),
+            strictCheck: true);
+
+        command.Parameters["@TextValue"].Value.Should().Be("plain-text");
+        command.Parameters["@CharsValue"].SqlValue.Should().BeOfType<SqlChars>();
+        command.Parameters["@BytesValue"].SqlValue.Should().BeOfType<SqlBytes>();
+    }
+
+    [Fact]
+    public void DbBinder_ShouldBindRawSqlTypesWithoutJsonFallback()
+    {
+        using var command = new SqlCommand();
+        using XmlReader reader = XmlReader.Create(new StringReader("<root />"));
+
+        DbBinder.BindRawParameter(command, "TextValue", new SqlString("plain-text"));
+        DbBinder.BindRawParameter(command, "XmlValue", new SqlXml(reader));
+
+        command.Parameters["@TextValue"].Value.Should().Be("plain-text");
+        command.Parameters["@XmlValue"].SqlDbType.Should().Be(SqlDbType.Xml);
+        command.Parameters["@XmlValue"].SqlValue.Should().BeOfType<SqlXml>();
+    }
+
+    [Fact]
     public void DbBinder_ShouldEscapeControlCharactersInOutputParameterDisplayName()
     {
         using var command = new SqlCommand();
@@ -445,6 +756,124 @@ public sealed class MapperCoverageTests
         var mapper = new ExpressionTreeMapper<DuplicateReturnValueDto>(jsonOptions: null, strict: true);
 
         AssertDuplicateExtraReturnValueRejected(mapper);
+    }
+
+    [Fact]
+    public void ExpressionTreeMapper_ShouldRollbackOutputWritesWhenLaterSetterFails()
+    {
+        var mapper = new ExpressionTreeMapper<TransactionalOutputDto>(jsonOptions: null, strict: true);
+        using var command = new SqlCommand();
+        var dto = new TransactionalOutputDto
+        {
+            First = 1,
+            Second = 2
+        };
+
+        command.Parameters.Add(new SqlParameter("@First", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 10
+        });
+        command.Parameters.Add(new SqlParameter("@Second", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = "not-an-int"
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, dto);
+
+        InvalidOperationException exception = act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*transactionally*")
+            .Which;
+        exception.Message.Should().NotContain("not-an-int");
+        exception.InnerException.Should().BeNull();
+        dto.First.Should().Be(1);
+        dto.Second.Should().Be(2);
+    }
+
+    [Fact]
+    public void ExpressionTreeMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
+    {
+        var mapper = new ExpressionTreeMapper<ReflectionCoverageDto>(jsonOptions: null, strict: true);
+        using var command = new SqlCommand();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            new ReflectionCoverageDto(),
+            CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*MissingOutput*requires*writable DTO property*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void ExpressionTreeMapper_ShouldAllowReadOnlyStrictOutputDeclarationBeforeBinding()
+    {
+        var mapper = new ExpressionTreeMapper<ReflectionOutputCoverageDto>(jsonOptions: null, strict: true);
+        using var command = new SqlCommand();
+        var dto = new ReflectionOutputCoverageDto();
+
+        mapper.MapParameters(
+            command,
+            dto,
+            CreateSchema(Param("@ReadOnlyValue", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        command.Parameters["@ReadOnlyValue"].Direction.Should().Be(ParameterDirection.Output);
+        command.Parameters["@ReadOnlyValue"].Value = 9;
+
+        mapper.MapOutputParameters(command, dto);
+
+        dto.ReadOnlyValue.Should().Be(0);
+    }
+
+    [Fact]
+    public void ExpressionTreeMapper_ShouldRejectNullExplicitSqlParameterOutputBeforeBinding()
+    {
+        var mapper = new ExpressionTreeMapper<NullExplicitOutputDto>(jsonOptions: null, strict: true);
+        using var command = new SqlCommand();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            new NullExplicitOutputDto(),
+            CreateSchema(Param("@OutputVal", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*OutputVal*non-null explicit SqlParameter*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            [],
+            CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*MissingOutput*Dictionary target key*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldAllowMissingNonStrictOutputTarget()
+    {
+        var mapper = new DictionarySqlMapper(strict: false);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        mapper.MapParameters(
+            command,
+            values,
+            CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
+        command.Parameters["@MissingOutput"].Value = 11;
+        mapper.MapOutputParameters(command, values);
+
+        values["MissingOutput"].Should().Be(11);
     }
 
     [Fact]
@@ -787,6 +1216,27 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DataRowSqlMapper_ShouldNotBindSchemaReturnValueFromScalarColumn()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("ReturnValue", typeof(int));
+        table.Rows.Add(7);
+
+        mapper.MapParameters(
+            command,
+            table.Rows[0],
+            CreateSchema(Param("@ReturnValue", SqlDbType.Int, direction: ParameterDirection.ReturnValue)));
+
+        command.Parameters
+            .Cast<SqlParameter>()
+            .Should()
+            .NotContain(parameter => parameter.Direction == ParameterDirection.ReturnValue);
+        table.Rows[0]["ReturnValue"].Should().Be(7);
+    }
+
+    [Fact]
     public void DataRowSqlMapper_ShouldRollbackReturnValueSourceWhenOutputColumnWriteFails()
     {
         var mapper = new DataRowSqlMapper(strict: true);
@@ -890,6 +1340,26 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DataRowSqlMapper_ShouldRejectInvalidSchemaOutputTargetBeforeBinding()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("Base", typeof(int));
+        table.Columns.Add("Computed", typeof(int), "Base + 1");
+        table.Rows.Add(1);
+
+        Action act = () => mapper.MapParameters(
+            command,
+            table.Rows[0],
+            CreateSchema(Param("@Computed", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Computed*expression*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
     public void DataRowSqlMapper_ShouldThrowWhenRequiredColumnIsMissing()
     {
         var mapper = new DataRowSqlMapper(strict: true);
@@ -973,6 +1443,39 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void ReflectionParameterMapper_ShouldRollbackOutputWritesWhenLaterSetterFails()
+    {
+        var mapper = new ReflectionParameterMapper<TransactionalOutputDto>(strict: true);
+        using var command = new SqlCommand();
+        var dto = new TransactionalOutputDto
+        {
+            First = 1,
+            Second = 2
+        };
+
+        command.Parameters.Add(new SqlParameter("@First", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 10
+        });
+        command.Parameters.Add(new SqlParameter("@Second", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = "not-an-int"
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, dto);
+
+        InvalidOperationException exception = act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*transactionally*")
+            .Which;
+        exception.Message.Should().NotContain("not-an-int");
+        exception.InnerException.Should().BeNull();
+        dto.First.Should().Be(1);
+        dto.Second.Should().Be(2);
+    }
+
+    [Fact]
     public void ReflectionParameterMapper_ShouldThrowWhenRequiredPropertyIsMissing()
     {
         var mapper = new ReflectionParameterMapper<ReflectionCoverageDto>(strict: true);
@@ -988,7 +1491,7 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void ReflectionParameterMapper_ShouldCoverDefaultMissingInputAndOutputBranches()
+    public void ReflectionParameterMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
     {
         var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: true);
         var dto = new ReflectionOutputCoverageDto();
@@ -997,7 +1500,7 @@ public sealed class MapperCoverageTests
         mapper.MapParameters(inputCommand, dto, CreateSchema(
             Param("@MissingDefaulted", SqlDbType.Int, nullable: false, hasDefault: true),
             Param("@MissingNullable", SqlDbType.NVarChar, nullable: true),
-            Param("@MissingInputOutput", SqlDbType.NVarChar, direction: ParameterDirection.InputOutput)));
+            Param("@WritableValue", SqlDbType.Int, direction: ParameterDirection.InputOutput)));
 
         inputCommand.Parameters
             .Cast<SqlParameter>()
@@ -1005,32 +1508,51 @@ public sealed class MapperCoverageTests
             .ContainSingle(p => p.ParameterName == "@MissingNullable");
         inputCommand.Parameters["@MissingNullable"].Value.Should().Be(DBNull.Value);
 
-        using var outputCommand = new SqlCommand();
-        outputCommand.Parameters.Add(new SqlParameter("@WritableValue", SqlDbType.Int)
-        {
-            Direction = ParameterDirection.InputOutput,
-            Value = 5
-        });
-        outputCommand.Parameters.Add(new SqlParameter("@ReadOnlyValue", SqlDbType.Int)
-        {
-            Direction = ParameterDirection.Output,
-            Value = 7
-        });
-        outputCommand.Parameters.Add(new SqlParameter("@MissingOutput", SqlDbType.Int)
-        {
-            Direction = ParameterDirection.Output,
-            Value = 8
-        });
-        outputCommand.Parameters.Add(new SqlParameter("@IgnoredInput", SqlDbType.Int)
-        {
-            Direction = ParameterDirection.Input,
-            Value = 9
-        });
+        using var missingCommand = new SqlCommand();
+        Action missing = () => mapper.MapParameters(
+            missingCommand,
+            dto,
+            CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
 
-        mapper.MapOutputParameters(outputCommand, dto);
+        missing.Should().Throw<InvalidOperationException>()
+            .WithMessage("*MissingOutput*requires*writable DTO property*");
+        missingCommand.Parameters.Count.Should().Be(0);
+    }
 
-        dto.WritableValue.Should().Be(5);
+    [Fact]
+    public void ReflectionParameterMapper_ShouldAllowReadOnlyStrictOutputDeclarationBeforeBinding()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: true);
+        using var command = new SqlCommand();
+        var dto = new ReflectionOutputCoverageDto();
+
+        mapper.MapParameters(
+            command,
+            dto,
+            CreateSchema(Param("@ReadOnlyValue", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        command.Parameters["@ReadOnlyValue"].Direction.Should().Be(ParameterDirection.Output);
+        command.Parameters["@ReadOnlyValue"].Value = 9;
+
+        mapper.MapOutputParameters(command, dto);
+
         dto.ReadOnlyValue.Should().Be(0);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldRejectNullExplicitSqlParameterReturnValueBeforeBinding()
+    {
+        var mapper = new ReflectionParameterMapper<NullExplicitReturnValueDto>(strict: true);
+        using var command = new SqlCommand();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            new NullExplicitReturnValueDto(),
+            CreateSchema(Param("@ReturnValue", SqlDbType.Int, direction: ParameterDirection.ReturnValue)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ReturnValue*non-null explicit SqlParameter*");
+        command.Parameters.Count.Should().Be(0);
     }
 
     [Fact]
@@ -1373,8 +1895,9 @@ public sealed class MapperCoverageTests
         bool hasDefault = false,
         int size = 0,
         byte precision = 0,
-        byte scale = 0)
-        => new(
+        byte scale = 0,
+        bool isCursorRef = false)
+        => new SpParameterMetadata(
             name,
             UdtTypeName: null,
             Size: size,
@@ -1383,7 +1906,10 @@ public sealed class MapperCoverageTests
             Precision: precision,
             Scale: scale,
             IsNullable: nullable,
-            HasDefaultValue: hasDefault);
+            HasDefaultValue: hasDefault)
+        {
+            IsCursorRef = isCursorRef
+        };
 
     private sealed class ReflectionCoverageDto
     {
@@ -1395,6 +1921,13 @@ public sealed class MapperCoverageTests
         public int? OutValue { get; set; }
 
         public string? NullValue { get; set; }
+    }
+
+    private sealed class TransactionalOutputDto
+    {
+        public int First { get; set; }
+
+        public int Second { get; set; }
     }
 
     private sealed class ReflectionOutputCoverageDto
@@ -1413,6 +1946,16 @@ public sealed class MapperCoverageTests
         public SqlParameter InOutVal { get; init; } = new();
 
         public SqlParameter ReturnValue { get; init; } = new();
+    }
+
+    private sealed class NullExplicitOutputDto
+    {
+        public SqlParameter? OutputVal { get; init; }
+    }
+
+    private sealed class NullExplicitReturnValueDto
+    {
+        public SqlParameter? ReturnValue { get; init; }
     }
 
     private sealed class ThrowingGetterReturnValueDto

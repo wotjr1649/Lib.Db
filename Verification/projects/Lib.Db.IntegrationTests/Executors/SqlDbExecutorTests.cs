@@ -6,10 +6,12 @@
 
 using System.Data;
 using System.Data.Common;
+using System.Reflection;
 using Lib.Db.Contracts.Infrastructure;
 using Lib.Db.Contracts.Schema;
 using Lib.Db.Contracts.Mapping;
 using Lib.Db.Execution;
+using Lib.Db.Execution.Binding;
 using Lib.Db.Execution.Executors;
 using Microsoft.Data.SqlClient;
 
@@ -140,7 +142,7 @@ public sealed class SqlDbExecutorTests
             .Returns<DbRequest<object?>, Func<SqlConnection, CancellationToken, Task<SqlDataReader>>, CancellationToken>(
                 async (_, operation, token) =>
                 {
-                    await using SqlConnection conn = new("Server=.;Database=master;MultipleActiveResultSets=True;TrustServerCertificate=True;Encrypt=False;");
+                    await using SqlConnection conn = CreateClosedTestConnection(multipleActiveResultSets: true);
                     return await operation(conn, token);
                 });
 
@@ -186,7 +188,7 @@ public sealed class SqlDbExecutorTests
             .Returns<DbRequest<object?>, Func<SqlConnection, CancellationToken, Task<int>>, CancellationToken>(
                 async (_, operation, token) =>
                 {
-                    await using SqlConnection conn = new("Server=.;Database=master;TrustServerCertificate=True;Encrypt=False;");
+                    await using SqlConnection conn = new();
                     return await operation(conn, token);
                 });
 
@@ -200,6 +202,52 @@ public sealed class SqlDbExecutorTests
 
         affected.Should().Be(0);
         interceptor.CommandTimeout.Should().Be(9);
+    }
+
+    [Fact]
+    public async Task SQ10_ExecutePipeline_ShouldLeaveOutputsUnchangedWhenExecutedInterceptorFails()
+    {
+        _options.EnableDryRun = false;
+
+        OutputThenFailExecutedInterceptor interceptor = new();
+        SqlDbExecutor executor = CreateExecutor(interceptor);
+        var output = new SqlParameter("@OutputVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 1
+        };
+        var parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["OutputVal"] = output
+        };
+
+        _mockMapperFactory
+            .Setup(x => x.GetMapper<Dictionary<string, object?>>())
+            .Returns(new DictionarySqlMapper(strict: true));
+
+        SetupPipelineStrategyInvocation();
+
+        var request = new DbRequest<Dictionary<string, object?>>(
+            "hash",
+            "dbo.usp_Output",
+            CommandType.StoredProcedure,
+            parameters,
+            TestContext.Current.CancellationToken,
+            IsTransactional: false);
+        Func<SqlCommand, CancellationToken, Task<int>> operation = (command, _) =>
+        {
+            ((SqlParameter)command.Parameters["@OutputVal"]).Value = 42;
+            return Task.FromResult(1);
+        };
+
+        Task<int> task = InvokeExecutePipelineAsync(executor, request, operation);
+
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await task);
+
+        exception.Message.Should().Contain("명령 실행 중 오류");
+        output.Value.Should().Be(1);
+        interceptor.ExecutedCalled.Should().BeTrue();
     }
 
     [Fact]
@@ -230,7 +278,7 @@ public sealed class SqlDbExecutorTests
             .Returns<DbRequest<object?>, Func<SqlConnection, CancellationToken, Task<SqlDataReader>>, CancellationToken>(
                 async (_, operation, token) =>
                 {
-                    await using SqlConnection conn = new("Server=.;Database=master;TrustServerCertificate=True;Encrypt=False;");
+                    await using SqlConnection conn = new();
                     return await operation(conn, token);
                 });
 
@@ -264,6 +312,77 @@ public sealed class SqlDbExecutorTests
             DbCommand command,
             DbCommandExecutedEventData eventData)
             => ValueTask.CompletedTask;
+
+        public ValueTask CommandFailedAsync(
+            DbCommand command,
+            DbCommandFailedEventData eventData)
+            => ValueTask.CompletedTask;
+    }
+
+    private void SetupPipelineStrategyInvocation()
+    {
+        _mockStrategy
+            .SetupGet(x => x.DefaultSchemaMode)
+            .Returns(SchemaResolutionMode.None);
+        _mockStrategy
+            .SetupGet(x => x.IsTransactional)
+            .Returns(false);
+        _mockStrategy
+            .Setup(x => x.ExecuteAsync(
+                It.IsAny<DbRequest<Dictionary<string, object?>>>(),
+                It.IsAny<Func<SqlConnection, CancellationToken, Task<int>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<DbRequest<Dictionary<string, object?>>, Func<SqlConnection, CancellationToken, Task<int>>, CancellationToken>(
+                async (_, operation, token) =>
+                {
+                    await using SqlConnection conn = new();
+                    return await operation(conn, token);
+                });
+    }
+
+    private static SqlConnection CreateClosedTestConnection(bool multipleActiveResultSets = false)
+    {
+        SqlConnectionStringBuilder builder = new()
+        {
+            DataSource = ".",
+            InitialCatalog = "master",
+            IntegratedSecurity = true,
+            MultipleActiveResultSets = multipleActiveResultSets,
+            Encrypt = false,
+            TrustServerCertificate = true
+        };
+
+        return new SqlConnection(builder.ConnectionString);
+    }
+
+    private static Task<int> InvokeExecutePipelineAsync(
+        SqlDbExecutor executor,
+        DbRequest<Dictionary<string, object?>> request,
+        Func<SqlCommand, CancellationToken, Task<int>> operation)
+    {
+        MethodInfo method = typeof(SqlDbExecutor).GetMethod(
+            "ExecutePipelineAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        MethodInfo genericMethod = method.MakeGenericMethod(typeof(Dictionary<string, object?>), typeof(int));
+        return (Task<int>)genericMethod.Invoke(executor, [request, DbExecutionOptions.Default, operation])!;
+    }
+
+    private sealed class OutputThenFailExecutedInterceptor : IDbCommandInterceptor
+    {
+        public bool ExecutedCalled { get; private set; }
+
+        public ValueTask ReaderExecutingAsync(
+            DbCommand command,
+            DbCommandInterceptionContext context)
+            => ValueTask.CompletedTask;
+
+        public ValueTask ReaderExecutedAsync(
+            DbCommand command,
+            DbCommandExecutedEventData eventData)
+        {
+            ExecutedCalled = true;
+            throw new InvalidOperationException("executed interceptor failure");
+        }
 
         public ValueTask CommandFailedAsync(
             DbCommand command,

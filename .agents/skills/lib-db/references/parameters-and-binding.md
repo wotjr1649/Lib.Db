@@ -148,7 +148,11 @@ int? totalValue = total.Value is DBNull ? null : (int?)total.Value;
 int statusCode = returnValue.Value is DBNull ? 0 : (int)returnValue.Value;
 ```
 
-Output and return values are copied back for non-streaming execution APIs after successful command completion. For `QueryAsync<T>()` and `QueryMultipleAsync()`, copy-back happens when the returned async sequence or multiple-result reader is fully consumed or disposed cleanly; do not read output values before that point. If the command is canceled, enumeration fails, or reader disposal fails, treat output values as unavailable.
+Output and return values are copied back for non-streaming execution APIs after successful command completion. For `QueryAsync<T>()`, copy-back happens when the returned async sequence is fully consumed or disposed cleanly, including clean early disposal. For raw `QueryMultipleAsync()`, copy-back happens only after `IMultipleResultReader.DisposeAsync()` completes successfully; `ReadMultipleAsync(...)` helpers dispose the reader internally, so helper success is the copy-back point. Do not read output values before the relevant completion point. If the command is canceled, enumeration fails, or reader disposal fails, treat output values as unavailable.
+
+Anonymous objects and read-only DTO properties may declare stored-procedure `OUTPUT` parameters so the command can execute, but scalar values cannot be copied back into read-only members. Use a mutable DTO property, dictionary entry, `DataRow` column, or explicit `SqlParameter` when the caller needs the output value. `ReturnValue` is explicit `SqlParameter` only; scalar object or `DataRow` members named like a return value are not updated.
+
+SQL Server cursor-reference output parameters are unsupported and are detected from stored procedure metadata (`sys.parameters.is_cursor_ref`) before execution. Structured/TVP outputs and legacy `text`, `ntext`, or `image` outputs are also rejected.
 
 `DataRow` parameter bags also support output copy-back:
 

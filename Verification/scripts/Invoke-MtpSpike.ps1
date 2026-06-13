@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $testProject = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\Lib.Db.IntegrationTests.csproj'
+$testScript = Join-Path $repoRoot 'Verification\scripts\Invoke-Tests.ps1'
 $coverageSettings = Join-Path $repoRoot 'Verification\projects\Lib.Db.IntegrationTests\mtp-codecoverage.config.xml'
 $artifactRoot = Join-Path $repoRoot 'Verification\artifacts\mtp-spike'
 $trxDirectory = Join-Path $artifactRoot 'trx'
@@ -18,6 +19,22 @@ $coverageDirectory = Join-Path $artifactRoot 'coverage'
 $localEnvironmentScript = Join-Path $PSScriptRoot 'Set-LibDbVerificationEnvironment.local.ps1'
 $artifactScanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
 $artifactTrackingGate = Join-Path $PSScriptRoot 'Assert-GeneratedArtifactsUntracked.ps1'
+
+function Format-RepoRelativePath {
+    param([Parameter(Mandatory = $true)] [string] $Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $rootPath = [System.IO.Path]::GetFullPath($repoRoot)
+    if (-not $rootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootPath += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    if ($fullPath.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $fullPath.Substring($rootPath.Length)
+    }
+
+    return [System.IO.Path]::GetFileName($fullPath)
+}
 
 $verificationEnvironmentNames = @(
     'LIBDB_TEST_CONNECTION_VERIFICATION',
@@ -65,9 +82,23 @@ function Invoke-Captured {
     $startInfo.UseShellExecute = $false
 
     $process = [System.Diagnostics.Process]::Start($startInfo)
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+
+    if (-not $process.WaitForExit(300000)) {
+        try {
+            $process.Kill($true)
+        }
+        catch {
+            $process.Kill()
+        }
+
+        throw "$FilePath timed out after 300 seconds."
+    }
+
+    [System.Threading.Tasks.Task]::WaitAll($stdoutTask, $stderrTask)
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
 
     [pscustomobject]@{
         ExitCode = $process.ExitCode
@@ -124,6 +155,37 @@ function Invoke-WithSkippedTestEnvironmentGuard {
     }
 }
 
+function New-TestWrapperArguments {
+    param(
+        [Parameter(Mandatory = $true)] [string] $FilterClass,
+        [switch] $SkipLocalEnvironment,
+        [switch] $SkipTestEnvGuard,
+        [string[]] $AdditionalArguments = @()
+    )
+
+    $arguments = @(
+        '-NoProfile',
+        '-File', $testScript,
+        '-Target', 'IntegrationTests',
+        '-Configuration', $Configuration,
+        '-FilterClass', $FilterClass
+    )
+
+    if ($NoRestore) {
+        $arguments += '-NoRestore'
+    }
+
+    if ($SkipLocalEnvironment) {
+        $arguments += '-SkipLocalEnvironment'
+    }
+
+    if ($SkipTestEnvGuard) {
+        $arguments += '-SkipTestEnvGuard'
+    }
+
+    return $arguments + $AdditionalArguments
+}
+
 function Get-Scenarios {
     if ($Scenario -contains 'All') {
         return @('Guard', 'Runner', 'Filter', 'Matrix', 'Trx', 'Coverage', 'ArtifactScan')
@@ -145,14 +207,7 @@ function New-ArtifactDirectory {
 function Invoke-GuardScenario {
     Write-Host 'MTP spike guard scenario started.'
     Invoke-WithClearedVerificationEnvironment {
-        $result = Invoke-Captured 'dotnet' @(
-            'test',
-            '--project', $testProject,
-            '-c', $Configuration,
-            '--no-restore',
-            '--filter-class', '*CacheHostingCoverageTests*',
-            '-v:minimal'
-        )
+        $result = Invoke-Captured 'pwsh' (New-TestWrapperArguments -FilterClass '*CacheHostingCoverageTests*' -SkipLocalEnvironment)
 
         if ($result.ExitCode -eq 0) {
             throw 'MTP guard scenario unexpectedly succeeded without verification environment variables.'
@@ -194,55 +249,28 @@ function Invoke-RunnerScenario {
 
 function Invoke-FilterScenario {
     Write-Host 'MTP spike filter scenario started.'
-    $arguments = @(
-        'test',
-        '--project', $testProject,
-        '-c', $Configuration,
-        '--no-restore',
-        '--filter-class', '*CacheHostingCoverageTests*',
-        '--minimum-expected-tests', '1',
-        '-v:minimal'
-    )
 
-    Invoke-WithSkippedTestEnvironmentGuard {
-        Invoke-Checked 'dotnet' $arguments
-    }
+    Invoke-Checked 'pwsh' (New-TestWrapperArguments -FilterClass '*CacheHostingCoverageTests*' -SkipTestEnvGuard)
     Write-Host 'MTP spike filter scenario passed.'
 }
 
 function Invoke-MatrixScenario {
     Write-Host 'MTP spike matrix scenario started.'
-    $arguments = @(
-        'test',
-        '--project', $testProject,
-        '-c', $Configuration,
-        '--no-restore',
-        '--filter-class', '*V230TvpMatrixTests*',
-        '--minimum-expected-tests', '1',
-        '-v:minimal'
-    )
 
-    Invoke-Checked 'dotnet' $arguments
+    Invoke-Checked 'pwsh' (New-TestWrapperArguments -FilterClass '*V230TvpMatrixTests*')
     Write-Host 'MTP spike matrix scenario passed.'
 }
 
 function Invoke-TrxScenario {
     Write-Host 'MTP spike TRX scenario started.'
     New-ArtifactDirectory -Path $trxDirectory
-    $arguments = @(
-        'test',
-        '--project', $testProject,
-        '-c', $Configuration,
-        '--no-restore',
-        '--filter-class', '*V230TvpMatrixTests*',
-        '--minimum-expected-tests', '1',
+    $arguments = New-TestWrapperArguments -FilterClass '*V230TvpMatrixTests*' -AdditionalArguments @(
         '--report-trx',
         '--report-trx-filename', 'mtp-matrix.trx',
-        '--results-directory', $trxDirectory,
-        '-v:minimal'
+        '--results-directory', $trxDirectory
     )
 
-    Invoke-Checked 'dotnet' $arguments
+    Invoke-Checked 'pwsh' $arguments
 
     $trx = Get-ChildItem -LiteralPath $trxDirectory -Recurse -Filter 'mtp-matrix.trx' -File |
         Select-Object -First 1
@@ -250,7 +278,7 @@ function Invoke-TrxScenario {
         throw 'MTP TRX scenario did not produce mtp-matrix.trx.'
     }
 
-    Write-Host "MtpTrx=$($trx.FullName)"
+    Write-Host "MtpTrx=$(Format-RepoRelativePath -Path $trx.FullName)"
     Write-Host 'MTP spike TRX scenario passed.'
 }
 
@@ -258,30 +286,21 @@ function Invoke-CoverageScenario {
     Write-Host 'MTP spike coverage scenario started.'
     New-ArtifactDirectory -Path $coverageDirectory
     $coverageOutput = Join-Path $coverageDirectory 'coverage.cobertura.xml'
-    $arguments = @(
-        'test',
-        '--project', $testProject,
-        '-c', $Configuration,
-        '--no-restore',
-        '--filter-class', '*CacheHostingCoverageTests*',
-        '--minimum-expected-tests', '1',
+    $arguments = New-TestWrapperArguments -FilterClass '*CacheHostingCoverageTests*' -SkipTestEnvGuard -AdditionalArguments @(
         '--coverage',
         '--coverage-output-format', 'cobertura',
         '--coverage-output', $coverageOutput,
         '--coverage-settings', $coverageSettings,
-        '--results-directory', $coverageDirectory,
-        '-v:minimal'
+        '--results-directory', $coverageDirectory
     )
 
-    Invoke-WithSkippedTestEnvironmentGuard {
-        Invoke-Checked 'dotnet' $arguments
-    }
+    Invoke-Checked 'pwsh' $arguments
 
     if (-not (Test-Path -LiteralPath $coverageOutput)) {
         throw 'MTP coverage scenario did not produce coverage.cobertura.xml.'
     }
 
-    Write-Host "MtpCoverage=$coverageOutput"
+    Write-Host "MtpCoverage=$(Format-RepoRelativePath -Path $coverageOutput)"
     Write-Host 'MTP spike coverage scenario passed.'
 }
 
@@ -297,7 +316,7 @@ Write-Host "Configuration=$Configuration"
 
 if (Test-Path -LiteralPath $localEnvironmentScript) {
     . $localEnvironmentScript -NoBenchmarkReset
-    Write-Host "Loaded local verification environment script: $localEnvironmentScript"
+    Write-Host "Loaded local verification environment script: $(Format-RepoRelativePath -Path $localEnvironmentScript)"
 }
 else {
     Write-Host 'Local verification environment script not found; using existing process environment.'

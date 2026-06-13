@@ -72,10 +72,16 @@ internal interface ISqlMapper<T>
     #region 출력 매핑
 
     /// <summary>
-    /// Output / InputOutput 파라미터 값을 <typeparamref name="T"/> 인스턴스에 역매핑합니다.
+    /// Output / InputOutput / ReturnValue 파라미터 값을 <typeparamref name="T"/> 인스턴스에 역매핑합니다.
     /// <para>
     /// SP 실행이 완료된 뒤 <see cref="SqlCommand.Parameters"/> 컬렉션에서 값을 꺼내
-    /// 대상 객체에 반영합니다.
+    /// 대상 객체, Dictionary, DataRow, 또는 호출자가 제공한 명시적 <see cref="SqlParameter"/>에 반영합니다.
+    /// 명시적 <see cref="SqlParameter"/>는 실행용 command-owned clone에서 caller-owned source로 복사됩니다.
+    /// </para>
+    /// <para>
+    /// Reader 기반 실행의 경우 출력 값은 <see cref="DbDataReader"/>가 완전히 소비되거나
+    /// 정상적으로 닫힌 뒤에만 사용할 수 있습니다. 실행 실패, 취소, 또는 완료되지 않은 reader 수명에서는
+    /// caller-owned 대상에 출력 값이 반영되지 않을 수 있습니다.
     /// </para>
     /// </summary>
     /// <param name="cmd">실행이 완료된 <see cref="SqlCommand"/> 인스턴스</param>

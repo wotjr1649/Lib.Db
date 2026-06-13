@@ -398,7 +398,7 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             SELECT 
                 p.name,
                 CASE WHEN t_user.is_table_type = 1 THEN 'Structured' ELSE t_sys.name END,
-                p.max_length, p.precision, p.scale, p.is_output, p.is_nullable, p.has_default_value,
+                p.max_length, p.precision, p.scale, p.is_output, p.is_cursor_ref, p.is_nullable, p.has_default_value,
                 CASE WHEN t_user.is_table_type = 1 THEN SCHEMA_NAME(t_user.schema_id) + '.' + t_user.name ELSE TYPE_NAME(p.user_type_id) END
             FROM sys.parameters p
             JOIN sys.objects o ON p.object_id = o.object_id
@@ -439,9 +439,10 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
                 Precision: reader.GetByte(3),
                 Scale: reader.GetByte(4),
                 IsOutput: reader.GetBoolean(5),
-                IsNullable: reader.GetBoolean(6),
-                HasDefault: reader.GetBoolean(7),
-                UdtName: reader.IsDBNull(8) ? null : reader.GetString(8)
+                IsCursorRef: reader.GetBoolean(6),
+                IsNullable: reader.GetBoolean(7),
+                HasDefault: reader.GetBoolean(8),
+                UdtName: reader.IsDBNull(9) ? null : reader.GetString(9)
             ));
         }
 
@@ -631,12 +632,12 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
             -- 1. SP List
-            SELECT o.name, CAST(DATEDIFF_BIG(microsecond, '1970-01-01', o.modify_date) AS bigint)
+            SELECT s.name + '.' + o.name, CAST(DATEDIFF_BIG(microsecond, '1970-01-01', o.modify_date) AS bigint)
             FROM sys.objects o JOIN sys.schemas s ON o.schema_id = s.schema_id
             WHERE {schemaInClause} AND o.type = 'P' {spInclude} {spExclude};
 
             -- 2. TVP List
-            SELECT tt.name, CAST(DATEDIFF_BIG(microsecond, '1970-01-01', o.modify_date) AS bigint)
+            SELECT s.name + '.' + tt.name, CAST(DATEDIFF_BIG(microsecond, '1970-01-01', o.modify_date) AS bigint)
             FROM sys.table_types tt 
             JOIN sys.schemas s ON tt.schema_id = s.schema_id
             JOIN sys.objects o ON tt.type_table_object_id = o.object_id
@@ -644,9 +645,9 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
 
             -- 3. SP Params (전체)
             SELECT 
-                o.name, p.name,
+                s.name + '.' + o.name, p.name,
                 CASE WHEN t_user.is_table_type = 1 THEN 'Structured' ELSE t_sys.name END,
-                p.max_length, p.precision, p.scale, p.is_output, p.is_nullable, p.has_default_value,
+                p.max_length, p.precision, p.scale, p.is_output, p.is_cursor_ref, p.is_nullable, p.has_default_value,
                 CASE WHEN t_user.is_table_type = 1 THEN SCHEMA_NAME(t_user.schema_id) + '.' + t_user.name ELSE TYPE_NAME(p.user_type_id) END
             FROM sys.parameters p
             JOIN sys.objects o ON p.object_id = o.object_id
@@ -654,17 +655,17 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
             JOIN sys.types t_user ON p.user_type_id = t_user.user_type_id 
             LEFT JOIN sys.types t_sys ON p.system_type_id = t_sys.system_type_id AND t_sys.user_type_id = t_sys.system_type_id
             WHERE {schemaInClause} AND o.type = 'P' {spInclude} {spExclude}
-            ORDER BY o.name, p.parameter_id;
+            ORDER BY s.name, o.name, p.parameter_id;
 
             -- 4. TVP Columns (전체)
             SELECT 
-                tt.name, c.name, t_sys.name, c.column_id, c.max_length, c.precision, c.scale, c.is_identity, c.is_computed, c.is_nullable
+                s.name + '.' + tt.name, c.name, t_sys.name, c.column_id, c.max_length, c.precision, c.scale, c.is_identity, c.is_computed, c.is_nullable
             FROM sys.columns c
             JOIN sys.table_types tt ON c.object_id = tt.type_table_object_id
             JOIN sys.schemas s ON tt.schema_id = s.schema_id
             JOIN sys.types t_sys ON c.system_type_id = t_sys.system_type_id AND t_sys.user_type_id = t_sys.system_type_id
             WHERE {schemaInClause} {tvpInclude} {tvpExclude}
-            ORDER BY tt.name, c.column_id;
+            ORDER BY s.name, tt.name, c.column_id;
 
             -- 5. Found Schemas (Validation)
             SELECT s.name FROM sys.schemas s WHERE {schemaInClause};
@@ -727,9 +728,10 @@ internal sealed class SqlSchemaRepository(IDbConnectionFactory connFactory) : IS
                 Precision: reader.GetByte(4),
                 Scale: reader.GetByte(5),
                 IsOutput: reader.GetBoolean(6),
-                IsNullable: reader.GetBoolean(7),
-                HasDefault: reader.GetBoolean(8),
-                UdtName: reader.IsDBNull(9) ? null : reader.GetString(9)
+                IsCursorRef: reader.GetBoolean(7),
+                IsNullable: reader.GetBoolean(8),
+                HasDefault: reader.GetBoolean(9),
+                UdtName: reader.IsDBNull(10) ? null : reader.GetString(10)
             ));
         }
 

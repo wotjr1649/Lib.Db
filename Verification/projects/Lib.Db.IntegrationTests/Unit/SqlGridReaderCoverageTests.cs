@@ -64,6 +64,23 @@ public sealed class SqlGridReaderCoverageTests
     }
 
     [Fact]
+    public async Task DisposeAsync_ShouldWrapOutputCompletionFailure()
+    {
+        var reader = new SequenceDbDataReader([]);
+        var grid = new SqlGridReader(
+            DbCommandLease.ForTest(reader, () => throw new InvalidOperationException("raw output failure")),
+            new ValueMapperFactory());
+
+        Func<Task> act = async () => await grid.DisposeAsync();
+
+        var assertion = await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*명령 실행 중 오류*");
+        assertion.Which.InnerException.Should().BeOfType<InvalidOperationException>();
+        reader.Disposed.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task EmptyGridReader_ShouldReturnEmptyDefaultsAndCompleteDispose()
     {
         var reader = new EmptyGridReader();

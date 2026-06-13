@@ -9,7 +9,7 @@ namespace Lib.Db.IntegrationTests.Unit;
 public sealed class VerificationEntryPointTests
 {
     [Fact]
-    public void VerificationScripts_ShouldLoadLocalEnvironmentBeforeDotnetTest()
+    public void VerificationScripts_ShouldLoadLocalEnvironmentBeforeTestExecution()
     {
         DirectoryInfo repoRoot = FindRepoRoot();
         string[] scriptNames =
@@ -25,10 +25,10 @@ public sealed class VerificationEntryPointTests
             string scriptPath = Path.Combine(repoRoot.FullName, "Verification", "scripts", scriptName);
             File.Exists(scriptPath).Should().BeTrue("database-backed commands need wrappers that load local environment values");
 
-        string script = File.ReadAllText(scriptPath);
-        script.Should().Contain("Set-LibDbVerificationEnvironment.local.ps1");
-        script.Should().Contain(". $localEnvironmentScript");
-    }
+            string script = File.ReadAllText(scriptPath);
+            script.Should().Contain("Set-LibDbVerificationEnvironment.local.ps1");
+            script.Should().Contain(". $localEnvironmentScript");
+        }
 
         string testScript = File.ReadAllText(Path.Combine(
             repoRoot.FullName,
@@ -36,13 +36,37 @@ public sealed class VerificationEntryPointTests
             "scripts",
             "Invoke-Tests.ps1"));
         testScript.Should().Contain("'dotnet'");
-        testScript.Should().Contain("'test'");
         testScript.Should().Contain("Write-SecretSafeEnvironmentSummary");
+        testScript.Should().Contain("Format-RepoRelativePath");
         testScript.Should().Contain("KeepBuildServers");
+        testScript.Should().Contain("SkipLocalEnvironment");
+        testScript.Should().Contain("Local verification environment script skipped.");
         testScript.Should().Contain("MSBUILDDISABLENODEREUSE");
         testScript.Should().Contain("dotnet build-server shutdown");
         testScript.Should().Contain("SkipTestEnvGuard");
         testScript.Should().Contain("[Environment]::SetEnvironmentVariable('LIBDB_SKIP_TEST_ENV_GUARD', 'true')");
+        testScript.Should().Contain("Assert-VerificationEnvironmentConfigured");
+        testScript.Should().Contain("Test-AllEnvironmentVariablesPresent");
+        testScript.Should().Contain("FilterNamespace");
+        testScript.Should().Contain("[Alias('filter-namespace')]");
+        testScript.Should().Contain("'--filter-namespace'");
+        testScript.Should().Contain("[string] $Target = 'IntegrationTests'");
+        testScript.Should().Contain("function Get-SolutionMtpTestProjects");
+        testScript.Should().Contain("Test-IsMtpTestProject");
+        testScript.Should().Contain("$testProjects = if ($Target -eq 'Solution') { Get-SolutionMtpTestProjects } else { @($integrationProject) }");
+        testScript.Should().Contain("Invoke-DirectMtpTestRun");
+        testScript.Should().Contain("Add-MtpVerbosityArguments");
+        testScript.Should().Contain("$buildArguments.Add(('-v:' + $Verbosity))");
+        testScript.Should().Contain("'--output'");
+        testScript.Should().Contain("'--no-progress'");
+        testScript.Should().Contain("Write-Host \"Verbosity=$Verbosity\"");
+        testScript.Should().Contain("-Verbosity $Verbosity");
+        testScript.Should().Contain("$buildTarget = if ($Target -eq 'Solution') { $solution } else { $integrationProject }");
+        testScript.Should().Contain("$execArguments.Add('exec')");
+        testScript.Should().Contain("Executing MTP test application: $displayAssembly");
+        testScript.Should().Contain("MtpExecution=Direct");
+        testScript.Should().NotContain("$dotnetArguments.Add('test')");
+        testScript.Should().NotContain("Invoke-Checked 'dotnet' $dotnetArgumentArray");
     }
 
     [Fact]
@@ -104,6 +128,35 @@ public sealed class VerificationEntryPointTests
         verificationScript.Should().Contain("Invoke-ReleasePackage.ps1");
         manifest.Should().Contain("releasePackage");
         manifest.Should().Contain("scripts/Invoke-ReleasePackage.ps1");
+    }
+
+    [Fact]
+    public void ReleaseAndCoverageVerification_ShouldUseDirectMtpTestWrapper()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string verificationScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Verification.ps1"));
+        string coverageScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Coverage.ps1"));
+
+        verificationScript.Should().Contain("Invoke-Tests.ps1");
+        verificationScript.Should().Contain("'-File', $testScript");
+        verificationScript.Should().Contain("'-Target', 'IntegrationTests'");
+        verificationScript.Should().Contain("'-FilterClass', '*V230TvpMatrixTests*'");
+        verificationScript.Should().NotContain("'test',");
+
+        coverageScript.Should().Contain("Invoke-Tests.ps1");
+        coverageScript.Should().Contain("'-File', $testScript");
+        coverageScript.Should().Contain("'-Target', 'IntegrationTests'");
+        coverageScript.Should().Contain("'--coverage'");
+        coverageScript.Should().Contain("Format-RepoRelativePath");
+        coverageScript.Should().NotContain("'test',");
     }
 
     [Fact]
@@ -181,9 +234,11 @@ public sealed class VerificationEntryPointTests
 
         process.Start();
 
-        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> errorTask = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
         string combined = output + error;
 
         process.ExitCode.Should().Be(0, combined);
@@ -249,9 +304,11 @@ public sealed class VerificationEntryPointTests
 
         process.Start();
 
-        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> errorTask = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
         string combined = output + error;
 
         process.ExitCode.Should().Be(0, combined);
@@ -297,9 +354,11 @@ public sealed class VerificationEntryPointTests
 
         process.Start();
 
-        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> errorTask = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
         string combined = output + error;
 
         process.ExitCode.Should().Be(0, combined);
@@ -337,9 +396,11 @@ public sealed class VerificationEntryPointTests
 
         process.Start();
 
-        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> errorTask = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
         string combined = output + error;
 
         process.ExitCode.Should().Be(0, combined);
@@ -471,6 +532,17 @@ public sealed class VerificationEntryPointTests
         project.Should().Contain("LIBDB_SKIP_TEST_ENV_GUARD");
         project.Should().Contain("-SkipTestEnvGuard");
         project.Should().NotContain("-p:LIBDB_SKIP_TEST_ENV_GUARD=true");
+
+        string testScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-Tests.ps1"));
+        testScript.Should().Contain("MtpExecution=Direct");
+        testScript.Should().Contain("Get-SolutionMtpTestProjects");
+        testScript.Should().Contain("Get-TestAssemblyPath");
+        testScript.Should().Contain("'exec'");
+        testScript.Should().Contain("$assemblyName.dll");
     }
 
     [Fact]
@@ -480,7 +552,25 @@ public sealed class VerificationEntryPointTests
         string manifest = File.ReadAllText(Path.Combine(repoRoot.FullName, "Verification", "manifest.json"));
 
         manifest.Should().Contain("\"tests\"");
+        manifest.Should().Contain("\"version\": \"v2.6.0\"");
         manifest.Should().Contain("scripts/Invoke-Tests.ps1");
+    }
+
+    [Fact]
+    public void VerificationScripts_ShouldNotUseRawDotnetTest()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string scriptsRoot = Path.Combine(repoRoot.FullName, "Verification", "scripts");
+        string[] scripts = Directory.GetFiles(scriptsRoot, "*.ps1", SearchOption.TopDirectoryOnly);
+
+        scripts.Should().NotBeEmpty();
+        string combined = string.Join(Environment.NewLine, scripts.Select(File.ReadAllText));
+
+        combined.Should().NotContain("dotnet test");
+        combined.Should().NotContain("$dotnetArguments.Add('test')");
+        combined.Should().NotContain("Invoke-Checked 'dotnet' $dotnetArgumentArray");
+        combined.Should().NotContain("Invoke-Captured 'dotnet' @(" + Environment.NewLine + "        'test'");
+        combined.Should().NotContain("Invoke-Checked 'dotnet' @(" + Environment.NewLine + "        'test'");
     }
 
     [Fact]
