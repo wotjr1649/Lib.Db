@@ -183,7 +183,7 @@ function Assert-LocalSqlServer {
         $hostName.StartsWith('(localdb)', [StringComparison]::OrdinalIgnoreCase)
 
     if (-not $isLocal) {
-        throw "Direct verification SQL execution is restricted to local disposable SQL Server instances. Refusing server '$Server'."
+        throw "Direct verification SQL execution is restricted to local disposable SQL Server instances. Refusing non-local SQL Server data source."
     }
 }
 

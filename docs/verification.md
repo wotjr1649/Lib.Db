@@ -11,6 +11,7 @@ This is an internal maintainer policy, not consumer API documentation. Consumer 
 - Automation must not print connection string values, tokens, SQL passwords, or secret values. It may report key names and whether expected keys are present.
 - Direct SQL DDL/DML/EXEC verification remains an explicit opt-in maintainer activity scoped to disposable verification databases.
 - Server-level chaos validation is excluded from the default release gate and requires explicit opt-in, separate setup, separate harness execution, and mandatory teardown.
+- Verification scripts disable shared Roslyn compilation and restore process environment variables after execution to reduce lingering compiler-server/process lifetime risk on local Windows runs.
 
 ## Verification Areas
 

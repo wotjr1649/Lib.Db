@@ -665,6 +665,8 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
         // [Case A] SP 스키마 기반 바인딩 (DB 정의 우선)
         if (schema is not null)
         {
+            SchemaOutputTargetValidator.ValidateUniqueOutputParameterNames(schema);
+
             foreach (SpParameterMetadata meta in schema.Parameters)
             {
                 string name = meta.Name.TrimStart('@');
@@ -795,8 +797,18 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                     continue;
                 }
 
-                if (p.Direction == ParameterDirection.ReturnValue || !prop.CanWrite)
+                if (p.Direction == ParameterDirection.ReturnValue)
                     continue;
+
+                if (!prop.CanWrite)
+                {
+                    SchemaOutputTargetValidator.ThrowIfReadOnlyObjectTarget(
+                        p.Direction,
+                        OutputParameterName.From(p.ParameterName),
+                        strict,
+                        prop);
+                    continue;
+                }
 
                 Action<T, object?> setter = GetSetter(name, prop);
                 writes.Add(new ObjectOutputWrite<T>(
@@ -806,6 +818,13 @@ internal sealed class ExpressionTreeMapper<T>(JsonSerializerOptions? jsonOptions
                     default,
                     p,
                     OutputWriteApplier.ToClrValue(p)));
+            }
+            else
+            {
+                SchemaOutputTargetValidator.ThrowIfMissingObjectTarget(
+                    p.Direction,
+                    OutputParameterName.From(p.ParameterName),
+                    strict);
             }
         }
 
@@ -1259,6 +1278,26 @@ internal static class OutputWriteApplier
 
 internal static class SchemaOutputTargetValidator
 {
+    public static void ValidateUniqueOutputParameterNames(SpSchema schema)
+    {
+        Dictionary<string, OutputParameterName>? seen = null;
+        foreach (SpParameterMetadata meta in schema.Parameters)
+        {
+            if (meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput or ParameterDirection.ReturnValue))
+                continue;
+
+            OutputParameterName name = OutputParameterName.From(meta.Name);
+            seen ??= new Dictionary<string, OutputParameterName>(StringComparer.Ordinal);
+            if (seen.TryGetValue(name.Normalized, out OutputParameterName existing))
+            {
+                throw new InvalidOperationException(
+                    $"Output parameter name '{name.SafeDisplay()}' conflicts with '{existing.SafeDisplay()}'.");
+            }
+
+            seen.Add(name.Normalized, name);
+        }
+    }
+
     public static void ValidateObjectTarget(
         SpParameterMetadata meta,
         bool strict,
@@ -1296,11 +1335,30 @@ internal static class SchemaOutputTargetValidator
 
         if (meta.Direction == ParameterDirection.Output)
         {
-            if (property is not null && !property.CanRead)
+            OutputParameterName outputName = OutputParameterName.From(meta.Name);
+            if (property is null)
             {
-                OutputParameterName outputName = OutputParameterName.From(meta.Name);
+                if (strict)
+                {
+                    throw new InvalidOperationException(
+                        $"Strict output parameter '{outputName.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
+                }
+
+                return;
+            }
+
+            if (!property.CanRead)
+            {
                 throw new InvalidOperationException(
                     $"Strict output parameter '{outputName.SafeDisplay()}' maps to unreadable DTO property '{property.Name}'.");
+            }
+
+            if (strict &&
+                !typeof(SqlParameter).IsAssignableFrom(property.PropertyType) &&
+                !property.CanWrite)
+            {
+                throw new InvalidOperationException(
+                    $"Strict output parameter '{outputName.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
             }
 
             return;
@@ -1322,8 +1380,12 @@ internal static class SchemaOutputTargetValidator
                 $"Strict input-output parameter '{name.SafeDisplay()}' maps to unreadable DTO property '{property.Name}'.");
         }
 
-        // Read-only scalar properties, including anonymous-object properties, may declare
-        // a stored-procedure OUTPUT parameter for execution even though they cannot receive copy-back.
+        if (!typeof(SqlParameter).IsAssignableFrom(property.PropertyType) &&
+            !property.CanWrite)
+        {
+            throw new InvalidOperationException(
+                $"Strict input-output parameter '{name.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
+        }
     }
 
     public static void ThrowIfAmbiguousObjectTarget(
@@ -1341,6 +1403,31 @@ internal static class SchemaOutputTargetValidator
             $"DTO output target '{name.SafeDisplay()}' is ambiguous.");
     }
 
+    public static void ThrowIfMissingObjectTarget(
+        ParameterDirection direction,
+        OutputParameterName name,
+        bool strict)
+    {
+        if (!strict || direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
+            return;
+
+        throw new InvalidOperationException(
+            $"Strict {DescribeOutputDirection(direction)} parameter '{name.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source.");
+    }
+
+    public static void ThrowIfReadOnlyObjectTarget(
+        ParameterDirection direction,
+        OutputParameterName name,
+        bool strict,
+        PropertyInfo property)
+    {
+        if (!strict || direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
+            return;
+
+        throw new InvalidOperationException(
+            $"Strict {DescribeOutputDirection(direction)} parameter '{name.SafeDisplay()}' requires a writable DTO property or explicit SqlParameter source, but DTO property '{property.Name}' is read-only.");
+    }
+
     public static void ValidateDictionaryTarget(
         SpParameterMetadata meta,
         bool strict,
@@ -1355,7 +1442,7 @@ internal static class SchemaOutputTargetValidator
         if (meta.Direction == ParameterDirection.ReturnValue)
             return;
 
-        if (!strict || meta.Direction != ParameterDirection.InputOutput)
+        if (!strict || meta.Direction is not (ParameterDirection.Output or ParameterDirection.InputOutput))
         {
             return;
         }
@@ -1364,7 +1451,7 @@ internal static class SchemaOutputTargetValidator
         {
             OutputParameterName name = OutputParameterName.From(meta.Name);
             throw new InvalidOperationException(
-                $"Strict input-output parameter '{name.SafeDisplay()}' requires a Dictionary target key or explicit SqlParameter source.");
+                $"Strict {DescribeOutputDirection(meta.Direction)} parameter '{name.SafeDisplay()}' requires a Dictionary target key or explicit SqlParameter source.");
         }
     }
 
@@ -1394,6 +1481,9 @@ internal static class SchemaOutputTargetValidator
                 $"Strict output parameter '{name.SafeDisplay()}' requires a non-null explicit SqlParameter source.");
         }
     }
+
+    private static string DescribeOutputDirection(ParameterDirection direction)
+        => direction == ParameterDirection.InputOutput ? "input-output" : "output";
 }
 
 #region [Dictionary 매퍼]
@@ -1434,6 +1524,7 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
         //   - parameters.Count == 0 이더라도 필수 파라미터 누락 검사를 수행해야 합니다.
         //   - Strict 모드에서 NOT NULL + DEFAULT 없음 + Key 없음이면 예외를 던집니다.
         // ---------------------------------------------------------------------
+        SchemaOutputTargetValidator.ValidateUniqueOutputParameterNames(schema);
         ValidateSchemaOutputTargets(parameters, schema, strict);
 
         foreach (SpParameterMetadata meta in schema.Parameters)
@@ -1519,7 +1610,15 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
             }
 
             if (!hasTarget)
+            {
+                if (strict)
+                {
+                    throw new InvalidOperationException(
+                        $"Strict {DescribeOutputDirection(param.Direction)} parameter '{name.SafeDisplay()}' requires a Dictionary target key or explicit SqlParameter source.");
+                }
+
                 targetKey = name.Canonical;
+            }
 
             writes.Add(DictionaryOutputWrite.ForDictionary(
                 targetKey!,
@@ -1709,6 +1808,9 @@ internal sealed class DictionarySqlMapper(bool strict) : ISqlMapper<Dictionary<s
             "Dictionary output parameters could not be applied transactionally. " +
             $"Cause: {ex.GetType().Name}.");
 
+    private static string DescribeOutputDirection(ParameterDirection direction)
+        => direction == ParameterDirection.InputOutput ? "input-output" : "output";
+
     /// <summary>
     /// Dictionary에서 대소문자를 무시하고 Key를 조회합니다.
     /// </summary>
@@ -1790,6 +1892,7 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
         }
 
         // [Case B] SP 스키마 기반 바인딩
+        SchemaOutputTargetValidator.ValidateUniqueOutputParameterNames(schema);
         ValidateSchemaOutputTargets(row.Table, schema);
 
         foreach (SpParameterMetadata meta in schema.Parameters)
@@ -1867,10 +1970,11 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
             DataColumn? column = TryGetUniqueOutputColumn(parameters.Table, name);
             if (column is null)
             {
-                if (strict && param.Direction == ParameterDirection.InputOutput)
+                if (strict &&
+                    param.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
                 {
                     throw new InvalidOperationException(
-                        $"Strict input-output parameter '{name.SafeDisplay()}' requires a DataRow target column or explicit SqlParameter source.");
+                        $"Strict {DescribeOutputDirection(param.Direction)} parameter '{name.SafeDisplay()}' requires a DataRow target column or explicit SqlParameter source.");
                 }
 
                 continue;
@@ -1987,10 +2091,11 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
             DataColumn? column = TryGetUniqueOutputColumn(table, name);
             if (column is null)
             {
-                if (strict && meta.Direction == ParameterDirection.InputOutput)
+                if (strict &&
+                    meta.Direction is ParameterDirection.Output or ParameterDirection.InputOutput)
                 {
                     throw new InvalidOperationException(
-                        $"Strict input-output parameter '{name.SafeDisplay()}' requires a DataRow target column or explicit SqlParameter source.");
+                        $"Strict {DescribeOutputDirection(meta.Direction)} parameter '{name.SafeDisplay()}' requires a DataRow target column or explicit SqlParameter source.");
                 }
 
                 continue;
@@ -2089,6 +2194,9 @@ internal sealed class DataRowSqlMapper(bool strict) : ISqlMapper<DataRow>
         => new(
             "DataRow output parameters could not be applied transactionally. " +
             $"Cause: {ex.GetType().Name}.");
+
+    private static string DescribeOutputDirection(ParameterDirection direction)
+        => direction == ParameterDirection.InputOutput ? "input-output" : "output";
 
     private static void RestoreDataRowOutputWrites(
         DataRow row,
@@ -2202,6 +2310,8 @@ internal sealed class ReflectionParameterMapper<
         // [Case A] SP 스키마 기반 바인딩
         if (schema is not null)
         {
+            SchemaOutputTargetValidator.ValidateUniqueOutputParameterNames(schema);
+
             foreach (SpParameterMetadata meta in schema.Parameters)
             {
                 string name = meta.Name.TrimStart('@');
@@ -2325,8 +2435,18 @@ internal sealed class ReflectionParameterMapper<
                     continue;
                 }
 
-                if (p.Direction == ParameterDirection.ReturnValue || !prop.CanWrite)
+                if (p.Direction == ParameterDirection.ReturnValue)
                     continue;
+
+                if (!prop.CanWrite)
+                {
+                    SchemaOutputTargetValidator.ThrowIfReadOnlyObjectTarget(
+                        p.Direction,
+                        OutputParameterName.From(p.ParameterName),
+                        strict,
+                        prop);
+                    continue;
+                }
 
                 writes.Add(new ObjectOutputWrite<T>(
                     (target, value) => prop.SetValue(target, value),
@@ -2335,6 +2455,13 @@ internal sealed class ReflectionParameterMapper<
                     default,
                     p,
                     OutputWriteApplier.ToClrValue(p)));
+            }
+            else
+            {
+                SchemaOutputTargetValidator.ThrowIfMissingObjectTarget(
+                    p.Direction,
+                    OutputParameterName.From(p.ParameterName),
+                    strict);
             }
         }
 

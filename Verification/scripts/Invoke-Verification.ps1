@@ -94,8 +94,20 @@ function Write-SecretSafeEnvironmentSummary {
 Write-Host 'Lib.Db verification started.'
 Write-SecretSafeEnvironmentSummary
 
-Invoke-Checked 'dotnet' @('build', $integrationProject, '--no-restore', '-v:minimal')
-Invoke-Checked 'dotnet' @('build', $benchmarkProject, '--no-restore', '-v:minimal')
+Invoke-Checked 'dotnet' @(
+    'build',
+    $integrationProject,
+    '--no-restore',
+    '-v:minimal',
+    '-p:UseSharedCompilation=false'
+)
+Invoke-Checked 'dotnet' @(
+    'build',
+    $benchmarkProject,
+    '--no-restore',
+    '-v:minimal',
+    '-p:UseSharedCompilation=false'
+)
 
 if (-not $SkipMatrixDbTests) {
     if (Test-Path -LiteralPath $matrixResultsDirectory) {

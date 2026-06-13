@@ -598,6 +598,7 @@ function Invoke-DirectMtpTestRun {
         $buildArguments.Add('-c')
         $buildArguments.Add($Configuration)
         $buildArguments.Add(('-v:' + $Verbosity))
+        $buildArguments.Add('-p:UseSharedCompilation=false')
         if ($NoRestore) {
             $buildArguments.Add('--no-restore')
         }

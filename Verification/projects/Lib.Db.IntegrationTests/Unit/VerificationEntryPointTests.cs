@@ -50,6 +50,7 @@ public sealed class VerificationEntryPointTests
         testScript.Should().Contain("TESTINGPLATFORM_TELEMETRY_OPTOUT");
         testScript.Should().Contain("DOTNET_CLI_TELEMETRY_OPTOUT");
         testScript.Should().Contain("MSBUILDDISABLENODEREUSE");
+        testScript.Should().Contain("-p:UseSharedCompilation=false");
         testScript.Should().Contain("dotnet build-server shutdown");
         testScript.Should().Contain("SkipTestEnvGuard");
         testScript.Should().Contain("Set-ProcessEnvironmentVariable -Name 'LIBDB_SKIP_TEST_ENV_GUARD' -Value 'true'");
@@ -119,6 +120,7 @@ public sealed class VerificationEntryPointTests
         benchmarkScript.Should().Contain("TvpBenchmarks");
         benchmarkScript.Should().Contain("WideTvpBenchmarks");
         benchmarkScript.Should().Contain("'*Lib.Db.Benchmarks.WideTvpBenchmarks*'");
+        benchmarkScript.Should().Contain("--property:UseSharedCompilation=false");
         manifest.Should().Contain("artifactSecretScan");
         manifest.Should().Contain("artifactTrackingGate");
     }
@@ -135,6 +137,13 @@ public sealed class VerificationEntryPointTests
         string manifest = File.ReadAllText(Path.Combine(repoRoot.FullName, "Verification", "manifest.json"));
 
         verificationScript.Should().Contain("Invoke-ReleasePackage.ps1");
+        verificationScript.Should().Contain("-p:UseSharedCompilation=false");
+        string releasePackageScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-ReleasePackage.ps1"));
+        releasePackageScript.Should().Contain("-p:UseSharedCompilation=false");
         manifest.Should().Contain("releasePackage");
         manifest.Should().Contain("scripts/Invoke-ReleasePackage.ps1");
     }
@@ -168,6 +177,9 @@ public sealed class VerificationEntryPointTests
         coverageScript.Should().Contain("'--coverage-settings'");
         coverageScript.Should().Contain("TESTINGPLATFORM_TELEMETRY_OPTOUT");
         coverageScript.Should().Contain("DOTNET_CLI_TELEMETRY_OPTOUT");
+        coverageScript.Should().Contain("MSBUILDDISABLENODEREUSE");
+        coverageScript.Should().Contain("-p:UseSharedCompilation=false");
+        coverageScript.Should().Contain("dotnet build-server shutdown");
         coverageScript.Should().Contain("Format-RepoRelativePath");
         coverageScript.Should().NotContain("Invoke-Tests.ps1");
         coverageScript.Should().NotContain("'-File', $testScript");
@@ -216,6 +228,7 @@ public sealed class VerificationEntryPointTests
         script.Should().Contain("AOT analysis warning");
         script.Should().Contain("-p:GeneratePackageOnBuild=false");
         script.Should().Contain("-p:WarningsAsErrors=");
+        script.Should().Contain("-p:UseSharedCompilation=false");
         script.Should().Contain("-RequirePackageVersions");
         verificationPolicy.Should().Contain("AOT warning baseline");
         verificationPolicy.Should().Contain("Verification/baselines/aot-warnings.json");

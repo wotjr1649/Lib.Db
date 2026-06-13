@@ -839,37 +839,44 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void ExpressionTreeMapper_ShouldAllowMissingStrictOutputTargetBeforeBinding()
+    public void ExpressionTreeMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
     {
         var mapper = new ExpressionTreeMapper<ReflectionCoverageDto>(jsonOptions: null, strict: true);
         using var command = new SqlCommand();
 
-        mapper.MapParameters(
+        Action act = () => mapper.MapParameters(
             command,
             new ReflectionCoverageDto(),
             CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
 
-        command.Parameters["@MissingOutput"].Direction.Should().Be(ParameterDirection.Output);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*MissingOutput*writable DTO property*");
+        command.Parameters.Count.Should().Be(0);
     }
 
     [Fact]
-    public void ExpressionTreeMapper_ShouldAllowReadOnlyStrictOutputDeclarationBeforeBinding()
+    public void ExpressionTreeMapper_ShouldRejectReadOnlyStrictOutputDeclarationBeforeBinding()
     {
         var mapper = new ExpressionTreeMapper<ReflectionOutputCoverageDto>(jsonOptions: null, strict: true);
         using var command = new SqlCommand();
         var dto = new ReflectionOutputCoverageDto();
 
-        mapper.MapParameters(
+        Action act = () => mapper.MapParameters(
             command,
             dto,
             CreateSchema(Param("@ReadOnlyValue", SqlDbType.Int, direction: ParameterDirection.Output)));
 
-        command.Parameters["@ReadOnlyValue"].Direction.Should().Be(ParameterDirection.Output);
-        command.Parameters["@ReadOnlyValue"].Value = 9;
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ReadOnlyValue*writable DTO property*");
+        command.Parameters.Count.Should().Be(0);
+    }
 
-        mapper.MapOutputParameters(command, dto);
+    [Fact]
+    public void ExpressionTreeMapper_ShouldRejectCanonicalOutputParameterNameCollisions()
+    {
+        var mapper = new ExpressionTreeMapper<ReflectionOutputCoverageDto>(jsonOptions: null, strict: true);
 
-        dto.ReadOnlyValue.Should().Be(0);
+        AssertCanonicalOutputParameterNameCollisionRejected(mapper, new ReflectionOutputCoverageDto());
     }
 
     [Fact]
@@ -889,20 +896,63 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void DictionarySqlMapper_ShouldAllowMissingStrictOutputTargetBeforeBinding()
+    public void DictionarySqlMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
     {
         var mapper = new DictionarySqlMapper(strict: true);
         using var command = new SqlCommand();
         var values = new Dictionary<string, object?>(StringComparer.Ordinal);
 
-        mapper.MapParameters(
+        Action act = () => mapper.MapParameters(
             command,
             values,
             CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
-        command.Parameters["@MissingOutput"].Value = 11;
-        mapper.MapOutputParameters(command, values);
 
-        values["MissingOutput"].Should().Be(11);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*MissingOutput*Dictionary target key*");
+        command.Parameters.Count.Should().Be(0);
+        values.Should().NotContainKey("MissingOutput");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectMissingStrictOutputTargetDuringCopyBack()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        command.Parameters.Add(new SqlParameter("@MissingOutput", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 11
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, values);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*MissingOutput*Dictionary target key*");
+        values.Should().NotContainKey("MissingOutput");
+    }
+
+    [Fact]
+    public void DictionarySqlMapper_ShouldRejectCanonicalOutputParameterNameCollisions()
+    {
+        var mapper = new DictionarySqlMapper(strict: true);
+        using var command = new SqlCommand();
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["OutputVal"] = 0
+        };
+
+        Action act = () => mapper.MapParameters(
+            command,
+            values,
+            CreateSchema(
+                Param("@OutputVal", SqlDbType.Int, direction: ParameterDirection.Output),
+                Param("@Output_Val", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Output_Val*conflicts*OutputVal*");
+        command.Parameters.Count.Should().Be(0);
     }
 
     [Fact]
@@ -1039,6 +1089,27 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DataRowSqlMapper_ShouldRejectCanonicalOutputParameterNameCollisions()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("OutputVal", typeof(int));
+        table.Rows.Add(1);
+
+        Action act = () => mapper.MapParameters(
+            command,
+            table.Rows[0],
+            CreateSchema(
+                Param("@OutputVal", SqlDbType.Int, direction: ParameterDirection.Output),
+                Param("@Output_Val", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Output_Val*conflicts*OutputVal*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
     public void DataRowSqlMapper_ShouldPreserveExplicitInputOutputValueWithSchemaOutput()
     {
         var mapper = new DataRowSqlMapper(strict: true);
@@ -1126,7 +1197,7 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void DataRowSqlMapper_ShouldAllowMissingStrictOutputColumnBeforeBinding()
+    public void DataRowSqlMapper_ShouldRejectMissingStrictOutputColumnDuringCopyBack()
     {
         var mapper = new DataRowSqlMapper(strict: true);
         using var command = new SqlCommand();
@@ -1143,7 +1214,29 @@ public sealed class MapperCoverageTests
 
         Action act = () => mapper.MapOutputParameters(command, row);
 
-        act.Should().NotThrow();
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Missing*DataRow target column*");
+        row["Id"].Should().Be(1);
+    }
+
+    [Fact]
+    public void DataRowSqlMapper_ShouldRejectMissingStrictOutputColumnBeforeBinding()
+    {
+        var mapper = new DataRowSqlMapper(strict: true);
+        using var command = new SqlCommand();
+        DataTable table = new();
+        table.Columns.Add("Id", typeof(int));
+        table.Rows.Add(1);
+        DataRow row = table.Rows[0];
+
+        Action act = () => mapper.MapParameters(
+            command,
+            row,
+            CreateSchema(Param("@Missing", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Missing*DataRow target column*");
+        command.Parameters.Count.Should().Be(0);
         row["Id"].Should().Be(1);
     }
 
@@ -1557,6 +1650,14 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void ReflectionParameterMapper_ShouldRejectCanonicalOutputParameterNameCollisions()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: true);
+
+        AssertCanonicalOutputParameterNameCollisionRejected(mapper, new ReflectionOutputCoverageDto());
+    }
+
+    [Fact]
     public void ReflectionParameterMapper_ShouldRollbackOutputWritesWhenLaterSetterFails()
     {
         var mapper = new ReflectionParameterMapper<TransactionalOutputDto>(strict: true);
@@ -1605,7 +1706,7 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
-    public void ReflectionParameterMapper_ShouldAllowMissingStrictOutputTargetBeforeBinding()
+    public void ReflectionParameterMapper_ShouldRejectMissingStrictOutputTargetBeforeBinding()
     {
         var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: true);
         var dto = new ReflectionOutputCoverageDto();
@@ -1623,32 +1724,120 @@ public sealed class MapperCoverageTests
         inputCommand.Parameters["@MissingNullable"].Value.Should().Be(DBNull.Value);
 
         using var missingCommand = new SqlCommand();
-        mapper.MapParameters(
+        Action act = () => mapper.MapParameters(
             missingCommand,
             dto,
             CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
 
-        missingCommand.Parameters["@MissingOutput"].Direction.Should().Be(ParameterDirection.Output);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*MissingOutput*writable DTO property*");
+        missingCommand.Parameters.Count.Should().Be(0);
     }
 
     [Fact]
-    public void ReflectionParameterMapper_ShouldAllowReadOnlyStrictOutputDeclarationBeforeBinding()
+    public void ReflectionParameterMapper_ShouldAllowMissingNonStrictOutputTargetBeforeBinding()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: false);
+        using var command = new SqlCommand();
+
+        mapper.MapParameters(
+            command,
+            new ReflectionOutputCoverageDto(),
+            CreateSchema(Param("@MissingOutput", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        command.Parameters["@MissingOutput"].Direction.Should().Be(ParameterDirection.Output);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldRejectReadOnlyStrictOutputDeclarationBeforeBinding()
     {
         var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: true);
         using var command = new SqlCommand();
         var dto = new ReflectionOutputCoverageDto();
 
-        mapper.MapParameters(
+        Action act = () => mapper.MapParameters(
             command,
             dto,
             CreateSchema(Param("@ReadOnlyValue", SqlDbType.Int, direction: ParameterDirection.Output)));
 
-        command.Parameters["@ReadOnlyValue"].Direction.Should().Be(ParameterDirection.Output);
-        command.Parameters["@ReadOnlyValue"].Value = 9;
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ReadOnlyValue*writable DTO property*");
+        command.Parameters.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldRejectReadOnlyStrictOutputTargetDuringCopyBack()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: true);
+        using var command = new SqlCommand();
+        var dto = new ReflectionOutputCoverageDto();
+
+        command.Parameters.Add(new SqlParameter("@ReadOnlyValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 9
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, dto);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ReadOnlyValue*writable DTO property*read-only*");
+        dto.ReadOnlyValue.Should().Be(0);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldIgnoreReadOnlyNonStrictOutputTargetDuringCopyBack()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: false);
+        using var command = new SqlCommand();
+        var dto = new ReflectionOutputCoverageDto();
+
+        command.Parameters.Add(new SqlParameter("@ReadOnlyValue", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 9
+        });
 
         mapper.MapOutputParameters(command, dto);
 
         dto.ReadOnlyValue.Should().Be(0);
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldRejectMissingStrictOutputTargetDuringCopyBack()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: true);
+        using var command = new SqlCommand();
+        var dto = new ReflectionOutputCoverageDto();
+
+        command.Parameters.Add(new SqlParameter("@MissingOutput", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 9
+        });
+
+        Action act = () => mapper.MapOutputParameters(command, dto);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*MissingOutput*writable DTO property*");
+    }
+
+    [Fact]
+    public void ReflectionParameterMapper_ShouldIgnoreMissingNonStrictOutputTargetDuringCopyBack()
+    {
+        var mapper = new ReflectionParameterMapper<ReflectionOutputCoverageDto>(strict: false);
+        using var command = new SqlCommand();
+        var dto = new ReflectionOutputCoverageDto();
+
+        command.Parameters.Add(new SqlParameter("@MissingOutput", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output,
+            Value = 9
+        });
+
+        mapper.MapOutputParameters(command, dto);
+
+        dto.WritableValue.Should().BeNull();
     }
 
     [Fact]
@@ -2061,6 +2250,22 @@ public sealed class MapperCoverageTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Only one ReturnValue*OtherReturn*");
+    }
+
+    private static void AssertCanonicalOutputParameterNameCollisionRejected<T>(ISqlMapper<T> mapper, T dto)
+    {
+        using var command = new SqlCommand();
+
+        Action act = () => mapper.MapParameters(
+            command,
+            dto,
+            CreateSchema(
+                Param("@WritableValue", SqlDbType.Int, direction: ParameterDirection.Output),
+                Param("@Writable_Value", SqlDbType.Int, direction: ParameterDirection.Output)));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Writable_Value*conflicts*WritableValue*");
+        command.Parameters.Count.Should().Be(0);
     }
 
     private static void AssertAmbiguousCanonicalOutputTargetRejected(ISqlMapper<AmbiguousCanonicalOutputDto> mapper)

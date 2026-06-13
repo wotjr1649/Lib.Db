@@ -4,7 +4,9 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Data;
 using Lib.Db.IntegrationTests.Infrastructure;
+using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.VerificationDb;
 
@@ -36,16 +38,21 @@ public sealed class CompositeSpTests(MultiDbFixture fixture)
     {
         // Arrange
         string uniqueEmail = $"composite_{Guid.NewGuid():N}@test.com";
+        var newUserId = new SqlParameter("@NewUserId", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output
+        };
 
         // Act — SP→SP 조합 호출: usp_Core_Insert_User → usp_Core_Get_User
         DbResult<int> result = await _db
             .Procedure("test.usp_Composite_InsertAndValidate")
-            .With(new { UserName = "CompositeUser", Email = uniqueEmail, NewUserId = 0 })
+            .With(new { UserName = "CompositeUser", Email = uniqueEmail, NewUserId = newUserId })
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert — SP 내부에서 SCOPE_IDENTITY() NULL로 인해 50020 에러 또는 성공
         if (result.IsSuccess)
         {
+            Convert.ToInt32(newUserId.Value).Should().BeGreaterThan(0);
             // 성공 시: 유저가 실제로 존재하는지 확인
             DbResult<int> countResult = await _db
                 .Sql((FormattableString)$"SELECT COUNT(*) FROM core.Users WHERE Email = {uniqueEmail}")
@@ -100,14 +107,25 @@ public sealed class CompositeSpTests(MultiDbFixture fixture)
     [Fact]
     public async Task CS03_Output_WithError_Success_ReturnsNameAndAge()
     {
+        var outputName = new SqlParameter("@OutputName", SqlDbType.NVarChar, 100)
+        {
+            Direction = ParameterDirection.Output
+        };
+        var outputAge = new SqlParameter("@OutputAge", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output
+        };
+
         // Act — 시드 데이터 Alice (UserId=1)
         DbResult<int> result = await _db
             .Procedure("test.usp_Output_With_Error")
-            .With(new { InputId = 1, OutputName = "", OutputAge = 0 })
+            .With(new { InputId = 1, OutputName = outputName, OutputAge = outputAge })
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
         // Assert — SP가 성공적으로 실행됨 (OUTPUT 값은 내부적으로 매핑)
         result.IsSuccess.Should().BeTrue();
+        outputName.Value.Should().NotBe(DBNull.Value);
+        Convert.ToInt32(outputAge.Value).Should().BeGreaterThan(0);
     }
 
     #endregion

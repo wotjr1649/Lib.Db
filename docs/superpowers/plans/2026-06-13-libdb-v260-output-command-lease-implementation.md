@@ -734,16 +734,17 @@ mapper, executor, grid-reader, multiple-result helper, runtime TVP, memory
 guard, output-parameter, schema-preload, status/write-flow, solution-target,
 and unit-namespace verification commands.
 
-- [ ] **Step 2: Run extended verification when local SQL Server is available**
+- [x] **Step 2: Run official release-grade verification**
 
 Run:
 
 ```powershell
-pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1 -Target IntegrationTests -NoRestore -NoBuild
-pwsh -NoProfile -File Verification/scripts/Invoke-Tests.ps1
+pwsh -NoProfile -File Verification/scripts/Invoke-Verification.ps1 -UseLocalEnvironment -BenchmarkJob Short
 ```
 
-Expected: PASS. If local SQL Server prerequisites are unavailable, record the skipped DB-backed gate in the final report.
+Expected: PASS. Run this from normal user PowerShell because restricted sandbox shells can deny Microsoft Testing Platform coverage IPC and surface a Windows `0xe0434352` crash dialog.
+
+2026-06-13 status: PASS for the v2.6.0 release gate with the local verification environment, including the MTP matrix, SQL Server integration tests, coverage gate, Native AOT gate, release package gate, benchmark smoke, verification artifact scan, and generated artifact tracking gate. The NuGet vulnerability feed may report `NU1900` when the public feed is unreachable; that warning is non-fatal when restore/build/test/package gates complete successfully.
 
 - [ ] **Step 3: Run mandatory reviews**
 

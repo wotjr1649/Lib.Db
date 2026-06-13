@@ -110,6 +110,18 @@ function Set-ProcessEnvironmentVariable {
     Set-Item -Path $path -Value $Value
 }
 
+function Invoke-BuildServerCleanup {
+    try {
+        & dotnet build-server shutdown
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "dotnet build-server shutdown failed with exit code $LASTEXITCODE."
+        }
+    }
+    catch {
+        Write-Warning "dotnet build-server shutdown failed: $($_.Exception.Message)"
+    }
+}
+
 function Get-ProjectPropertyValue {
     param(
         [Parameter(Mandatory = $true)] [xml] $Project,
@@ -162,24 +174,27 @@ if (Test-Path -LiteralPath $resultsPath) {
 }
 New-Item -ItemType Directory -Path $resultsPath -Force | Out-Null
 
-Invoke-Checked 'dotnet' @(
-    'build',
-    $integrationProject,
-    '-c', $Configuration,
-    '--no-restore',
-    '-v:minimal'
-)
-
-$testApplication = Get-IntegrationTestApplicationPath
-if (-not (Test-Path -LiteralPath $testApplication)) {
-    throw "Test application not found: $(Format-RepoRelativePath -Path $testApplication)."
-}
-
+$savedDisableNodeReuse = [Environment]::GetEnvironmentVariable('MSBUILDDISABLENODEREUSE')
 $savedTestingPlatformTelemetryOptOut = [Environment]::GetEnvironmentVariable('TESTINGPLATFORM_TELEMETRY_OPTOUT')
 $savedDotnetCliTelemetryOptOut = [Environment]::GetEnvironmentVariable('DOTNET_CLI_TELEMETRY_OPTOUT')
+Set-ProcessEnvironmentVariable -Name 'MSBUILDDISABLENODEREUSE' -Value '1'
 Set-ProcessEnvironmentVariable -Name 'TESTINGPLATFORM_TELEMETRY_OPTOUT' -Value '1'
 Set-ProcessEnvironmentVariable -Name 'DOTNET_CLI_TELEMETRY_OPTOUT' -Value '1'
 try {
+    Invoke-Checked 'dotnet' @(
+        'build',
+        $integrationProject,
+        '-c', $Configuration,
+        '--no-restore',
+        '-v:minimal',
+        '-p:UseSharedCompilation=false'
+    )
+
+    $testApplication = Get-IntegrationTestApplicationPath
+    if (-not (Test-Path -LiteralPath $testApplication)) {
+        throw "Test application not found: $(Format-RepoRelativePath -Path $testApplication)."
+    }
+
     Invoke-Checked $testApplication @(
         '--results-directory', $resultsPath,
         '--coverage',
@@ -189,40 +204,42 @@ try {
         '--output', 'Normal',
         '--no-progress'
     )
+
+    $coveragePath = Get-LatestCoverageFile -Root $resultsPath
+    Write-Host "Cobertura=$(Format-RepoRelativePath -Path $coveragePath)"
+
+    if (-not $SkipReport) {
+        if ($RestoreTools) {
+            Invoke-Checked 'dotnet' @('tool', 'restore')
+        }
+
+        if (Test-Path -LiteralPath $reportPath) {
+            Remove-Item -LiteralPath $reportPath -Recurse -Force
+        }
+
+        Invoke-Checked 'dotnet' @(
+            'tool', 'run', 'reportgenerator',
+            "-reports:$coveragePath",
+            "-targetdir:$reportPath",
+            '-reporttypes:Html;TextSummary;Cobertura',
+            '-assemblyfilters:+Lib.Db;-Lib.Db.IntegrationTests;-Lib.Db.Benchmarks;-Lib.Db.AotVerification'
+        )
+
+        Write-Host "CoverageReport=$(Format-RepoRelativePath -Path $reportPath)"
+    }
+
+    if (-not $SkipGate) {
+        & pwsh -NoProfile -File $assertScript -CoberturaPath $coveragePath
+        if ($LASTEXITCODE -ne 0) {
+            throw "Coverage gate failed with exit code $LASTEXITCODE."
+        }
+    }
 }
 finally {
+    Set-ProcessEnvironmentVariable -Name 'MSBUILDDISABLENODEREUSE' -Value $savedDisableNodeReuse
     Set-ProcessEnvironmentVariable -Name 'TESTINGPLATFORM_TELEMETRY_OPTOUT' -Value $savedTestingPlatformTelemetryOptOut
     Set-ProcessEnvironmentVariable -Name 'DOTNET_CLI_TELEMETRY_OPTOUT' -Value $savedDotnetCliTelemetryOptOut
-}
-
-$coveragePath = Get-LatestCoverageFile -Root $resultsPath
-Write-Host "Cobertura=$(Format-RepoRelativePath -Path $coveragePath)"
-
-if (-not $SkipReport) {
-    if ($RestoreTools) {
-        Invoke-Checked 'dotnet' @('tool', 'restore')
-    }
-
-    if (Test-Path -LiteralPath $reportPath) {
-        Remove-Item -LiteralPath $reportPath -Recurse -Force
-    }
-
-    Invoke-Checked 'dotnet' @(
-        'tool', 'run', 'reportgenerator',
-        "-reports:$coveragePath",
-        "-targetdir:$reportPath",
-        '-reporttypes:Html;TextSummary;Cobertura',
-        '-assemblyfilters:+Lib.Db;-Lib.Db.IntegrationTests;-Lib.Db.Benchmarks;-Lib.Db.AotVerification'
-    )
-
-    Write-Host "CoverageReport=$(Format-RepoRelativePath -Path $reportPath)"
-}
-
-if (-not $SkipGate) {
-    & pwsh -NoProfile -File $assertScript -CoberturaPath $coveragePath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Coverage gate failed with exit code $LASTEXITCODE."
-    }
+    Invoke-BuildServerCleanup
 }
 
 Write-Host 'Lib.Db coverage run completed.'

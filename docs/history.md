@@ -17,17 +17,19 @@ Current usage docs are intended to stay version-neutral and describe the current
 - `InputOutput` explicit parameter input values are preserved and schema-normalized before execution.
 - `ReturnValue` parameters follow the SQL Server integer return-code contract; non-`Int` explicit return parameters are rejected.
 - `DataRow` schema binding now honors explicit `SqlParameter` cells; scalar `ReturnValue` columns remain excluded, so return codes require explicit `SqlParameter` cells.
+- Strict schema binding now rejects missing or read-only `Output`/`InputOutput` copy-back targets before execution, and rejects output parameter name collisions after canonical underscore-insensitive normalization.
 - DataRow output failure wrapping avoids preserving raw output values in public inner exception chains.
 - Public `DbResult<T>` failure paths no longer retain raw provider exceptions in `DbError.InnerException` or raw SQL/SP command text in fluent execution error labels.
 - Session disposal failures no longer retain raw cleanup exceptions in the public aggregate exception tree, and shared-memory cache, process-slot, and mutex-helper names/logs no longer include caller-supplied isolation keys in clear text.
 - Maintainer verification wrappers now load `Set-LibDbVerificationEnvironment.local.ps1` only through explicit `-UseLocalEnvironment` opt-in, and GitHub release/publish workflows use an ephemeral SQL Server password instead of a long-lived SQL verification secret.
+- Release verification build, publish, pack, coverage, and benchmark paths now disable shared Roslyn compilation so a failed `dotnet build-server shutdown` cannot leave verification-owned compiler servers behind.
 
 ### Verification
 
-- Added mapper coverage for targetless output-only execution, DataRow output copy-back, explicit source success, `InputOutput` schema binding, `ReturnValue` source binding, rollback, ambiguous/read-only/expression columns, and sanitized failure wrapping.
+- Added mapper coverage for non-strict targetless output-only execution, strict output-target rejection, output parameter name collision rejection, DataRow output copy-back, explicit source success, `InputOutput` schema binding, `ReturnValue` source binding, rollback, ambiguous/read-only/expression columns, and sanitized failure wrapping.
 - Added reader lease and non-streaming output tests covering scalar/single-row execution, async stream completion/disposal, multiple-result reader disposal, cancellation/failure boundaries, and command cleanup.
 - Verified on 2026-06-13 with package and integration-test builds, maintainer direct-MTP wrapper runs for the mapper, output-parameter, executor, reader-lease, schema-preload, write-flow, status-branch, verification-entrypoint, and unit-test slices, plus script parsing and diff hygiene checks.
-- Added regression tests for output target canonicalization, targetless output-only execution, public failure redaction, local verification environment opt-in, and GitHub workflow SQL credential hardening.
+- Added regression tests for output target canonicalization, output parameter name collision rejection, strict targetless output rejection, public failure redaction, local verification environment opt-in, and GitHub workflow SQL credential hardening.
 
 ## 2.5.0 Summary
 

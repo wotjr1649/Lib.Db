@@ -4,8 +4,10 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Data;
 using Lib.Db.IntegrationTests.Infrastructure;
 using Lib.Db.Contracts.Execution;
+using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.VerificationDb;
 
@@ -118,12 +120,24 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
     [Fact]
     public async Task V06_OutputParameters_ReturnsValues()
     {
-        var parameters = new { InputVal = 10, OutputVal = 0, InOutVal = 5 };
+        var outputVal = new SqlParameter("@OutputVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.Output
+        };
+        var inOutVal = new SqlParameter("@InOutVal", SqlDbType.Int)
+        {
+            Direction = ParameterDirection.InputOutput,
+            Value = 5
+        };
+
+        var parameters = new { InputVal = 10, OutputVal = outputVal, InOutVal = inOutVal };
         DbResult<int> result = await _db
             .Procedure("adv.usp_Adv_OutputParameters")
             .With(parameters)
             .ExecuteAsync(TestContext.Current.CancellationToken);
         result.IsSuccess.Should().BeTrue();
+        Convert.ToInt32(outputVal.Value).Should().Be(20);
+        Convert.ToInt32(inOutVal.Value).Should().Be(15);
     }
 
     private sealed record ResultSetValue(int Value);

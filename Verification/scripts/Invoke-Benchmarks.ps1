@@ -246,7 +246,14 @@ if (-not $SkipSetup -or -not $SkipRun) {
 
 if (-not $SkipSetup) {
     $setupArgument = if ($SetupMode -eq 'FullMatrix') { '--setup-full-matrix' } else { '--setup-only' }
-    Invoke-Checked 'dotnet' @('run', '--no-restore', '--project', $project, '--', $setupArgument)
+    Invoke-Checked 'dotnet' @(
+        'run',
+        '--no-restore',
+        '--project', $project,
+        '--property:UseSharedCompilation=false',
+        '--',
+        $setupArgument
+    )
 }
 else {
     $skippedGates.Add('setup')
@@ -260,6 +267,7 @@ if (-not $SkipRun) {
             '-c', 'Release',
             '--no-restore',
             '--project', $project,
+            '--property:UseSharedCompilation=false',
             '--',
             '--filter', $benchmarkFilter
         )
