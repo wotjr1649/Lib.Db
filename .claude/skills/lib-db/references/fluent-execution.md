@@ -120,7 +120,7 @@ List<OrderDto> orders = result.Value.First;
 OrderSummaryDto? summary = result.Value.Second.SingleOrDefault();
 ```
 
-`ReadMultipleAsync<T1,T2>()`, `ReadMultipleAsync<T1,T2,T3>()`, and `ReadMultipleAsync<T1,T2,T3,T4>()` read result sets in stored-procedure order, dispose the reader, and return `DbMultiple<...>` with `List<T>` fields named `First`, `Second`, `Third`, and `Fourth`. Missing result sets or read failures return the redacted message `Reading multiple result sets failed.`.
+`ReadMultipleAsync<T1,T2>()`, `ReadMultipleAsync<T1,T2,T3>()`, and `ReadMultipleAsync<T1,T2,T3,T4>()` read result sets in stored-procedure order, dispose the reader, and return `DbMultiple<...>` with `List<T>` fields named `First`, `Second`, `Third`, and `Fourth`. Missing result sets or read failures return the redacted message `Reading multiple result sets failed.`. When the failure comes from SQL Server, use `DbError.SqlErrorCode`, `Kind`, `Severity`, and `IsTransient` for diagnostics and retry decisions instead of parsing the safe message.
 
 Use `IMultipleResultReader` directly only when you need manual consumption. It is stateful and single-consumer. Read result sets in order.
 

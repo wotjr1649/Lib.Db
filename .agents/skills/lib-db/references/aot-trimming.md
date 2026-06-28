@@ -43,6 +43,8 @@ builder.Services.AddLibDbHostedServices();
 Verify strict AOT paths with a real publish-and-run step, not just `dotnet build`.
 On Windows, Native AOT requires the Visual Studio C++ toolchain.
 
+Avoid passing parameters as statically `object` in strict AOT paths. Lib.Db can bind runtime concrete public properties for `.With<object>(...)`, but that convenience path uses runtime reflection; prefer a static DTO type or `Dictionary<string, object?>` when AOT predictability matters.
+
 ## TVP
 
 Prefer static shapes:

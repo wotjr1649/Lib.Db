@@ -21,6 +21,8 @@ DbResult<UserDto?> result = await db.Default
 
 Property names should match stored procedure parameters or text SQL parameter names.
 
+When the static parameter type is `object`, Lib.Db binds the runtime concrete object's public readable properties. Runtime `Dictionary<string, object?>` and `DataRow` parameter bags keep their specialized binding behavior. If an `object`-typed value has no readable public properties, treat it as an invalid parameter bag instead of relying on silent null/missing parameter binding.
+
 ## DTO Parameters
 
 ```csharp
