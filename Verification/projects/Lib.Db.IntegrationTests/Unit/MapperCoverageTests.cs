@@ -1990,6 +1990,62 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void ObjectSqlMapper_ShouldBindRuntimeConcreteProperties()
+    {
+        using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        var factory = new MapperFactory(services, new LibDbOptions());
+        ISqlMapper<object> mapper = factory.GetMapper<object>();
+        object parameters = new RuntimeObjectParameterDto
+        {
+            LineId = "X",
+            Count = 3
+        };
+        using var command = new SqlCommand();
+
+        mapper.MapParameters(command, parameters, CreateSchema(
+            Param("@LineId", SqlDbType.NVarChar, nullable: false, size: 32),
+            Param("@Count", SqlDbType.Int, nullable: false)));
+
+        command.Parameters["@LineId"].Value.Should().Be("X");
+        command.Parameters["@Count"].Value.Should().Be(3);
+    }
+
+    [Fact]
+    public void ObjectSqlMapper_ShouldPreserveDictionaryRuntimeParameters()
+    {
+        using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        var factory = new MapperFactory(services, new LibDbOptions());
+        ISqlMapper<object> mapper = factory.GetMapper<object>();
+        object parameters = new Dictionary<string, object?>
+        {
+            ["LineId"] = "Y",
+            ["Count"] = 4
+        };
+        using var command = new SqlCommand();
+
+        mapper.MapParameters(command, parameters, schema: null);
+
+        command.Parameters["@LineId"].Value.Should().Be("Y");
+        command.Parameters["@Count"].Value.Should().Be(4);
+    }
+
+    [Fact]
+    public void ObjectSqlMapper_ShouldFailFastWhenRuntimeObjectHasNoReadableProperties()
+    {
+        using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        var factory = new MapperFactory(services, new LibDbOptions());
+        ISqlMapper<object> mapper = factory.GetMapper<object>();
+        using var command = new SqlCommand();
+
+        Action act = () => mapper.MapParameters(command, new object(), CreateSchema(
+            Param("@LineId", SqlDbType.NVarChar, nullable: false, size: 32)));
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*object 정적 타입*public 프로퍼티*");
+    }
+
+    [Fact]
     public void MapperFactory_ShouldUseReflectionMapperWhenDynamicCodeIsDisabled()
     {
         using IDisposable _ = RuntimeFeatureSwitch.OverrideDynamicCodeSupportedForTests(false);
@@ -2456,6 +2512,13 @@ public sealed class MapperCoverageTests
         public int Beta { get; set; }
 
         public int Alpha { get; set; }
+    }
+
+    private sealed class RuntimeObjectParameterDto
+    {
+        public string LineId { get; init; } = "";
+
+        public int Count { get; init; }
     }
 
     private sealed class RuntimeFeatureFallbackDto

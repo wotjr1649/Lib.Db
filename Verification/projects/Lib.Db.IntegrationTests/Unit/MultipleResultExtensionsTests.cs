@@ -2,6 +2,7 @@ using FluentAssertions;
 using Lib.Db.Contracts.Core;
 using Lib.Db.Contracts.Execution;
 using Lib.Db.Extensions;
+using Lib.Db.IntegrationTests.Infrastructure;
 
 namespace Lib.Db.IntegrationTests.Unit;
 
@@ -100,6 +101,38 @@ public sealed class MultipleResultExtensionsTests
         result.Error.Value.InnerException.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(51740, DbErrorKind.UserDefined)]
+    [InlineData(2627, DbErrorKind.ConstraintViolation)]
+    public async Task ReadMultipleAsync_ShouldMapSqlExceptionThrownBeforeReaderIsReturned(
+        int sqlErrorCode,
+        DbErrorKind expectedKind)
+    {
+        DbResult<DbMultiple<UserRow, OrderRow>> result = await Task
+            .FromException<DbResult<IMultipleResultReader>>(SqlExceptionFactory.Create(sqlErrorCode, "secret provider message"))
+            .ReadMultipleAsync<UserRow, OrderRow>(TestContext.Current.CancellationToken);
+
+        AssertMappedSqlFailure(result, sqlErrorCode, expectedKind);
+    }
+
+    [Theory]
+    [InlineData(51740, DbErrorKind.UserDefined)]
+    [InlineData(2627, DbErrorKind.ConstraintViolation)]
+    public async Task ReadMultipleAsync_ShouldMapSqlExceptionThrownWhileReading(
+        int sqlErrorCode,
+        DbErrorKind expectedKind)
+    {
+        var reader = FakeMultipleResultReader.ThrowOnSecondRead(
+            SqlExceptionFactory.Create(sqlErrorCode, "secret provider message"));
+
+        DbResult<DbMultiple<UserRow, OrderRow>> result = await Task
+            .FromResult(DbResult<IMultipleResultReader>.Ok(reader))
+            .ReadMultipleAsync<UserRow, OrderRow>(TestContext.Current.CancellationToken);
+
+        AssertMappedSqlFailure(result, sqlErrorCode, expectedKind);
+        reader.DisposeCount.Should().Be(1);
+    }
+
     [Fact]
     public async Task ReadMultipleAsync_ShouldReturnFailureWhenExpectedResultSetIsMissing()
     {
@@ -188,6 +221,19 @@ public sealed class MultipleResultExtensionsTests
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         reader.DisposeCount.Should().Be(1);
+    }
+
+    private static void AssertMappedSqlFailure<T>(DbResult<T> result, int sqlErrorCode, DbErrorKind expectedKind)
+    {
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().NotBeNull();
+        result.Error!.Value.Message.Should().Be("Reading multiple result sets failed.");
+        result.Error.Value.Kind.Should().Be(expectedKind);
+        result.Error.Value.SqlErrorCode.Should().Be(sqlErrorCode);
+        result.Error.Value.Severity.Should().Be(10);
+        result.Error.Value.IsTransient.Should().BeFalse();
+        result.Error.Value.InnerException.Should().BeNull();
+        result.Error.Value.Message.Should().NotContain("secret");
     }
 
     private sealed record UserRow(int Id);

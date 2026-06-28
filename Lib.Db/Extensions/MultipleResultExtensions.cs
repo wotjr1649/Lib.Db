@@ -6,8 +6,10 @@
 
 #nullable enable
 
+using System.Diagnostics.CodeAnalysis;
 using Lib.Db.Contracts.Core;
 using Lib.Db.Contracts.Execution;
+using Lib.Db.Diagnostics;
 
 namespace Lib.Db.Extensions;
 
@@ -88,9 +90,9 @@ public static class MultipleResultExtensions
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return ToReadFailure<DbMultiple<T1, T2>>();
+            return ToReadFailure<DbMultiple<T1, T2>>(ex);
         }
     }
 
@@ -124,9 +126,9 @@ public static class MultipleResultExtensions
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return ToReadFailure<DbMultiple<T1, T2, T3>>();
+            return ToReadFailure<DbMultiple<T1, T2, T3>>(ex);
         }
     }
 
@@ -162,9 +164,9 @@ public static class MultipleResultExtensions
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return ToReadFailure<DbMultiple<T1, T2, T3, T4>>();
+            return ToReadFailure<DbMultiple<T1, T2, T3, T4>>(ex);
         }
     }
 
@@ -175,6 +177,14 @@ public static class MultipleResultExtensions
             Message = ReadFailureMessage
         });
 
+    private static DbResult<T> ToReadFailure<T>(Exception exception)
+    {
+        if (TryGetSqlException(exception, out SqlException? sqlException))
+            return ToReadFailure<T>(DbErrorMapper.FromSqlException(sqlException));
+
+        return ToReadFailure<T>();
+    }
+
     private static DbResult<T> ToReadFailure<T>(DbError? source)
         => DbResult<T>.Fail(new DbError
         {
@@ -184,4 +194,19 @@ public static class MultipleResultExtensions
             IsTransient = source?.IsTransient ?? false,
             Message = ReadFailureMessage
         });
+
+    private static bool TryGetSqlException(Exception exception, [NotNullWhen(true)] out SqlException? sqlException)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is SqlException found)
+            {
+                sqlException = found;
+                return true;
+            }
+        }
+
+        sqlException = null;
+        return false;
+    }
 }

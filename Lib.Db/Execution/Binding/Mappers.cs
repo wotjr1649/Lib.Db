@@ -19,6 +19,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 
 using Lib.Db.Contracts.Mapping;
@@ -241,6 +242,9 @@ internal sealed class MapperFactory(IServiceProvider serviceProvider, LibDbOptio
 
         if (type == typeof(DataRow))
             return (ISqlMapper<T>)(object)new DataRowSqlMapper(options.StrictRequiredParameterCheck);
+
+        if (type == typeof(object))
+            return (ISqlMapper<T>)(object)new ObjectSqlMapper(options.StrictRequiredParameterCheck);
 
         // [특수 타입] Scalar (Primitive, string, decimal, DateTime, Guid, Stream 등)
         if (IsScalar(type))
@@ -1485,6 +1489,128 @@ internal static class SchemaOutputTargetValidator
     private static string DescribeOutputDirection(ParameterDirection direction)
         => direction == ParameterDirection.InputOutput ? "input-output" : "output";
 }
+
+#region object 정적 타입 매퍼
+
+/// <summary>
+/// <c>.With((object)dto)</c>처럼 정적 타입이 object인 파라미터를 런타임 타입 기준으로 바인딩합니다.
+/// </summary>
+internal sealed class ObjectSqlMapper(bool strict) : ISqlMapper<object>
+{
+    private static readonly ConcurrentDictionary<(Type Type, bool Strict), object> s_runtimeMappers = new();
+    private readonly DictionarySqlMapper _dictionaryMapper = new(strict);
+    private readonly DataRowSqlMapper _dataRowMapper = new(strict);
+
+    public void MapParameters(SqlCommand cmd, object parameters, SpSchema? schema)
+    {
+        if (parameters is null)
+            return;
+
+        if (parameters is Dictionary<string, object?> dictionary)
+        {
+            _dictionaryMapper.MapParameters(cmd, dictionary, schema);
+            return;
+        }
+
+        if (parameters is DataRow row)
+        {
+            _dataRowMapper.MapParameters(cmd, row, schema);
+            return;
+        }
+
+        InvokeRuntimeMapper(parameters, nameof(MapParameters), cmd, schema);
+    }
+
+    public void MapOutputParameters(SqlCommand cmd, object parameters)
+    {
+        if (parameters is null)
+            return;
+
+        if (parameters is Dictionary<string, object?> dictionary)
+        {
+            _dictionaryMapper.MapOutputParameters(cmd, dictionary);
+            return;
+        }
+
+        if (parameters is DataRow row)
+        {
+            _dataRowMapper.MapOutputParameters(cmd, row);
+            return;
+        }
+
+        InvokeRuntimeMapper(parameters, nameof(MapOutputParameters), cmd, schema: null);
+    }
+
+    public object MapResult(DbDataReader reader)
+    {
+        object value = reader.GetValue(0);
+        return value == DBNull.Value ? null! : value;
+    }
+
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2075",
+        Justification = "object 정적 타입 파라미터는 런타임 DTO convenience path입니다. Native AOT 호출자는 Dictionary 또는 정적 DTO 타입을 사용해야 합니다.")]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2081",
+        Justification = "object 정적 타입 파라미터는 런타임 DTO convenience path입니다. Native AOT 호출자는 Dictionary 또는 정적 DTO 타입을 사용해야 합니다.")]
+    [UnconditionalSuppressMessage(
+        "Aot",
+        "IL3050:RequiresDynamicCode",
+        Justification = "object 정적 타입 파라미터의 런타임 generic mapper 생성은 JIT convenience path입니다. Native AOT 호출자는 Dictionary 또는 정적 DTO 타입을 사용해야 합니다.")]
+    private void InvokeRuntimeMapper(object parameters, string methodName, SqlCommand cmd, SpSchema? schema)
+    {
+        Type runtimeType = parameters.GetType();
+        EnsureReadableProperties(runtimeType);
+
+        object mapper = s_runtimeMappers.GetOrAdd(
+            (runtimeType, strict),
+            static key => Activator.CreateInstance(
+                typeof(ReflectionParameterMapper<>).MakeGenericType(key.Type),
+                [key.Strict])!);
+
+        MethodInfo method = mapper.GetType().GetMethod(methodName)!;
+        try
+        {
+            if (schema is null && methodName == nameof(MapOutputParameters))
+            {
+                method.Invoke(mapper, [cmd, parameters]);
+                return;
+            }
+
+            method.Invoke(mapper, [cmd, parameters, schema]);
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw;
+        }
+    }
+
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2070",
+        Justification = "object 정적 타입 파라미터는 런타임 DTO convenience path입니다. Native AOT 호출자는 Dictionary 또는 정적 DTO 타입을 사용해야 합니다.")]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2075",
+        Justification = "object 정적 타입 파라미터는 런타임 DTO convenience path입니다. Native AOT 호출자는 Dictionary 또는 정적 DTO 타입을 사용해야 합니다.")]
+    private static void EnsureReadableProperties(Type runtimeType)
+    {
+        foreach (PropertyInfo property in runtimeType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.CanRead && property.GetIndexParameters().Length == 0)
+                return;
+        }
+
+        throw new InvalidOperationException(
+            "object 정적 타입으로 전달된 파라미터 객체에서 읽을 수 있는 public 프로퍼티를 찾을 수 없습니다. " +
+            "Dictionary 또는 이름 있는 파라미터 DTO를 전달해 주세요.");
+    }
+}
+
+#endregion
 
 #region [Dictionary 매퍼]
 

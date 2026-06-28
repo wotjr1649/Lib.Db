@@ -7,6 +7,7 @@
 using System.Data;
 using Lib.Db.IntegrationTests.Infrastructure;
 using Lib.Db.Contracts.Execution;
+using Lib.Db.Extensions;
 using Microsoft.Data.SqlClient;
 
 namespace Lib.Db.IntegrationTests.VerificationDb;
@@ -118,6 +119,52 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
     }
 
     [Fact]
+    public async Task V05C_QueryMultiple_ProcedureThrowBeforeFirstResultSet_ShouldPreserveSqlErrorCode()
+    {
+        DbResult<DbMultiple<ResultSetValue, ResultSetValue>> result = await _db
+            .Procedure("test.usp_Error_Custom_50001")
+            .With(new { OrderId = 99999, Action = "VALIDATE" })
+            .QueryMultipleAsync(TestContext.Current.CancellationToken)
+            .ReadMultipleAsync<ResultSetValue, ResultSetValue>(TestContext.Current.CancellationToken);
+
+        AssertMultipleReadFailure(result, 50001, DbErrorKind.UserDefined);
+    }
+
+    [Fact]
+    public async Task V05D_QueryMultiple_ThrowDuringSecondResultSet_ShouldPreserveSqlErrorCode()
+    {
+        DbResult<DbMultiple<ResultSetValue, ResultSetValue>> result = await _db
+            .Sql("""
+                SET NOCOUNT ON;
+                SELECT CAST(1 AS INT) AS [Value];
+                THROW 51740, N'Lib.Db multi-result verification failure.', 1;
+                """)
+            .With(new { })
+            .QueryMultipleAsync(TestContext.Current.CancellationToken)
+            .ReadMultipleAsync<ResultSetValue, ResultSetValue>(TestContext.Current.CancellationToken);
+
+        AssertMultipleReadFailure(result, 51740, DbErrorKind.UserDefined);
+    }
+
+    [Fact]
+    public async Task V05E_QueryMultiple_ConstraintDuringSecondResultSet_ShouldPreserveSqlErrorCode()
+    {
+        DbResult<DbMultiple<ResultSetValue, ResultSetValue>> result = await _db
+            .Sql("""
+                SET NOCOUNT ON;
+                SELECT CAST(1 AS INT) AS [Value];
+                CREATE TABLE #LibDbV261Dup ([Id] INT NOT NULL PRIMARY KEY);
+                INSERT INTO #LibDbV261Dup ([Id]) VALUES (1);
+                INSERT INTO #LibDbV261Dup ([Id]) VALUES (1);
+                SELECT CAST(2 AS INT) AS [Value];
+                """)
+            .With(new { })
+            .QueryMultipleAsync(TestContext.Current.CancellationToken)
+            .ReadMultipleAsync<ResultSetValue, ResultSetValue>(TestContext.Current.CancellationToken);
+
+        AssertMultipleReadFailure(result, 2627, DbErrorKind.ConstraintViolation);
+    }
+    [Fact]
     public async Task V06_OutputParameters_ReturnsValues()
     {
         var outputVal = new SqlParameter("@OutputVal", SqlDbType.Int)
@@ -138,6 +185,16 @@ public sealed class CoreQueryTests(MultiDbFixture fixture)
         result.IsSuccess.Should().BeTrue();
         Convert.ToInt32(outputVal.Value).Should().Be(20);
         Convert.ToInt32(inOutVal.Value).Should().Be(15);
+    }
+
+    private static void AssertMultipleReadFailure<T>(DbResult<T> result, int sqlErrorCode, DbErrorKind expectedKind)
+    {
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().NotBeNull();
+        result.Error!.Value.Message.Should().Be("Reading multiple result sets failed.");
+        result.Error.Value.SqlErrorCode.Should().Be(sqlErrorCode);
+        result.Error.Value.Kind.Should().Be(expectedKind);
+        result.Error.Value.InnerException.Should().BeNull();
     }
 
     private sealed record ResultSetValue(int Value);
