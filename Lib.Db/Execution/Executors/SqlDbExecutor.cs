@@ -473,6 +473,10 @@ internal sealed partial class SqlDbExecutor(
                     diagnosticCommandText,
                     GetExceptionType(ex),
                     GetSqlErrorCode(ex));
+
+                if (ex is SqlException)
+                    throw;
+
                 throw LibDbExceptionFactory.CreateCommandExecutionFailed(ex);
             }
         }

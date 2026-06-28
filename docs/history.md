@@ -2,6 +2,18 @@
 
 Current usage docs are intended to stay version-neutral and describe the current API. This file owns version-specific history: release changes, verification summaries, migration notes, and archived report summaries that should not remain scattered through active guides.
 
+## 2.6.1 Summary
+
+### Fixed
+
+- Fixed typed multi-result `ReadMultipleAsync<...>()` failure handling so SQL Server error numbers, severity, kind, and transient classification survive both reader-creation and result-set read failures.
+- Fixed `.With<TParams>(...)` when `TParams` is statically `object` by binding runtime concrete DTO public properties instead of silently treating every stored procedure parameter as missing/null. Dictionary and `DataRow` runtime parameter bags remain supported.
+
+### Verification
+
+- Added regression tests for multi-result SQL error-code preservation, including unit coverage for user-defined 51740 and constraint 2627 mappings plus local verification DB coverage for stored-procedure and mid-stream multi-result failures.
+- Added final `SqlCommand.Parameters` binding tests for `object`-typed concrete DTOs, dictionary runtime values, and fail-fast empty object parameters.
+
 ## 2.6.0 Summary
 
 ### Added
