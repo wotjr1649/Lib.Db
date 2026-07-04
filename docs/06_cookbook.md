@@ -265,6 +265,8 @@ DbResult<IAsyncEnumerable<TenantConfig>> result = await session
 
 ## 레시피 11: AOT-safe Bulk Mutations
 
+AOT-safe bulk operations use explicit `BulkShape<T>` metadata and `BulkWriteOptions`; legacy reflection bulk insert remains compatibility-only.
+
 **상황**: 수만 건의 레코드를 AOT-safe shape로 삽입, 수정, 삭제, upsert, merge-like mutation 처리합니다.
 
 ```csharp

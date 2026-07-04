@@ -2,6 +2,23 @@
 
 Current usage docs are intended to stay version-neutral and describe the current API. This file owns version-specific history: release changes, verification summaries, migration notes, and archived report summaries that should not remain scattered through active guides.
 
+## 2.6.2 Summary
+
+### Fixed
+
+- Tightened `RawSqlPolicy.DenyWriteText` so bare and qualified `sp_executesql` text commands that wrap mutating SQL are blocked as write-like raw SQL. `DenyWriteText` remains a conservative guardrail, not a full SQL parser or permission boundary.
+- Hardened `SharedMemoryCache` with keyed integrity metadata, user/path/isolation-key namespacing, and quota enforcement so quota-rejected or quota-unverified writes are treated as cache misses rather than written to fallback state.
+- Aligned manual `LibDbOptions` configuration binding with the supported concrete `LibDbConfig` values, including `Mars`, resilience, schema warmup, diagnostics, chaos, and shared-memory cache options.
+
+### Changed
+
+- v2.6.2 freezes the public bulk-copy surface for this hardening patch. Optional `TableLock` and `KeepNulls` destination options are deferred to the v2.6.3 brainstorming backlog.
+- The checked-in verification manifest keeps its `v2.6.0` workflow manifest marker; the NuGet package version is sourced from `Lib.Db.csproj`.
+
+### Verification
+
+- Added regression coverage for raw SQL `sp_executesql` policy cases, shared-memory cache isolation/integrity/quota behavior, and configuration binding parity.
+- Added release metadata and docs/API coverage guards for the v2.6.2 package surface.
 ## 2.6.1 Summary
 
 ### Fixed

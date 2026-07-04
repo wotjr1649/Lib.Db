@@ -37,7 +37,7 @@ DB 작업의 유일한 진입점입니다. DI 컨테이너에서 `Scoped`로 등
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `RawSqlPolicy` | `Allow` | `CommandType.Text` 실행 정책. `DenyAllText`는 모든 Raw SQL 텍스트를 차단하고, `DenyWriteText`는 주석/문자열/식별자를 건너뛰며 쓰기/DDL/권한/운영 계열 위험 토큰을 차단합니다. |
+| `RawSqlPolicy` | `Allow` | `CommandType.Text` 실행 정책. `DenyAllText`는 모든 Raw SQL 텍스트를 차단하고, `DenyWriteText`는 주석/문자열/식별자를 건너뛰며 쓰기/DDL/권한/운영 계열 위험 토큰과 mutating `sp_executesql` wrapper를 차단하는 guardrail입니다. |
 | `ConnectionSecurityProfile` | `Development` | `Production` 설정 시 암호화 비활성 연결, `TrustServerCertificate=True`, 고권한 기본 SQL 로그인 사용을 기본 차단합니다. |
 
 `DenyWriteText`는 SQL 파서가 아니라 전환기 보조 guardrail입니다.
@@ -225,7 +225,7 @@ DB 오류 분류 열거형입니다 (16개 값).
 | `Tvp` | `TvpOptions` | `new()` | Runtime TVP 바인딩 옵션과 row type registry |
 | `EnableResilience` | `bool` | `false` | Polly 회복 탄력성 |
 | `Resilience` | `ResilienceOptions` | (내부 기본값) | 재시도/Circuit Breaker 설정 |
-| `EnableSharedMemoryCache` | `bool?` | `null` | 내장 SharedMemoryCache opt-in 플래그. `null`은 Lib.Db가 `IDistributedCache`를 등록하지 않음을 의미 |
+| `EnableSharedMemoryCache` | `bool?` | `null` | 내장 SharedMemoryCache opt-in 플래그. `null`은 Lib.Db가 `IDistributedCache`를 등록하지 않음을 의미. Opt-in cache uses keyed integrity metadata and quota enforcement. |
 | `EnableEpochCoordination` | `bool?` | `null` | SharedMemoryCache opt-in이 있을 때만 기본 활성화되는 epoch 동기화 |
 | `EnableDryRun` | `bool` | `false` | 모의 실행 모드 |
 | `EnableObservability` | `bool` | `false` | ActivitySource/Meter 기반 tracing/metrics 활성화 스위치. 일반 ILogger 로그는 별도 로깅 설정을 따름 |
