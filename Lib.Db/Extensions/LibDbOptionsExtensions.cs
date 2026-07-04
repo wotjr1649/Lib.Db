@@ -7,6 +7,7 @@
 #nullable enable
 
 using System;
+using System.Globalization;
 using Lib.Db.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -125,72 +126,199 @@ public static class LibDbOptionsExtensions
     /// </summary>
     private static void BindLibDbOptions(LibDbOptions options, IConfigurationSection section)
     {
-        // 1. General
-        if (bool.TryParse(section["EnableSchemaCaching"], out bool esc))
-            options.EnableSchemaCaching = esc;
-        if (int.TryParse(section["SchemaRefreshIntervalSeconds"], out int sris))
-            options.SchemaRefreshIntervalSeconds = sris;
-        if (bool.TryParse(section["EnableDryRun"], out bool edr))
-            options.EnableDryRun = edr;
-        if (Enum.TryParse(section["RawSqlPolicy"], ignoreCase: true, out RawSqlPolicy rawSqlPolicy))
+        if (TryGetEnum(section, "Mars", out MarsPolicy mars))
+            options.Mars = mars;
+        if (TryGetBool(section, "EnableSchemaCaching", out bool enableSchemaCaching))
+            options.EnableSchemaCaching = enableSchemaCaching;
+        if (TryGetInt(section, "SchemaRefreshIntervalSeconds", out int schemaRefreshIntervalSeconds))
+            options.SchemaRefreshIntervalSeconds = schemaRefreshIntervalSeconds;
+        if (TryGetBool(section, "EnableDryRun", out bool enableDryRun))
+            options.EnableDryRun = enableDryRun;
+        if (TryGetEnum(section, "RawSqlPolicy", out RawSqlPolicy rawSqlPolicy))
             options.RawSqlPolicy = rawSqlPolicy;
-        if (Enum.TryParse(section["ConnectionSecurityProfile"], ignoreCase: true, out ConnectionSecurityProfile securityProfile))
+        if (TryGetEnum(section, "ConnectionSecurityProfile", out ConnectionSecurityProfile securityProfile))
             options.ConnectionSecurityProfile = securityProfile;
-        if (bool.TryParse(section["AllowProductionTrustServerCertificateWaiver"], out bool allowTrustWaiver))
+        if (TryGetBool(section, "AllowProductionTrustServerCertificateWaiver", out bool allowTrustWaiver))
             options.AllowProductionTrustServerCertificateWaiver = allowTrustWaiver;
-        if (bool.TryParse(section["AllowProductionSaLoginWaiver"], out bool allowSaWaiver))
+        if (TryGetBool(section, "AllowProductionSaLoginWaiver", out bool allowSaWaiver))
             options.AllowProductionSaLoginWaiver = allowSaWaiver;
+        if (TryGetBool(section, "StrictRequiredParameterCheck", out bool strictRequiredParameterCheck))
+            options.StrictRequiredParameterCheck = strictRequiredParameterCheck;
+        if (TryGetEnum(section, "TvpValidationMode", out TvpValidationMode tvpValidationMode))
+            options.TvpValidationMode = tvpValidationMode;
+        if (TryGetBool(section, "EnableGeneratedTvpBinder", out bool enableGeneratedTvpBinder))
+            options.EnableGeneratedTvpBinder = enableGeneratedTvpBinder;
 
-        // ConnectionStringNames (List)
-        IConfigurationSection connNamesSection = section.GetSection("ConnectionStringNames");
-        if (connNamesSection.Exists())
-        {
-            List<string> names = [];
-            foreach (IConfigurationSection child in connNamesSection.GetChildren())
-            {
-                if (child.Value is not null)
-                    names.Add(child.Value);
-            }
-            if (names.Count > 0)
-                options.ConnectionStringNames = names;
-        }
+        List<string> connectionStringNames = GetStringList(section.GetSection("ConnectionStringNames"));
+        if (connectionStringNames.Count > 0)
+            options.ConnectionStringNames = connectionStringNames;
 
-        // PrewarmSchemas (List)
+        IConfigurationSection watchedInstancesSection = section.GetSection("WatchedInstances");
+        if (watchedInstancesSection.Exists())
+            options.WatchedInstances = GetStringList(watchedInstancesSection);
+
         IConfigurationSection prewarmSection = section.GetSection("PrewarmSchemas");
         if (prewarmSection.Exists())
-        {
-            options.PrewarmSchemas.Clear(); // Override default
-            foreach (IConfigurationSection child in prewarmSection.GetChildren())
-            {
-                if (child.Value != null)
-                    options.PrewarmSchemas.Add(child.Value);
-            }
-        }
+            options.PrewarmSchemas = GetStringList(prewarmSection);
 
-        // Resilience (Complex)
-        IConfigurationSection resSection = section.GetSection("Resilience");
-        if (resSection.Exists())
-        {
-            // ... Simple binding for key props
-            if (bool.TryParse(section["EnableResilience"], out bool er))
-                options.EnableResilience = er;
+        IConfigurationSection includePatternsSection = section.GetSection("PrewarmIncludePatterns");
+        if (includePatternsSection.Exists())
+            options.PrewarmIncludePatterns = GetStringList(includePatternsSection);
 
-            // ResilienceOptions
-            if (int.TryParse(resSection["MaxRetryCount"], out int mrc))
-                options.Resilience.MaxRetryCount = mrc;
-            if (int.TryParse(resSection["BaseRetryDelayMs"], out int brd))
-                options.Resilience.BaseRetryDelayMs = brd;
-        }
+        IConfigurationSection excludePatternsSection = section.GetSection("PrewarmExcludePatterns");
+        if (excludePatternsSection.Exists())
+            options.PrewarmExcludePatterns = GetStringList(excludePatternsSection);
 
-        // SharedMemoryCache (Complex)
-        IConfigurationSection smcSection = section.GetSection("SharedMemoryCache");
-        if (smcSection.Exists())
-        {
-            // Bind relevant props
-        }
+        if (TryGetInt(section, "DefaultCommandTimeoutSeconds", out int defaultCommandTimeoutSeconds))
+            options.DefaultCommandTimeoutSeconds = defaultCommandTimeoutSeconds;
+        if (TryGetInt(section, "BulkCommandTimeoutSeconds", out int bulkCommandTimeoutSeconds))
+            options.BulkCommandTimeoutSeconds = bulkCommandTimeoutSeconds;
+        if (TryGetInt(section, "BulkBatchSize", out int bulkBatchSize))
+            options.BulkBatchSize = bulkBatchSize;
+        if (TryGetLong(section, "TvpMemoryWarningThresholdBytes", out long tvpMemoryWarningThresholdBytes))
+            options.TvpMemoryWarningThresholdBytes = tvpMemoryWarningThresholdBytes;
+        if (TryGetInt(section, "ResumableQueryMaxRetries", out int resumableQueryMaxRetries))
+            options.ResumableQueryMaxRetries = resumableQueryMaxRetries;
+        if (TryGetInt(section, "ResumableQueryBaseDelayMs", out int resumableQueryBaseDelayMs))
+            options.ResumableQueryBaseDelayMs = resumableQueryBaseDelayMs;
+        if (TryGetInt(section, "ResumableQueryMaxDelayMs", out int resumableQueryMaxDelayMs))
+            options.ResumableQueryMaxDelayMs = resumableQueryMaxDelayMs;
+        if (TryGetBool(section, "EnableResilience", out bool enableResilience))
+            options.EnableResilience = enableResilience;
 
-        // Skip JsonOptions (SYSLIB1100 Trigger)
+        BindResilienceOptions(options.Resilience, section.GetSection("Resilience"));
+
+        if (TryGetInt(section, "MaxCacheSize", out int maxCacheSize))
+            options.MaxCacheSize = maxCacheSize;
+        if (TryGetInt(section, "SchemaSnapshotWarningThreshold", out int schemaSnapshotWarningThreshold))
+            options.SchemaSnapshotWarningThreshold = schemaSnapshotWarningThreshold;
+
+        BindSharedMemoryCacheOptions(options.SharedMemoryCache, section.GetSection("SharedMemoryCache"));
+        if (TryGetNullableBool(section, "EnableSharedMemoryCache", out bool? enableSharedMemoryCache))
+            options.EnableSharedMemoryCache = enableSharedMemoryCache;
+        if (TryGetNullableBool(section, "EnableEpochCoordination", out bool? enableEpochCoordination))
+            options.EnableEpochCoordination = enableEpochCoordination;
+        if (TryGetInt(section, "EpochCheckIntervalSeconds", out int epochCheckIntervalSeconds))
+            options.EpochCheckIntervalSeconds = epochCheckIntervalSeconds;
+
+        BindChaosOptions(options.Chaos, section.GetSection("Chaos"));
+
+        if (TryGetInt(section, "HealthCheckThrottleSeconds", out int healthCheckThrottleSeconds))
+            options.HealthCheckThrottleSeconds = healthCheckThrottleSeconds;
+        if (TryGetInt(section, "HealthCheckTimeoutSeconds", out int healthCheckTimeoutSeconds))
+            options.HealthCheckTimeoutSeconds = healthCheckTimeoutSeconds;
+        if (TryGetBool(section, "EnableObservability", out bool enableObservability))
+            options.EnableObservability = enableObservability;
+        else if (TryGetBool(section, "EnableOpenTelemetry", out bool enableOpenTelemetry))
+            options.EnableObservability = enableOpenTelemetry;
+        if (TryGetBool(section, "IncludeParametersInTrace", out bool includeParametersInTrace))
+            options.IncludeParametersInTrace = includeParametersInTrace;
+        if (TryGetInt(section, "SchemaLockCleanupThreshold", out int schemaLockCleanupThreshold))
+            options.SchemaLockCleanupThreshold = schemaLockCleanupThreshold;
+        if (TryGetInt(section, "SchemaLockCleanupIntervalMs", out int schemaLockCleanupIntervalMs))
+            options.SchemaLockCleanupIntervalMs = schemaLockCleanupIntervalMs;
+        if (TryGetInt(section, "PrewarmMaxConcurrency", out int prewarmMaxConcurrency))
+            options.PrewarmMaxConcurrency = prewarmMaxConcurrency;
     }
+
+    private static void BindResilienceOptions(LibDbOptions.ResilienceOptions options, IConfigurationSection section)
+    {
+        if (!section.Exists())
+            return;
+
+        if (TryGetInt(section, "MaxRetryCount", out int maxRetryCount))
+            options.MaxRetryCount = maxRetryCount;
+        if (TryGetInt(section, "BaseRetryDelayMs", out int baseRetryDelayMs))
+            options.BaseRetryDelayMs = baseRetryDelayMs;
+        if (TryGetInt(section, "MaxRetryDelayMs", out int maxRetryDelayMs))
+            options.MaxRetryDelayMs = maxRetryDelayMs;
+        if (TryGetBool(section, "UseRetryJitter", out bool useRetryJitter))
+            options.UseRetryJitter = useRetryJitter;
+        if (TryGetEnum(section, "RetryBackoffType", out LibDbOptions.RetryBackoffType retryBackoffType))
+            options.RetryBackoffType = retryBackoffType;
+        if (TryGetInt(section, "CircuitBreakerThreshold", out int circuitBreakerThreshold))
+            options.CircuitBreakerThreshold = circuitBreakerThreshold;
+        if (TryGetInt(section, "CircuitBreakerSamplingDurationMs", out int circuitBreakerSamplingDurationMs))
+            options.CircuitBreakerSamplingDurationMs = circuitBreakerSamplingDurationMs;
+        if (TryGetInt(section, "CircuitBreakerBreakDurationMs", out int circuitBreakerBreakDurationMs))
+            options.CircuitBreakerBreakDurationMs = circuitBreakerBreakDurationMs;
+        if (TryGetDouble(section, "CircuitBreakerFailureRatio", out double circuitBreakerFailureRatio))
+            options.CircuitBreakerFailureRatio = circuitBreakerFailureRatio;
+    }
+
+    private static void BindSharedMemoryCacheOptions(SharedMemoryCacheOptions options, IConfigurationSection section)
+    {
+        if (!section.Exists())
+            return;
+
+        if (section["BasePath"] is string basePath)
+            options.BasePath = basePath;
+        if (TryGetEnum(section, "Scope", out Lib.Db.Caching.CacheScope scope))
+            options.Scope = scope;
+        if (TryGetLong(section, "MaxCacheSizeBytes", out long maxCacheSizeBytes))
+            options.MaxCacheSizeBytes = maxCacheSizeBytes;
+        if (section["IsolationKey"] is string isolationKey)
+            options.IsolationKey = isolationKey;
+    }
+
+    private static void BindChaosOptions(ChaosOptions options, IConfigurationSection section)
+    {
+        if (!section.Exists())
+            return;
+
+        if (TryGetBool(section, "Enabled", out bool enabled))
+            options.Enabled = enabled;
+        if (TryGetDouble(section, "ExceptionRate", out double exceptionRate))
+            options.ExceptionRate = exceptionRate;
+        if (TryGetDouble(section, "LatencyRate", out double latencyRate))
+            options.LatencyRate = latencyRate;
+        if (TryGetInt(section, "MinLatencyMs", out int minLatencyMs))
+            options.MinLatencyMs = minLatencyMs;
+        if (TryGetInt(section, "MaxLatencyMs", out int maxLatencyMs))
+            options.MaxLatencyMs = maxLatencyMs;
+    }
+
+    private static List<string> GetStringList(IConfigurationSection section)
+    {
+        if (!section.Exists())
+            return [];
+
+        List<string> values = [];
+        foreach (IConfigurationSection child in section.GetChildren())
+        {
+            if (child.Value is not null)
+                values.Add(child.Value);
+        }
+        return values;
+    }
+
+    private static bool TryGetBool(IConfigurationSection section, string key, out bool value)
+        => bool.TryParse(section[key], out value);
+
+    private static bool TryGetNullableBool(IConfigurationSection section, string key, out bool? value)
+    {
+        if (bool.TryParse(section[key], out bool parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static bool TryGetInt(IConfigurationSection section, string key, out int value)
+        => int.TryParse(section[key], out value);
+
+    private static bool TryGetLong(IConfigurationSection section, string key, out long value)
+        => long.TryParse(section[key], out value);
+
+    private static bool TryGetDouble(IConfigurationSection section, string key, out double value)
+        => double.TryParse(section[key], NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+
+    private static bool TryGetEnum<TEnum>(IConfigurationSection section, string key, out TEnum value)
+        where TEnum : struct
+        => Enum.TryParse(section[key], ignoreCase: true, out value);
 
     /// <summary>
     /// Options 구성 후 추가 검증을 수행합니다.

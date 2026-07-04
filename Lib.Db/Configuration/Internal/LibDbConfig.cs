@@ -20,6 +20,7 @@ internal sealed class LibDbConfig
 {
     // [1] 연결 문자열 이름 목록 (Bind() 시 Add로 추가되므로 빈 리스트 초기화)
     public List<string> ConnectionStringNames { get; set; } = [];
+    public MarsPolicy Mars { get; set; } = MarsPolicy.Auto;
 
     public ConnectionSecurityProfile ConnectionSecurityProfile { get; set; } = ConnectionSecurityProfile.Development;
     public bool AllowProductionTrustServerCertificateWaiver { get; set; } = false;
@@ -240,6 +241,7 @@ internal sealed class LibDbConfig
             options.ConnectionStringNames = this.ConnectionStringNames;
         }
 
+        options.Mars = this.Mars;
         options.ConnectionSecurityProfile = this.ConnectionSecurityProfile;
         options.AllowProductionTrustServerCertificateWaiver = this.AllowProductionTrustServerCertificateWaiver;
         options.AllowProductionSaLoginWaiver = this.AllowProductionSaLoginWaiver;
