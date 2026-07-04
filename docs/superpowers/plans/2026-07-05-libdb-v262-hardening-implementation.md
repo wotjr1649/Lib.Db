@@ -363,7 +363,13 @@ pwsh -NoProfile -File .\Verification\scripts\Invoke-Tests.ps1 -SkipTestEnvGuard 
 - If Task 7 is approved, implement only the narrowed `TableLock` and `KeepNulls` mapping before Task 8.
 - Task 8 docs/API/version guard must run after this decision and after any Task 7 implementation, so public surface and docs cannot pass before final scope is known.
 
-**Exit:** Task 7 is either skipped/deferred or explicitly approved with narrow scope. Review findings 0 before continuing.
+**Decision (2026-07-05):** Skip Task 7 for v2.6.2 and proceed directly to Task 8.
+
+**Skip rationale:** v2.6.2 remains a hardening-focused patch after the P0/P1 raw SQL, shared-memory cache, quota, integrity, and configuration parity work. `TableLock` and `KeepNulls` are additive but still expand public bulk-copy surface and staged-operation documentation/test obligations. No explicit approval was given to include the narrowed optional Task 7 in v2.6.2, so the release surface is frozen for Task 8 docs/API/version coverage.
+
+**Deferred follow-up:** Track `TableLock` and `KeepNulls` as a future bulk-copy design topic with staged-operation semantics, compatibility notes, and test matrix before promotion.
+
+**Exit:** Task 7 is skipped/deferred; review findings must be 0 before continuing to Task 8.
 
 ## Task 7: Optional Narrow Bulk Copy Knobs
 
