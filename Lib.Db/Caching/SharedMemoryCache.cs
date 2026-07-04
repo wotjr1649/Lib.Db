@@ -104,7 +104,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     {
         _options = options.Value;
         _logger = logger;
-        _basePath = CacheInternalHelpers.ResolveBasePath(_options);
+        _basePath = CacheInternalHelpers.ResolveStoragePath(_options);
         _mutexPrefix = CacheInternalHelpers.GetMutexPrefix(_options);
         _mutexScope = _options.Scope.ToString();
 

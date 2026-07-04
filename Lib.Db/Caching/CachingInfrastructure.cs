@@ -28,8 +28,8 @@ namespace Lib.Db.Caching;
 public enum CacheScope
 {
     /// <summary>
-    /// 로컬 사용자별로 격리됩니다. (기본값)
-    /// <para>동일 머신의 다른 사용자는 이 캐시에 접근할 수 없습니다.</para>
+    /// 로컬 사용자별 네임스페이스로 분리됩니다. (기본값)
+    /// <para>파일/뮤텍스 이름에 사용자 식별 해시를 포함하지만, OS 파일 ACL 보장을 의미하지는 않습니다.</para>
     /// </summary>
     User = 0,
 
@@ -87,7 +87,7 @@ public sealed class IsolationKeyGenerator() : Lib.Db.Contracts.Cache.IIsolationK
 internal static class CacheInternalHelpers
 {
     /// <summary>
-    /// 현재 운영체제 사용자의 SID 해시를 반환합니다. (Windows 전용)
+    /// 현재 운영체제 사용자의 결정론적 해시를 반환합니다.
     /// </summary>
     public static string GetUserSidHash()
     {
@@ -108,7 +108,15 @@ internal static class CacheInternalHelpers
                 return "Unknown";
             }
         }
-        return "Nix"; // Non-Windows
+
+        try
+        {
+            return GetDeterministicShortHash(Environment.UserName);
+        }
+        catch
+        {
+            return "Unknown";
+        }
     }
 
     /// <summary>
@@ -147,6 +155,25 @@ internal static class CacheInternalHelpers
             : GetDeterministicShortHash(isolationKey);
 
     /// <summary>
+    /// 캐시 파일이 저장될 격리 네임스페이스 경로를 절대 경로로 반환합니다.
+    /// </summary>
+    public static string ResolveStoragePath(SharedMemoryCacheOptions options)
+    {
+        string basePath = ResolveBasePath(options);
+        return Path.Combine(basePath, BuildStorageNamespace(options, basePath));
+    }
+
+    private static string BuildStorageNamespace(SharedMemoryCacheOptions options, string resolvedBasePath)
+    {
+        string scope = options.Scope == CacheScope.Machine ? "machine" : "user";
+        string userHash = options.Scope == CacheScope.Machine ? "allusers" : GetUserSidHash();
+        string pathHash = GetDeterministicShortHash(resolvedBasePath);
+        string isolationKey = BuildSafeStorageHash(options.IsolationKey);
+
+        return $"v1_{scope}_{userHash}_{pathHash}_{isolationKey}";
+    }
+
+    /// <summary>
     /// 캐시 파일이 저장될 기본 경로를 절대 경로로 반환합니다.
     /// </summary>
     public static string ResolveBasePath(SharedMemoryCacheOptions options)
@@ -163,6 +190,15 @@ internal static class CacheInternalHelpers
         return Path.Combine(AppContext.BaseDirectory, expanded);
     }
 
+    private static string BuildSafeStorageHash(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return "default";
+
+        byte[] bytes = Encoding.UTF8.GetBytes(input.Trim());
+        byte[] hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash.AsSpan(0, 16));
+    }
     /// <summary>
     /// 문자열에 대한 결정론적이고 짧은 해시를 반환합니다.
     /// </summary>
