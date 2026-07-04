@@ -55,6 +55,17 @@ public sealed class SqlDbExecutorSecurityPolicyTests
     [InlineData("/* outer /* inner */ SELECT */ DELETE FROM dbo.Users")]
     [InlineData("; /* outer /* inner */ SELECT */ DROP TABLE dbo.Users")]
     [InlineData("EXEC dbo.usp_DoWork")]
+    [InlineData("sp_executesql N'DELETE FROM dbo.Users'")]
+    [InlineData("sys.sp_executesql N'UPDATE dbo.Users SET Name = N''x'''")]
+    [InlineData("[sys].[sp_executesql] N'DROP TABLE dbo.Users'")]
+    [InlineData("sys/**/.sp_executesql N'DELETE FROM dbo.Users'")]
+    [InlineData("sys./**/sp_executesql N'DELETE FROM dbo.Users'")]
+    [InlineData("audit: sp_executesql N'DELETE FROM dbo.Users'")]
+    [InlineData("master.sys.sp_executesql N'DELETE FROM dbo.Users'")]
+    [InlineData("server.master.sys.sp_executesql N'DELETE FROM dbo.Users'")]
+    [InlineData("master..sp_executesql N'DELETE FROM dbo.Users'")]
+    [InlineData("[master].[sys].[sp_executesql] N'DELETE FROM dbo.Users'")]
+    [InlineData("; /* audit */ -- separator\r\nsp_executesql N'DELETE FROM dbo.Users'")]
     [InlineData("WITH cte AS (SELECT Id FROM dbo.Users) DELETE FROM cte")]
     [InlineData("SELECT * INTO #Users FROM dbo.Users")]
     [InlineData("DECLARE @sql nvarchar(max) = N'DELETE FROM dbo.Users'; EXEC(@sql)")]
@@ -91,7 +102,9 @@ public sealed class SqlDbExecutorSecurityPolicyTests
 
     [Theory]
     [InlineData("SELECT 'DELETE FROM dbo.Users' AS LiteralValue")]
+    [InlineData("SELECT 'sp_executesql DELETE' AS LiteralValue")]
     [InlineData("SELECT [DROP] FROM dbo.AuditLog")]
+    [InlineData("SELECT [sp_executesql] FROM dbo.AuditLog")]
     [InlineData("SELECT * FROM dbo.IntoTable WHERE Name = @Name")]
     public async Task RawSqlPolicy_DenyWriteText_ShouldAllowReadOnlyTextWithUnsafeWordsInLiteralsOrIdentifiers(string sql)
     {
