@@ -61,6 +61,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     private readonly SharedMemoryCacheOptions _options;
     private readonly ILogger<SharedMemoryCache> _logger;
     private readonly Lazy<Mutex[]> _mutexStripes;
+    private readonly Lazy<Mutex> _quotaMutex;
     private readonly string _mutexPrefix;
     private readonly string _mutexScope;
     private readonly byte[] _integrityKey;
@@ -116,6 +117,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         _mutexPrefix = CacheInternalHelpers.GetMutexPrefix(_options);
         _mutexScope = _options.Scope.ToString();
         _integrityKey = CreateIntegrityKey(_options.IsolationKey);
+        _quotaMutex = new Lazy<Mutex>(InitQuotaMutex);
 
         try
         {
@@ -124,6 +126,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
             // Mutex 초기화 (Lazy)
             _mutexStripes = new Lazy<Mutex[]>(InitMutexes);
+            _ = _quotaMutex.Value;
             _isFallbackMode = false;
 
             _logger.LogInformation(
@@ -137,6 +140,23 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             _logger.LogError(
                 "[SharedMemoryCache] 초기화 실패 -> Fallback 모드 전환 (ErrorType: {ErrorType})",
                 ex.GetType().Name);
+        }
+    }
+
+    private Mutex InitQuotaMutex()
+    {
+        string name = $"{_mutexPrefix}quota";
+        try
+        {
+            return new Mutex(false, name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                "[Mutex] quota mutex 생성 실패 -> Fallback 모드 전환 (Scope: {Scope}, ErrorType: {ErrorType})",
+                _mutexScope,
+                ex.GetType().Name);
+            throw;
         }
     }
 
@@ -339,54 +359,91 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
             if (!acquired)
             {
-                // Fallback on timeout
-                _options.FallbackCache?.Set(key, value, options);
+                _logger.LogWarning(
+                    "[Cache] Set mutex timed out: {KeyHash}",
+                    HashKeyForDiagnostics(key));
                 return;
             }
 
-            string filePath = GetFilePath(key);
-            long expiryTicks = GetExpiryTicks(options);
-            uint crc = Crc32.HashToUInt32(value);
-            uint keyHash = ComputeKeyHash(key); // Quick check 용
-
-            // Temp 파일 생성 (Atomic Swap은 아님 - MMF 특성상 직접 씀)
-            // 참고: EpochStore 처럼 Atomic Swap을 쓰면 좋지만, Cache는 즉시성이 중요하고 MMF Lock이 있으므로 덮어쓰기 허용
-
-            using FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-
-            // 파일 크기 확보
-            long totalSize = HEADER_SIZE + value.Length;
-            if (fs.Length != totalSize)
-                fs.SetLength(totalSize);
-
-            using MemoryMappedFile mmf = MemoryMappedFile.CreateFromFile(fs, null, totalSize, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, false);
-            using MemoryMappedViewAccessor accessor = mmf.CreateViewAccessor(0, totalSize);
-
-            // 1. Write Header (State = Writing)
-            MmfHeader header = new MmfHeader
+            Mutex quotaMutex = _quotaMutex.Value;
+            bool quotaAcquired = false;
+            try
             {
-                Magic = MAGIC,
-                Version = SCHEMA_VERSION,
-                State = STATE_WRITING,
-                ExpiryTicks = expiryTicks,
-                DataLength = value.LongLength,
-                Crc32 = crc,
-                KeyHash = keyHash
-            };
-            accessor.Write(0, ref header);
+                try
+                {
+                    quotaAcquired = quotaMutex.WaitOne(TimeSpan.FromSeconds(1));
+                }
+                catch (AbandonedMutexException)
+                {
+                    quotaAcquired = true;
+                    _logger.LogWarning(
+                        "[Cache] Abandoned quota mutex 복구됨 (Set): {KeyHash}",
+                        HashKeyForDiagnostics(key));
+                }
 
-            // 2. Write Data
-            accessor.WriteArray(HEADER_SIZE, value, 0, value.Length);
+                if (!quotaAcquired)
+                {
+                    _logger.LogWarning(
+                        "[Cache] quota reservation timed out: {KeyHash}",
+                        HashKeyForDiagnostics(key));
+                    return;
+                }
 
-            // 3. Commit (State = Committed)
-            header.State = STATE_COMMITTED;
-            byte[] mac = ComputeIntegrityMac(header, key, value);
-            accessor.WriteArray(HEADER_METADATA_SIZE, mac, 0, mac.Length);
-            CryptographicOperations.ZeroMemory(mac);
-            accessor.Write(0, ref header);
+                string filePath = GetFilePath(key);
+                long totalSize = HEADER_SIZE + value.LongLength;
+                if (!TryReserveStorageQuota(filePath, totalSize, key))
+                {
+                    DeleteSharedEntryAfterQuotaRejection(filePath, key);
+                    return;
+                }
 
-            // fs.Flush handled by Dispose? Not necessarily for MMF.
-            // accessor.Flush(); // OS Page Flush
+                long expiryTicks = GetExpiryTicks(options);
+                uint crc = Crc32.HashToUInt32(value);
+                uint keyHash = ComputeKeyHash(key); // Quick check 용
+
+                // Temp 파일 생성 (Atomic Swap은 아님 - MMF 특성상 직접 씀)
+                // 참고: EpochStore 처럼 Atomic Swap을 쓰면 좋지만, Cache는 즉시성이 중요하고 MMF Lock이 있으므로 덮어쓰기 허용
+
+                using FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+
+                // 파일 크기 확보
+                if (fs.Length != totalSize)
+                    fs.SetLength(totalSize);
+
+                using MemoryMappedFile mmf = MemoryMappedFile.CreateFromFile(fs, null, totalSize, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, false);
+                using MemoryMappedViewAccessor accessor = mmf.CreateViewAccessor(0, totalSize);
+
+                // 1. Write Header (State = Writing)
+                MmfHeader header = new MmfHeader
+                {
+                    Magic = MAGIC,
+                    Version = SCHEMA_VERSION,
+                    State = STATE_WRITING,
+                    ExpiryTicks = expiryTicks,
+                    DataLength = value.LongLength,
+                    Crc32 = crc,
+                    KeyHash = keyHash
+                };
+                accessor.Write(0, ref header);
+
+                // 2. Write Data
+                accessor.WriteArray(HEADER_SIZE, value, 0, value.Length);
+
+                // 3. Commit (State = Committed)
+                header.State = STATE_COMMITTED;
+                byte[] mac = ComputeIntegrityMac(header, key, value);
+                accessor.WriteArray(HEADER_METADATA_SIZE, mac, 0, mac.Length);
+                CryptographicOperations.ZeroMemory(mac);
+                accessor.Write(0, ref header);
+
+                // fs.Flush handled by Dispose? Not necessarily for MMF.
+                // accessor.Flush(); // OS Page Flush
+            }
+            finally
+            {
+                if (quotaAcquired)
+                    quotaMutex.ReleaseMutex();
+            }
         }
         catch (Exception ex)
         {
@@ -521,15 +578,21 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
                     MmfHeader header;
                     accessor.Read(0, out header);
 
-                    if (header.Magic != MAGIC || header.Version != SCHEMA_VERSION || DateTime.UtcNow.Ticks > header.ExpiryTicks)
+                    bool shouldDelete = ShouldDeleteDuringCompaction(header, fs.Length);
+                    if (!shouldDelete && !HasExpectedCrc(fs, header.DataLength, header.Crc32))
+                        shouldDelete = true;
+
+                    if (shouldDelete)
                     {
+                        long freedBytes = Math.Max(0, Math.Min(header.DataLength, fs.Length));
+
                         // Dispose accessors before delete
                         accessor.Dispose();
                         mmf.Dispose();
                         fs.Close();
 
                         File.Delete(file);
-                        DbMetrics.TrackCacheBytesFreed(header.DataLength);
+                        DbMetrics.TrackCacheBytesFreed(freedBytes);
                     }
                 }
                 catch
@@ -546,6 +609,47 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
     }
 
+    private static bool ShouldDeleteDuringCompaction(MmfHeader header, long fileLength)
+    {
+        if (header.Magic != MAGIC || header.Version != SCHEMA_VERSION)
+            return true;
+        if (header.State != STATE_COMMITTED)
+            return true;
+        if (DateTime.UtcNow.Ticks > header.ExpiryTicks)
+            return true;
+        if (header.DataLength < 0 || header.DataLength > int.MaxValue)
+            return true;
+        if (HEADER_SIZE + header.DataLength > fileLength)
+            return true;
+
+        return false;
+    }
+
+    private static bool HasExpectedCrc(FileStream fs, long dataLength, uint expectedCrc)
+    {
+        var crc = new Crc32();
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(81920);
+        try
+        {
+            fs.Position = HEADER_SIZE;
+            long remaining = dataLength;
+            while (remaining > 0)
+            {
+                int read = fs.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                if (read == 0)
+                    return false;
+
+                crc.Append(buffer.AsSpan(0, read));
+                remaining -= read;
+            }
+
+            return crc.GetCurrentHashAsUInt32() == expectedCrc;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
     #endregion
 
     #region 도우미 메서드
@@ -594,6 +698,110 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         byte[] hashBytes = XxHash128.Hash(Encoding.UTF8.GetBytes(key));
         string hex = Convert.ToHexString(hashBytes).ToLowerInvariant();
         return Path.Combine(_basePath, hex + ".cache");
+    }
+
+    private bool TryReserveStorageQuota(string filePath, long entrySize, string key)
+    {
+        long maxBytes = _options.MaxCacheSizeBytes;
+        if (entrySize > maxBytes)
+        {
+            LogQuotaExceeded(key, entrySize, maxBytes);
+            return false;
+        }
+
+        if (!TryGetStorageSizeExcluding(filePath, out long currentSize))
+            return false;
+
+        if (currentSize <= maxBytes - entrySize)
+            return true;
+
+        Compact();
+
+        if (!TryGetStorageSizeExcluding(filePath, out currentSize))
+            return false;
+
+        if (currentSize <= maxBytes - entrySize)
+            return true;
+
+        long projectedBytes = currentSize > long.MaxValue - entrySize ? long.MaxValue : currentSize + entrySize;
+        LogQuotaExceeded(key, projectedBytes, maxBytes);
+        return false;
+    }
+
+    private bool TryGetStorageSizeExcluding(string excludedFilePath, out long totalSize)
+    {
+        totalSize = 0;
+        string normalizedExcludedPath = Path.GetFullPath(excludedFilePath);
+        try
+        {
+            foreach (string file in Directory.EnumerateFiles(_basePath, "*.cache"))
+            {
+                if (PathsEqual(Path.GetFullPath(file), normalizedExcludedPath))
+                    continue;
+
+                FileInfo info = new(file);
+                if (info.Length > _options.MaxCacheSizeBytes - totalSize)
+                {
+                    totalSize = _options.MaxCacheSizeBytes + 1;
+                    return true;
+                }
+
+                totalSize += info.Length;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "[Cache] quota check failed (ErrorType: {ErrorType})",
+                ex.GetType().Name);
+            return false;
+        }
+    }
+
+    private void DeleteSharedEntryAfterQuotaRejection(string filePath, string key)
+    {
+        try
+        {
+            File.Delete(filePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "[Cache] quota rejected shared entry cleanup failed: {KeyHash} (ErrorType: {ErrorType})",
+                HashKeyForDiagnostics(key),
+                ex.GetType().Name);
+        }
+
+        try
+        {
+            _options.FallbackCache?.Remove(key);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "[Cache] quota rejected fallback entry cleanup failed: {KeyHash} (ErrorType: {ErrorType})",
+                HashKeyForDiagnostics(key),
+                ex.GetType().Name);
+        }
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(left, right, comparison);
+    }
+
+    private void LogQuotaExceeded(string key, long projectedBytes, long maxBytes)
+    {
+        _logger.LogWarning(
+            "[Cache] quota exceeded: {KeyHash} (ProjectedBytes: {ProjectedBytes}, MaxBytes: {MaxBytes})",
+            HashKeyForDiagnostics(key),
+            projectedBytes,
+            maxBytes);
     }
 
     private static byte[] CreateIntegrityKey(string? isolationKey)
@@ -684,6 +892,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         _disposed = true;
 
         CryptographicOperations.ZeroMemory(_integrityKey);
+
+        if (_quotaMutex.IsValueCreated)
+            _quotaMutex.Value.Dispose();
 
         if (_mutexStripes.IsValueCreated)
         {
