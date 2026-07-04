@@ -7,10 +7,12 @@
 #nullable enable
 
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Hashing;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Lib.Db.Diagnostics;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
@@ -35,7 +37,7 @@ namespace Lib.Db.Caching;
 /// <para><strong>⚙️ 핵심 메커니즘</strong></para>
 /// <list type="bullet">
 /// <item><description><strong>Stripe Locking</strong>: 키별 CRC32 해시를 기반으로 128개의 Mutex 스트라이프로 세분화하여 동시성 경합을 최소화합니다.</description></item>
-/// <item><description><strong>무결성 검증</strong>: 헤더 내 CRC32 체크섬과 Magic Number 검증을 통해 메모리 오염이나 쓰기 중단 상황을 감지합니다.</description></item>
+/// <item><description><strong>무결성 검증</strong>: 헤더 내 HMAC 태그, CRC32 체크섬, Magic Number 검증을 통해 변조, 메모리 오염, 쓰기 중단 상황을 감지합니다.</description></item>
 /// <item><description><strong>자가 치유</strong>: 파일 손상 감지 시 자동으로 파일을 삭제하고 폴백(MemoryCache) 모드로 전환하거나 재생성을 시도합니다.</description></item>
 /// </list>
 /// </remarks>
@@ -44,11 +46,16 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     #region 상수 및 필드
 
     private const uint MAGIC = 0x4244424C;
-    private const ushort SCHEMA_VERSION = 1;
+    private const ushort SCHEMA_VERSION = 2;
     private const byte STATE_WRITING = 0;
     private const byte STATE_COMMITTED = 1;
-    private const int HEADER_SIZE = 32;
+    private const int HEADER_METADATA_SIZE = 32;
+    private const int MAC_SIZE = 32;
+    private const int HEADER_SIZE = HEADER_METADATA_SIZE + MAC_SIZE;
     private const int MUTEX_STRIPE_COUNT = 128;
+
+    private static readonly byte[] IntegrityKeyDomain = Encoding.UTF8.GetBytes("Lib.Db.SharedMemoryCache.IntegrityKey.v1");
+    private static readonly byte[] IntegrityMacDomain = Encoding.UTF8.GetBytes("Lib.Db.SharedMemoryCache.File.v2");
 
     private readonly string _basePath;
     private readonly SharedMemoryCacheOptions _options;
@@ -56,6 +63,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     private readonly Lazy<Mutex[]> _mutexStripes;
     private readonly string _mutexPrefix;
     private readonly string _mutexScope;
+    private readonly byte[] _integrityKey;
     private readonly bool _isFallbackMode;
     private volatile bool _disposed;
 
@@ -107,6 +115,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         _basePath = CacheInternalHelpers.ResolveStoragePath(_options);
         _mutexPrefix = CacheInternalHelpers.GetMutexPrefix(_options);
         _mutexScope = _options.Scope.ToString();
+        _integrityKey = CreateIntegrityKey(_options.IsolationKey);
 
         try
         {
@@ -217,8 +226,12 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
             if (header.Magic != MAGIC)
                 return null;
+            if (header.Version != SCHEMA_VERSION)
+                return null;
             if (header.State != STATE_COMMITTED)
                 return null; // 쓰기 중
+            if (header.KeyHash != ComputeKeyHash(key))
+                return null;
 
             // 만료 체크
             if (DateTime.UtcNow.Ticks > header.ExpiryTicks)
@@ -231,9 +244,16 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
             #region 데이터 읽기
 
-            if (header.DataLength > int.MaxValue)
-                return null; // Too huge
-            byte[] data = new byte[header.DataLength];
+            if (header.DataLength < 0 ||
+                header.DataLength > int.MaxValue ||
+                HEADER_SIZE + header.DataLength > fs.Length)
+            {
+                return null;
+            }
+
+            byte[] storedMac = new byte[MAC_SIZE];
+            accessor.ReadArray(HEADER_METADATA_SIZE, storedMac, 0, MAC_SIZE);
+            byte[] data = new byte[(int)header.DataLength];
             accessor.ReadArray(HEADER_SIZE, data, 0, (int)header.DataLength);
 
             // CRC32 검증
@@ -242,6 +262,14 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             {
                 _logger.LogWarning(
                     "[Cache] CRC Mismatch: {KeyHash}",
+                    HashKeyForDiagnostics(key));
+                return null;
+            }
+
+            if (!VerifyIntegrity(header, key, data, storedMac))
+            {
+                _logger.LogWarning(
+                    "[Cache] Integrity check failed: {KeyHash}",
                     HashKeyForDiagnostics(key));
                 return null;
             }
@@ -319,7 +347,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             string filePath = GetFilePath(key);
             long expiryTicks = GetExpiryTicks(options);
             uint crc = Crc32.HashToUInt32(value);
-            uint keyHash = Crc32.HashToUInt32(Encoding.UTF8.GetBytes(key)); // Quick check 용
+            uint keyHash = ComputeKeyHash(key); // Quick check 용
 
             // Temp 파일 생성 (Atomic Swap은 아님 - MMF 특성상 직접 씀)
             // 참고: EpochStore 처럼 Atomic Swap을 쓰면 좋지만, Cache는 즉시성이 중요하고 MMF Lock이 있으므로 덮어쓰기 허용
@@ -352,6 +380,9 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
             // 3. Commit (State = Committed)
             header.State = STATE_COMMITTED;
+            byte[] mac = ComputeIntegrityMac(header, key, value);
+            accessor.WriteArray(HEADER_METADATA_SIZE, mac, 0, mac.Length);
+            CryptographicOperations.ZeroMemory(mac);
             accessor.Write(0, ref header);
 
             // fs.Flush handled by Dispose? Not necessarily for MMF.
@@ -486,11 +517,11 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
                     }
 
                     using MemoryMappedFile mmf = MemoryMappedFile.CreateFromFile(fs, null, 0, MemoryMappedFileAccess.Read, HandleInheritability.None, false);
-                    using MemoryMappedViewAccessor accessor = mmf.CreateViewAccessor(0, HEADER_SIZE, MemoryMappedFileAccess.Read);
+                    using MemoryMappedViewAccessor accessor = mmf.CreateViewAccessor(0, HEADER_METADATA_SIZE, MemoryMappedFileAccess.Read);
                     MmfHeader header;
                     accessor.Read(0, out header);
 
-                    if (header.Magic != MAGIC || DateTime.UtcNow.Ticks > header.ExpiryTicks)
+                    if (header.Magic != MAGIC || header.Version != SCHEMA_VERSION || DateTime.UtcNow.Ticks > header.ExpiryTicks)
                     {
                         // Dispose accessors before delete
                         accessor.Dispose();
@@ -565,6 +596,68 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         return Path.Combine(_basePath, hex + ".cache");
     }
 
+    private static byte[] CreateIntegrityKey(string? isolationKey)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(IntegrityKeyDomain);
+        hash.AppendData([0]);
+        AppendLengthPrefixedUtf8(hash, string.IsNullOrWhiteSpace(isolationKey) ? "default" : isolationKey.Trim());
+        return hash.GetHashAndReset();
+    }
+
+    private bool VerifyIntegrity(
+        MmfHeader header,
+        string key,
+        ReadOnlySpan<byte> data,
+        ReadOnlySpan<byte> storedMac)
+    {
+        if (storedMac.Length != MAC_SIZE)
+            return false;
+
+        byte[] expectedMac = ComputeIntegrityMac(header, key, data);
+        try
+        {
+            return CryptographicOperations.FixedTimeEquals(storedMac, expectedMac);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(expectedMac);
+        }
+    }
+
+    private byte[] ComputeIntegrityMac(MmfHeader header, string key, ReadOnlySpan<byte> data)
+    {
+        Span<byte> headerBytes = stackalloc byte[HEADER_METADATA_SIZE];
+        MemoryMarshal.Write(headerBytes, in header);
+
+        using IncrementalHash hmac = IncrementalHash.CreateHMAC(HashAlgorithmName.SHA256, _integrityKey);
+        hmac.AppendData(IntegrityMacDomain);
+        hmac.AppendData([0]);
+        hmac.AppendData(headerBytes);
+        AppendLengthPrefixedUtf8(hmac, key);
+        hmac.AppendData(data);
+        return hmac.GetHashAndReset();
+    }
+
+    private static void AppendLengthPrefixedUtf8(IncrementalHash hash, string value)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        try
+        {
+            Span<byte> length = stackalloc byte[sizeof(int)];
+            BinaryPrimitives.WriteInt32LittleEndian(length, bytes.Length);
+            hash.AppendData(length);
+            hash.AppendData(bytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    private static uint ComputeKeyHash(string key)
+        => Crc32.HashToUInt32(Encoding.UTF8.GetBytes(key));
+
     private static string HashKeyForDiagnostics(string key)
         => Convert.ToHexString(XxHash64.Hash(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
 
@@ -589,6 +682,8 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     public void Dispose()
     {
         _disposed = true;
+
+        CryptographicOperations.ZeroMemory(_integrityKey);
 
         if (_mutexStripes.IsValueCreated)
         {
