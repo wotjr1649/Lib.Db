@@ -41,7 +41,7 @@ This sets production connection validation, disables parameter trace output, and
 | `RawSqlPolicy.DenyAllText` | Blocks all `CommandType.Text`; stored procedures still work. |
 | `RawSqlPolicy.DenyWriteText` | Blocks write, permission, schema, and operational-looking text SQL. |
 
-`DenyWriteText` is a conservative guardrail, not a full SQL parser. For production permission boundaries, prefer stored procedures.
+`DenyWriteText` is a conservative guardrail, not a full SQL parser. It also blocks bare or qualified `sp_executesql` text that wraps mutating SQL, because that form otherwise hides write tokens inside dynamic SQL. For production permission boundaries, prefer stored procedures, `DenyAllText`, and least-privilege SQL Server accounts.
 
 ## Text SQL Rules
 

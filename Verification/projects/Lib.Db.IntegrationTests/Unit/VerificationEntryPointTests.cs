@@ -149,6 +149,25 @@ public sealed class VerificationEntryPointTests
     }
 
     [Fact]
+    public void VerificationDbWrapper_ShouldPreserveSqlcmdPasswordEnvironment()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string verificationDbScript = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Verification",
+            "scripts",
+            "Invoke-VerificationDb.ps1"));
+
+        verificationDbScript.Should().Contain("[Environment]::GetEnvironmentVariable('SQLCMDPASSWORD')");
+        verificationDbScript.Should().Contain("SQLCMDINI");
+        verificationDbScript.Should().NotContain("'-X'", "sqlcmd -X disables environment variables, including SQLCMDPASSWORD");
+        verificationDbScript.Should().NotContain("'-P'", "SQL passwords must not be passed on the command line");
+        verificationDbScript.Should().Contain("SQLCMD include path is required");
+        verificationDbScript.Should().Contain("SQLCMD shell escape is not allowed");
+        verificationDbScript.Should().Contain("Unsupported SQLCMD command is not allowed");
+    }
+
+    [Fact]
     public void ReleaseAndCoverageVerification_ShouldUseDirectMtpTestWrapper()
     {
         DirectoryInfo repoRoot = FindRepoRoot();
