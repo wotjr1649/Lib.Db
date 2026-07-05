@@ -721,6 +721,24 @@ public sealed class MapperCoverageTests
     }
 
     [Fact]
+    public void DbBinder_ShouldPreserveStringParameterWhitespaceAndEmbeddedNulls()
+    {
+        const string rawValue = "  value \0 tail  ";
+        using var schemaCommand = new SqlCommand();
+        using var rawCommand = new SqlCommand();
+
+        DbBinder.BindParameter(
+            schemaCommand,
+            Param("@TextValue", SqlDbType.NVarChar, size: 64),
+            rawValue,
+            strictCheck: true);
+        DbBinder.BindRawParameter(rawCommand, "TextValue", rawValue);
+
+        schemaCommand.Parameters["@TextValue"].Value.Should().Be(rawValue);
+        rawCommand.Parameters["@TextValue"].Value.Should().Be(rawValue);
+    }
+
+    [Fact]
     public void DbBinder_ShouldBindRawSqlTypesWithoutJsonFallback()
     {
         using var command = new SqlCommand();

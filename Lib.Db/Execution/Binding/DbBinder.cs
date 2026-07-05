@@ -6,7 +6,7 @@
 // Notes:
 //   - SP/Raw SQL/TVP/BulkCopy 단일 진입점(DbBinder)
 //   - Decimal/정수/Enum 오버플로우 사전 검증 + 한글 컨텍스트 예외
-//   - 문자열 전처리/JSON 직렬화/Stream & LOB(MAX) 지원
+//   - 문자열 값 보존/JSON 직렬화/Stream & LOB(MAX) 지원
 //   - Smart TVP 감지 (AOT 호환) 및 Columnar TVP + Bounded Cache
 // ============================================================================
 
@@ -48,7 +48,7 @@ namespace Lib.Db.Execution.Binding;
 /// <item><strong>TVP(Table-Valued Parameter)</strong>: Columnar 버퍼로 Zero-Allocation POCO → TVP 변환</item>
 /// <item><strong>BulkCopy 헬퍼</strong>: SqlBulkCopy에 사용할 IDataReader 제공</item>
 /// <item><strong>JSON 자동 직렬화</strong>: 복합 객체 감지 시 NVarChar로 자동 변환</item>
-/// <item><strong>문자열 전처리</strong>: 공백/제어문자 제거, Size 기반 Truncate</item>
+/// <item><strong>문자열 값 보존</strong>: 호출자 문자열을 임의 trim/NUL 절단하지 않고 바인딩</item>
 /// </list>
 /// 
 /// <para><strong>⚡ 성능 특성 (Performance)</strong></para>
@@ -64,7 +64,7 @@ namespace Lib.Db.Execution.Binding;
 /// <list type="bullet">
 /// <item><strong>NOT NULL 검증</strong>: Strict 모드에서 NOT NULL 위반 시 예외 발생</item>
 /// <item><strong>오버플로우 사전 검증</strong>: Decimal(precision, scale), TinyInt/SmallInt/Int 범위, DateTime 범위</item>
-/// <item><strong>값 검증/전처리</strong>: 문자열 정규화, 제어문자 제거, 파라미터 바인딩 보조</item>
+/// <item><strong>값 검증</strong>: 타입 범위 검증, Size 처리, 파라미터 바인딩 보조</item>
 /// <item><strong>TVP 스키마 검증</strong>: ValidatorCallback으로 DTO 타입과 TVP 타입명 일치 확인</item>
 /// </list>
 /// 
@@ -411,14 +411,9 @@ public static partial class DbBinder
             if (finalValue is DateTime valDt)
                 CheckDateTimeRange(meta.Name, valDt, meta.SqlDbType);
 
-            if (finalValue is string strVal)
+            if (finalValue is string strVal && meta.Size > 0 && strVal.Length > meta.Size)
             {
-                ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(strVal);
-
-                if (meta.Size > 0 && processedSpan.Length > meta.Size)
-                    finalValue = processedSpan[..(int)meta.Size].ToString();
-                else if (processedSpan.Length != strVal.Length)
-                    finalValue = processedSpan.ToString();
+                finalValue = strVal[..(int)meta.Size];
             }
             else if (IsStringColumn(meta.SqlDbType) && IsComplexObject(finalValue))
             {
@@ -474,7 +469,7 @@ public static partial class DbBinder
     /// <para>
     /// - NOT NULL/DEFAULT 제약 검증<br/>
     /// - Decimal/정수/Enum 범위 사전 검증<br/>
-    /// - 문자열 전처리 및 Size 기반 잘라내기<br/>
+    /// - 문자열 값 보존 및 메타데이터 Size 처리<br/>
     /// - TVP/DataTable/Stream 처리<br/>
     /// - 한글 컨텍스트를 포함한 상세 예외 메시지 제공
     /// </para>
@@ -599,14 +594,7 @@ public static partial class DbBinder
             inferredDbType = SqlDbType.Structured;
             tvpTypeName = explicitTvp.TypeName.FullName;
         }
-        // 3. 문자열 전처리
-        else if (finalValue is string strVal)
-        {
-            ReadOnlySpan<char> processedSpan = StringPreprocessor.Sanitize(strVal);
-            if (processedSpan.Length != strVal.Length)
-                finalValue = processedSpan.ToString();
-        }
-        // 4. SQL Server date/time 스칼라 보정
+        // 3. SQL Server date/time 스칼라 보정
         else if (finalValue is DateOnly dateOnly)
         {
             finalValue = dateOnly.ToDateTime(TimeOnly.MinValue);
@@ -617,20 +605,20 @@ public static partial class DbBinder
             finalValue = timeOnly.ToTimeSpan();
             inferredDbType = SqlDbType.Time;
         }
-        // 5. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
+        // 4. [최적화] TVP 컬렉션 자동 감지 (JSON 직렬화보다 우선!)
         //    List<Dto>를 넘겼을 때 JSON으로 오판하여 AOT 에러가 나는 것을 방지
         else if (IsTvpCollection(finalValue, out object? tvpValue, out tvpTypeName))
         {
             finalValue = tvpValue;
             inferredDbType = SqlDbType.Structured;
         }
-        // 6. JSON 직렬화 (복합 객체이면서 TVP/Stream/바이너리가 아닌 경우)
+        // 5. JSON 직렬화 (복합 객체이면서 TVP/Stream/바이너리가 아닌 경우)
         else if (IsComplexObject(finalValue))
         {
             finalValue = JsonSerializer.Serialize(finalValue);
         }
 
-        // 7. 타입 및 메타데이터 결정
+        // 6. 타입 및 메타데이터 결정
         SqlDbType dbType;
         int size = 0;
         byte precision = 0;

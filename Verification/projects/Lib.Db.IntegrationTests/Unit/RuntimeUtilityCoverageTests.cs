@@ -465,7 +465,7 @@ public sealed class RuntimeUtilityCoverageTests
     }
 
     [Fact]
-    public void StringPreprocessor_ShouldRemoveBracketsTrimWhitespaceAndCutAtNull()
+    public void StringPreprocessor_ShouldRemoveBrackets()
     {
         string unchanged = "dbo.Table";
 
@@ -475,9 +475,6 @@ public sealed class RuntimeUtilityCoverageTests
         StringPreprocessor.RemoveBrackets("[dbo].[Table]").Should().Be("dbo.Table");
         StringPreprocessor.RemoveBrackets("[]").Should().Be("");
 
-        StringPreprocessor.Sanitize((string?)null).ToString().Should().Be("");
-        StringPreprocessor.Sanitize(" \u200B value \0 tail ").ToString().Should().Be("value");
-        StringPreprocessor.Sanitize(" \u200B \u00A0 ").ToString().Should().Be("");
     }
 
     [Fact]
