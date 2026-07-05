@@ -66,6 +66,14 @@ public sealed class SqlDbExecutorSecurityPolicyTests
     [InlineData("master..sp_executesql N'DELETE FROM dbo.Users'")]
     [InlineData("[master].[sys].[sp_executesql] N'DELETE FROM dbo.Users'")]
     [InlineData("; /* audit */ -- separator\r\nsp_executesql N'DELETE FROM dbo.Users'")]
+    [InlineData("dbo.usp_DoWork @Id = @Id")]
+    [InlineData("[dbo].[usp_DoWork] @Id = @Id")]
+    [InlineData("audit: dbo.usp_DoWork @Id = @Id")]
+    [InlineData("; /* audit */ dbo.usp_DoWork @Id = @Id")]
+    [InlineData("usp_DoWork")]
+    [InlineData("[SELECT].[usp_DoWork] @Id = @Id")]
+    [InlineData("[WITH].[usp_DoWork] @Id = @Id")]
+    [InlineData("\"SELECT\".\"usp_DoWork\" @Id = @Id")]
     [InlineData("WITH cte AS (SELECT Id FROM dbo.Users) DELETE FROM cte")]
     [InlineData("SELECT * INTO #Users FROM dbo.Users")]
     [InlineData("DECLARE @sql nvarchar(max) = N'DELETE FROM dbo.Users'; EXEC(@sql)")]
@@ -74,6 +82,9 @@ public sealed class SqlDbExecutorSecurityPolicyTests
     [InlineData("DBCC CHECKDB")]
     [InlineData("USE master")]
     [InlineData("BULK INSERT dbo.Users FROM N'C:\\temp\\users.csv'")]
+    [InlineData("WAITFOR DELAY '00:00:01'")]
+    [InlineData("KILL 57")]
+    [InlineData("SHUTDOWN")]
     public async Task RawSqlPolicy_DenyWriteText_ShouldBlockMutatingText(string sql)
     {
         // Arrange
@@ -103,8 +114,10 @@ public sealed class SqlDbExecutorSecurityPolicyTests
     [Theory]
     [InlineData("SELECT 'DELETE FROM dbo.Users' AS LiteralValue")]
     [InlineData("SELECT 'sp_executesql DELETE' AS LiteralValue")]
+    [InlineData("SELECT 'WAITFOR KILL SHUTDOWN' AS LiteralValue")]
     [InlineData("SELECT [DROP] FROM dbo.AuditLog")]
     [InlineData("SELECT [sp_executesql] FROM dbo.AuditLog")]
+    [InlineData("SELECT [WAITFOR], [KILL], [SHUTDOWN] FROM dbo.AuditLog")]
     [InlineData("SELECT * FROM dbo.IntoTable WHERE Name = @Name")]
     public async Task RawSqlPolicy_DenyWriteText_ShouldAllowReadOnlyTextWithUnsafeWordsInLiteralsOrIdentifiers(string sql)
     {

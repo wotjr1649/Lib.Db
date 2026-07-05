@@ -1024,7 +1024,7 @@ internal sealed partial class SqlDbExecutor(
 
     private static bool ContainsBlockedRawSqlToken(ReadOnlySpan<char> sql)
     {
-        if (IsBlockedBareSpExecuteSqlInvocation(sql))
+        if (IsBlockedBareRawSqlInvocation(sql))
             return true;
 
         ReadOnlySpan<char> span = sql;
@@ -1101,10 +1101,26 @@ internal sealed partial class SqlDbExecutor(
         return false;
     }
 
-    private static bool IsBlockedBareSpExecuteSqlInvocation(ReadOnlySpan<char> sql)
+    private static bool IsBlockedBareRawSqlInvocation(ReadOnlySpan<char> sql)
     {
         Span<Range> parts = stackalloc Range[4];
-        int partCount = ReadLeadingRawSqlMultipartIdentifier(sql, parts, out bool hasOmittedSchema);
+        Span<bool> delimitedParts = stackalloc bool[4];
+        int partCount = ReadLeadingRawSqlMultipartIdentifier(sql, parts, delimitedParts, out bool hasOmittedSchema);
+        if (partCount == 0)
+            return false;
+
+        if (IsBlockedSpExecuteSqlIdentifier(sql, parts, partCount, hasOmittedSchema))
+            return true;
+
+        return delimitedParts[0] || !IsNonExecutableLeadingRawSqlKeyword(sql[parts[0]]);
+    }
+
+    private static bool IsBlockedSpExecuteSqlIdentifier(
+        ReadOnlySpan<char> sql,
+        ReadOnlySpan<Range> parts,
+        int partCount,
+        bool hasOmittedSchema)
+    {
         if (partCount == 1)
             return sql[parts[0]].Equals("sp_executesql", StringComparison.OrdinalIgnoreCase);
 
@@ -1120,17 +1136,37 @@ internal sealed partial class SqlDbExecutor(
                sql[parts[partCount - 1]].Equals("sp_executesql", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsNonExecutableLeadingRawSqlKeyword(ReadOnlySpan<char> token)
+    {
+        return token.Equals("SELECT", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("WITH", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DECLARE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("SET", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("IF", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("BEGIN", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("END", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("ELSE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("WHILE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("RETURN", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("VALUES", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("PRINT", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static int ReadLeadingRawSqlMultipartIdentifier(
         ReadOnlySpan<char> sql,
         Span<Range> parts,
+        Span<bool> delimitedParts,
         out bool hasOmittedSchema)
     {
         int position = SkipRawSqlLeadingLabels(sql);
         int partCount = 0;
         hasOmittedSchema = false;
-        while (partCount < parts.Length && TryReadRawSqlIdentifier(sql, ref position, out Range part))
+        while (partCount < parts.Length && TryReadRawSqlIdentifier(sql, ref position, out Range part, out bool isDelimited))
         {
-            parts[partCount++] = part;
+            parts[partCount] = part;
+            delimitedParts[partCount] = isDelimited;
+            partCount++;
+
             int afterPart = SkipRawSqlTrivia(sql, position);
             if (afterPart >= sql.Length || sql[afterPart] != '.')
                 break;
@@ -1153,7 +1189,7 @@ internal sealed partial class SqlDbExecutor(
         while (position < span.Length)
         {
             int afterLabel = position;
-            if (!TryReadRawSqlIdentifier(span, ref afterLabel, out _))
+            if (!TryReadRawSqlIdentifier(span, ref afterLabel, out _, out _))
                 return position;
 
             afterLabel = SkipRawSqlTrivia(span, afterLabel);
@@ -1223,19 +1259,30 @@ internal sealed partial class SqlDbExecutor(
         return position;
     }
 
-    private static bool TryReadRawSqlIdentifier(ReadOnlySpan<char> span, ref int position, out Range identifier)
+    private static bool TryReadRawSqlIdentifier(
+        ReadOnlySpan<char> span,
+        ref int position,
+        out Range identifier,
+        out bool isDelimited)
     {
         position = SkipRawSqlTrivia(span, position);
         identifier = default;
+        isDelimited = false;
         if (position >= span.Length)
             return false;
 
         char ch = span[position];
         if (ch == '[')
+        {
+            isDelimited = true;
             return TryReadDelimitedRawSqlIdentifier(span, ref position, ']', out identifier);
+        }
 
         if (ch == '"')
+        {
+            isDelimited = true;
             return TryReadDelimitedRawSqlIdentifier(span, ref position, '"', out identifier);
+        }
 
         if (!char.IsLetter(ch) && ch != '_')
             return false;
@@ -1302,7 +1349,10 @@ internal sealed partial class SqlDbExecutor(
             || token.Equals("DBCC", StringComparison.OrdinalIgnoreCase)
             || token.Equals("BULK", StringComparison.OrdinalIgnoreCase)
             || token.Equals("USE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("INTO", StringComparison.OrdinalIgnoreCase);
+            || token.Equals("INTO", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("WAITFOR", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("KILL", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("SHUTDOWN", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int SkipSingleQuotedLiteral(ReadOnlySpan<char> span, int position)
