@@ -289,21 +289,13 @@ public static class LibDbRuntime
 
 #endregion
 
-#region 문자열 전처리기 (Internal)
+#region 문자열 식별자 보조 유틸리티 (Internal)
 
 /// <summary>
-/// SIMD 가속 및 SearchValues를 활용한 초고속 문자열 정리(Sanitize) 유틸리티입니다.
+/// SQL identifier 표시 문자열을 보조 처리하는 유틸리티입니다.
 /// </summary>
 internal static class StringPreprocessor
 {
-    // SearchValues는 .NET 8+에서 CPU 벡터 명령어를 사용하여 
-    // IndexOfAny 등의 검색을 획기적으로 가속화합니다.
-    private static readonly System.Buffers.SearchValues<char> s_whitespace = System.Buffers.SearchValues.Create(
-        "\u0009\u000A\u000B\u000C\u000D\u0020\u0085\u00A0" +
-        "\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A" +
-        "\u2028\u2029\u202F\u205F\u3000\u200B\u2060\u200C\u200D\uFEFF\u00AD\u180E"
-    );
-
     private static readonly System.Buffers.SearchValues<char> s_brackets = System.Buffers.SearchValues.Create("[]");
 
     /// <summary>
@@ -346,48 +338,5 @@ internal static class StringPreprocessor
         });
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ReadOnlySpan<char> Sanitize(string? input)
-        => input is null ? ReadOnlySpan<char>.Empty : Sanitize(input.AsSpan());
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ReadOnlySpan<char> Sanitize(ReadOnlySpan<char> span)
-    {
-        if (span.IsEmpty)
-            return ReadOnlySpan<char>.Empty;
-
-        // 1. 앞뒤 공백 제거
-        span = TrimAllWhitespace(span);
-        if (span.IsEmpty)
-            return ReadOnlySpan<char>.Empty;
-
-        // 2. NULL 문자(\0) 이후 절삭 (C++ 연동 데이터 등에서 발생 가능)
-        int nullIndex = span.IndexOf('\0');
-        if (nullIndex >= 0)
-        {
-            span = span[..nullIndex]; // Range Slicing
-            span = TrimEndAllWhitespace(span);
-        }
-
-        return span;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ReadOnlySpan<char> TrimAllWhitespace(ReadOnlySpan<char> span)
-    {
-        int start = span.IndexOfAnyExcept(s_whitespace);
-        if (start < 0)
-            return ReadOnlySpan<char>.Empty;
-
-        int end = span.LastIndexOfAnyExcept(s_whitespace);
-        return span.Slice(start, end - start + 1);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ReadOnlySpan<char> TrimEndAllWhitespace(ReadOnlySpan<char> span)
-    {
-        int end = span.LastIndexOfAnyExcept(s_whitespace);
-        return end < 0 ? ReadOnlySpan<char>.Empty : span.Slice(0, end + 1);
-    }
 }
 #endregion

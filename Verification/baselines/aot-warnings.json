@@ -6,65 +6,65 @@
       "id": "IL2026",
       "assembly": "Microsoft.Data.SqlClient",
       "owner": "provider",
-      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.1; review again when provider packages change.",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
       "sourcePackage": "Microsoft.Data.SqlClient",
-      "packageVersion": "7.0.1"
+      "packageVersion": "7.0.2"
     },
     {
       "id": "IL2057",
       "assembly": "Microsoft.Data.SqlClient",
       "owner": "provider",
-      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.1; review again when provider packages change.",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
       "sourcePackage": "Microsoft.Data.SqlClient",
-      "packageVersion": "7.0.1"
+      "packageVersion": "7.0.2"
     },
     {
       "id": "IL2072",
       "assembly": "Microsoft.Data.SqlClient",
       "owner": "provider",
-      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.1; review again when provider packages change.",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
       "sourcePackage": "Microsoft.Data.SqlClient",
-      "packageVersion": "7.0.1"
+      "packageVersion": "7.0.2"
     },
     {
       "id": "IL2075",
       "assembly": "Microsoft.Data.SqlClient",
       "owner": "provider",
-      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.1; review again when provider packages change.",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
       "sourcePackage": "Microsoft.Data.SqlClient",
-      "packageVersion": "7.0.1"
+      "packageVersion": "7.0.2"
     },
     {
       "id": "IL2111",
       "assembly": "Microsoft.Data.SqlClient",
       "owner": "provider",
-      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.1; review again when provider packages change.",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
       "sourcePackage": "Microsoft.Data.SqlClient",
-      "packageVersion": "7.0.1"
+      "packageVersion": "7.0.2"
     },
     {
       "id": "IL2113",
       "assembly": "Microsoft.Data.SqlClient",
       "owner": "provider",
-      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.1; review again when provider packages change.",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
       "sourcePackage": "Microsoft.Data.SqlClient",
-      "packageVersion": "7.0.1"
+      "packageVersion": "7.0.2"
     },
     {
       "id": "IL2115",
       "assembly": "Microsoft.Data.SqlClient",
       "owner": "provider",
-      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.1; review again when provider packages change.",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
       "sourcePackage": "Microsoft.Data.SqlClient",
-      "packageVersion": "7.0.1"
+      "packageVersion": "7.0.2"
     },
     {
       "id": "IL3050",
       "assembly": "Microsoft.Data.SqlClient",
       "owner": "provider",
-      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.1; review again when provider packages change.",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
       "sourcePackage": "Microsoft.Data.SqlClient",
-      "packageVersion": "7.0.1"
+      "packageVersion": "7.0.2"
     },
     {
       "id": "IL2026",
@@ -97,6 +97,22 @@
       "rationale": "Observed in fresh local Native AOT publish output from the provider transitive dependency; review again when provider packages change.",
       "sourcePackage": "System.Configuration.ConfigurationManager",
       "packageVersion": "9.0.13"
+    },
+    {
+      "id": "IL2067",
+      "assembly": "Microsoft.Data.SqlClient",
+      "owner": "provider",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
+      "sourcePackage": "Microsoft.Data.SqlClient",
+      "packageVersion": "7.0.2"
+    },
+    {
+      "id": "IL2070",
+      "assembly": "Microsoft.Data.SqlClient",
+      "owner": "provider",
+      "rationale": "Observed in fresh local Native AOT publish output from Microsoft.Data.SqlClient 7.0.2; review again when provider packages change.",
+      "sourcePackage": "Microsoft.Data.SqlClient",
+      "packageVersion": "7.0.2"
     }
   ]
 }

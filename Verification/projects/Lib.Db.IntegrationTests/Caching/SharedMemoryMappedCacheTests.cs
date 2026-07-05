@@ -4,8 +4,10 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Buffers.Binary;
 using System.IO;
 using System.Diagnostics;
+using System.IO.Hashing;
 using System.Text;
 using Lib.Db.Caching;
 using Microsoft.Extensions.Caching.Distributed;
@@ -32,15 +34,25 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
         }
     }
 
-    private SharedMemoryCache CreateCache(string? path = null, bool enableObservability = false)
+    private SharedMemoryCache CreateCache(
+        string? path = null,
+        bool enableObservability = false,
+        string? isolationKey = "TestKey",
+        CacheScope scope = CacheScope.User,
+        long? maxCacheSizeBytes = null,
+        IDistributedCache? fallbackCache = null,
+        bool useFallbackCache = true)
     {
         SharedMemoryCacheOptions options = new()
         {
             BasePath = path ?? _basePath,
-            Scope = CacheScope.User,
-            IsolationKey = "TestKey",
+            Scope = scope,
+            IsolationKey = isolationKey,
+            MaxCacheSizeBytes = maxCacheSizeBytes ?? 1024L * 1024L * 1024L,
             EnableObservability = enableObservability,
-            FallbackCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()))
+            FallbackCache = useFallbackCache
+                ? fallbackCache ?? new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()))
+                : null
         };
         return new SharedMemoryCache(
             Options.Create(options),
@@ -90,7 +102,7 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
 
         cache.Set(key, value, new DistributedCacheEntryOptions());
 
-        string file = Directory.GetFiles(_basePath, "*.cache")[0];
+        string file = Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)[0];
 
         using (FileStream fs = new(file, FileMode.Open, FileAccess.ReadWrite))
         {
@@ -107,8 +119,6 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
     {
         using SharedMemoryCache cache = CreateCache();
 
-        File.WriteAllBytes(Path.Combine(_basePath, "corrupt.cache"), new byte[10]);
-
         string keyExpired = "sm04-expired";
         cache.Set(keyExpired, new byte[1], new DistributedCacheEntryOptions
         {
@@ -118,10 +128,13 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
 
         string keyValid = "sm04-valid";
         cache.Set(keyValid, new byte[1], new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        string activeDirectory = Path.GetDirectoryName(
+            Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)[0])!;
+        File.WriteAllBytes(Path.Combine(activeDirectory, "corrupt.cache"), new byte[10]);
 
         cache.Compact();
 
-        string[] files = Directory.GetFiles(_basePath, "*.cache");
+        string[] files = Directory.GetFiles(activeDirectory, "*.cache");
         Assert.Single(files);
         Assert.NotNull(cache.Get(keyValid));
         Assert.Null(cache.Get(keyExpired));
@@ -198,6 +211,286 @@ public sealed class SharedMemoryMappedCacheTests : IDisposable
         capture.RawKeyTagCount.Should().Be(0);
         if (enabled)
             capture.KeyHashTagCount.Should().Be(expectedActivityCount);
+    }
+
+    [Fact]
+    public void SM08_IsolationKey_ShouldPartitionStorageWithinSameBasePath()
+    {
+        using SharedMemoryCache first = CreateCache(isolationKey: "tenant-a");
+        using SharedMemoryCache second = CreateCache(isolationKey: "tenant-b");
+        string key = "sm08-key";
+        byte[] value = Encoding.UTF8.GetBytes("tenant-a-value");
+
+        first.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        second.Get(key).Should().BeNull();
+    }
+
+    [Fact]
+    public void SM09_Scope_ShouldPartitionStorageWithinSameBasePath()
+    {
+        using SharedMemoryCache userScoped = CreateCache(isolationKey: "tenant-scope", scope: CacheScope.User);
+        using SharedMemoryCache machineScoped = CreateCache(isolationKey: "tenant-scope", scope: CacheScope.Machine);
+        string key = "sm09-scope-key";
+        byte[] value = Encoding.UTF8.GetBytes("user-scope-value");
+
+        userScoped.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        machineScoped.Get(key).Should().BeNull();
+    }
+
+    [Fact]
+    public void SM10_SameIsolationKey_ShouldShareStorageWithinSameBasePath()
+    {
+        using SharedMemoryCache first = CreateCache(isolationKey: "tenant-shared");
+        using SharedMemoryCache second = CreateCache(isolationKey: "tenant-shared");
+        string key = "sm10-key";
+        byte[] value = Encoding.UTF8.GetBytes("shared-value");
+
+        first.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        byte[]? result = second.Get(key);
+        Assert.NotNull(result);
+        Assert.Equal(value, result);
+    }
+
+    [Fact]
+    public void SM11_StoragePath_ShouldUseSafeNamespaceDirectory()
+    {
+        const string isolationKey = "tenant-a-sensitive-marker";
+        using SharedMemoryCache cache = CreateCache(isolationKey: isolationKey);
+
+        cache.Set("sm11-key", [7, 8, 9], new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        string file = Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        string relativePath = Path.GetRelativePath(_basePath, file);
+
+        Path.GetDirectoryName(relativePath).Should().NotBeNullOrWhiteSpace();
+        relativePath.Should().NotContain("tenant-a-sensitive-marker");
+        relativePath.Should().NotContain("sensitive-marker");
+    }
+
+    [Fact]
+    public void SM12_StoragePath_ShouldUseLongIsolationHash()
+    {
+        using SharedMemoryCache cache = CreateCache(isolationKey: "tenant-long-hash-check");
+
+        cache.Set("sm12-key", [1], new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        string file = Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        string directoryName = Path.GetFileName(Path.GetDirectoryName(file))!;
+
+        directoryName.Should().NotBeNullOrWhiteSpace();
+        directoryName!.Split('_').Last().Should().HaveLength(32);
+    }
+
+    [Fact]
+    public void SM13_OversizedEntry_ShouldDropWithoutCreatingSharedOrFallbackEntry()
+    {
+        var fallback = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+        using SharedMemoryCache cache = CreateCache(maxCacheSizeBytes: 1024 * 1024, fallbackCache: fallback);
+        string key = "sm13-oversized";
+        byte[] value = new byte[1024 * 1024];
+
+        cache.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories).Should().BeEmpty();
+        fallback.Get(key).Should().BeNull();
+        cache.Get(key).Should().BeNull();
+    }
+
+    [Fact]
+    public void SM14_ManyEntries_ShouldNotGrowNamespaceBeyondMaxCacheSize()
+    {
+        using SharedMemoryCache cache = CreateCache(
+            maxCacheSizeBytes: 1024 * 1024,
+            useFallbackCache: false);
+        byte[] value = new byte[400 * 1024];
+
+        cache.Set("sm14-a", value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        cache.Set("sm14-b", value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        cache.Set("sm14-c", value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length)
+            .Should()
+            .BeLessThanOrEqualTo(1024 * 1024);
+        cache.Get("sm14-a").Should().NotBeNull();
+        cache.Get("sm14-b").Should().NotBeNull();
+        cache.Get("sm14-c").Should().BeNull();
+    }
+
+    [Fact]
+    public void SM15_AggregateQuotaRejection_ShouldNotBypassToFallback()
+    {
+        var fallback = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+        using SharedMemoryCache cache = CreateCache(maxCacheSizeBytes: 1024 * 1024, fallbackCache: fallback);
+        byte[] value = new byte[400 * 1024];
+
+        cache.Set("sm15-a", value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        cache.Set("sm15-b", value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        cache.Set("sm15-c", value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        fallback.Get("sm15-c").Should().BeNull();
+        cache.Get("sm15-a").Should().NotBeNull();
+        cache.Get("sm15-b").Should().NotBeNull();
+        cache.Get("sm15-c").Should().BeNull();
+        Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length)
+            .Should()
+            .BeLessThanOrEqualTo(1024 * 1024);
+    }
+
+    [Fact]
+    public async Task SM16_ConcurrentMultiKeyWrites_ShouldNotGrowNamespaceBeyondMaxCacheSize()
+    {
+        using SharedMemoryCache cache = CreateCache(
+            maxCacheSizeBytes: 1024 * 1024,
+            useFallbackCache: false);
+        byte[] value = new byte[400 * 1024];
+        CancellationToken token = TestContext.Current.CancellationToken;
+        TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task[] writes = Enumerable.Range(0, 8)
+            .Select(index => Task.Run(async () =>
+            {
+                await start.Task.WaitAsync(token);
+                cache.Set($"sm16-concurrent-{index}", value, new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1)
+                });
+            }, token))
+            .ToArray();
+
+        start.SetResult();
+        await Task.WhenAll(writes);
+
+        Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length)
+            .Should()
+            .BeLessThanOrEqualTo(1024 * 1024);
+    }
+
+    [Fact]
+    public void SM17_QuotaRejectedReplacement_ShouldRemoveExistingSharedEntry()
+    {
+        var fallback = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+        using SharedMemoryCache cache = CreateCache(maxCacheSizeBytes: 1024 * 1024, fallbackCache: fallback);
+        string key = "sm17-replace";
+        byte[] original = Encoding.UTF8.GetBytes("existing-shared-value");
+        byte[] oversized = new byte[1024 * 1024];
+        cache.Set(key, original, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        fallback.Set(key, Encoding.UTF8.GetBytes("stale-fallback-value"), new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1)
+        });
+
+        cache.Set(key, oversized, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        fallback.Get(key).Should().BeNull();
+        cache.Get(key).Should().BeNull();
+        Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void SM18_ExpiredOrCorruptEntries_ShouldBeCompactedBeforeQuotaDrop()
+    {
+        using SharedMemoryCache cache = CreateCache(maxCacheSizeBytes: 1024 * 1024, useFallbackCache: false);
+        cache.Set("sm18-expired", new byte[700 * 1024], new DistributedCacheEntryOptions
+        {
+            AbsoluteExpiration = DateTimeOffset.UtcNow.AddSeconds(-1)
+        });
+        string activeDirectory = Path.GetDirectoryName(
+            Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)[0])!;
+        string corruptFile = Path.Combine(activeDirectory, "quota-corrupt.cache");
+        File.WriteAllBytes(corruptFile, new byte[400 * 1024]);
+
+        cache.Set("sm18-fresh", new byte[700 * 1024], new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        cache.Get("sm18-fresh").Should().NotBeNull();
+        cache.Get("sm18-expired").Should().BeNull();
+        File.Exists(corruptFile).Should().BeFalse();
+        Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length)
+            .Should()
+            .BeLessThanOrEqualTo(1024 * 1024);
+    }
+
+    [Fact]
+    public void SM19_HeaderValidCorruptEntry_ShouldBeCompactedBeforeQuotaDrop()
+    {
+        using SharedMemoryCache cache = CreateCache(maxCacheSizeBytes: 1024 * 1024, useFallbackCache: false);
+        cache.Set("sm19-corrupt", new byte[700 * 1024], new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1)
+        });
+        string corruptFile = Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories).Single();
+        byte[] bytes = File.ReadAllBytes(corruptFile);
+        bytes[^1] ^= 0x01;
+        File.WriteAllBytes(corruptFile, bytes);
+
+        cache.Set("sm19-fresh", new byte[700 * 1024], new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        cache.Get("sm19-fresh").Should().NotBeNull();
+        cache.Get("sm19-corrupt").Should().BeNull();
+        File.Exists(corruptFile).Should().BeFalse();
+        Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length)
+            .Should()
+            .BeLessThanOrEqualTo(1024 * 1024);
+    }
+    [Fact]
+    public void SM20_OversizedEntryWithoutFallback_ShouldDropSafely()
+    {
+        using SharedMemoryCache cache = CreateCache(
+            maxCacheSizeBytes: 1024 * 1024,
+            useFallbackCache: false);
+        string key = "sm20-drop";
+        byte[] value = new byte[1024 * 1024];
+
+        cache.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        Directory.GetFiles(_basePath, "*.cache", SearchOption.AllDirectories).Should().BeEmpty();
+        cache.Get(key).Should().BeNull();
+    }
+
+    [Fact]
+    public void SM21_LegacyFlatCacheFile_ShouldBeTreatedAsMiss()
+    {
+        string key = "sm21-legacy-flat";
+        WriteLegacyFlatCacheFile(_basePath, key, [0x42, 0x24]);
+        using SharedMemoryCache cache = CreateCache(isolationKey: "tenant-new-storage");
+
+        cache.Get(key).Should().BeNull();
+    }
+
+    private static void WriteLegacyFlatCacheFile(string basePath, string key, byte[] value)
+    {
+        Directory.CreateDirectory(basePath);
+        string filePath = Path.Combine(basePath, GetLegacyFileName(key));
+        Span<byte> header = stackalloc byte[32];
+        BinaryPrimitives.WriteUInt32LittleEndian(header[0..4], 0x4244424C);
+        BinaryPrimitives.WriteUInt16LittleEndian(header[4..6], 1);
+        header[6] = 1;
+        BinaryPrimitives.WriteInt64LittleEndian(header[8..16], DateTime.UtcNow.AddMinutes(5).Ticks);
+        BinaryPrimitives.WriteInt64LittleEndian(header[16..24], value.LongLength);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[24..28], Crc32.HashToUInt32(value));
+        BinaryPrimitives.WriteUInt32LittleEndian(header[28..32], Crc32.HashToUInt32(Encoding.UTF8.GetBytes(key)));
+
+        using FileStream stream = new(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        stream.Write(header);
+        stream.Write(value);
+    }
+
+    private static string GetLegacyFileName(string key)
+    {
+        byte[] hashBytes = XxHash128.Hash(Encoding.UTF8.GetBytes(key));
+        return Convert.ToHexString(hashBytes).ToLowerInvariant() + ".cache";
     }
 
     private sealed class ActivityCapture : IDisposable

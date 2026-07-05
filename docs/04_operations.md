@@ -183,7 +183,7 @@ Lib.Db는 options validation 단계에서 연결 문자열 이름, 키 매핑, �
 ## 5. Security Notes
 
 - 검증 DB에서는 DDL 배포를 허용하지만, 프로덕션 DB에서 테스트 초기화 코드를 실행하지 마세요.
-- `RawSqlPolicy.DenyWriteText`는 SQL 파서가 아니라 guardrail입니다. 운영 보안 경계는 최소 권한 DB 계정, `DenyAllText`, SP 권한 분리로 구성하세요.
+- `RawSqlPolicy.DenyWriteText`는 SQL 파서가 아니라 guardrail입니다. Mutating raw SQL과 mutating `sp_executesql` wrapper를 차단하지만, 운영 보안 경계는 최소 권한 DB 계정, `DenyAllText`, SP 권한 분리로 구성하세요.
 - `SET QUOTED_IDENTIFIER ON`은 computed column index, indexed view, filtered index 등 SQL Server 기능에서 요구될 수 있으므로 DDL 스크립트에 명시하세요.
 
 ---
@@ -201,7 +201,7 @@ Lib.Db는 options validation 단계에서 연결 문자열 이름, 키 매핑, �
 ### 6-2. SharedMemoryCache opt-in 스트라이프
 
 `AddLibDbSharedMemoryCache()`로 명시 등록한 경우 128개 Mutex 스트라이프가 기본이며, 대부분의 동일 호스트 IPC 워크로드에 적합합니다.
-동시 프로세스 수가 매우 많은 경우 `BasePath` 격리를 확인하세요.
+동시 프로세스 수가 매우 많은 경우 `BasePath` 격리를 확인하세요. SharedMemoryCache 쓰기는 keyed integrity metadata와 quota check로 보호되며, quota 거부나 quota 확인 불가 상태는 fallback data 쓰기 허용이 아니라 cache write miss로 취급해야 합니다.
 
 ### 6-3. Polly 재시도 설정
 

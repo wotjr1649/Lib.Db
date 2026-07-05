@@ -13,8 +13,11 @@ This is an internal maintainer policy, not consumer API documentation. Consumer 
 - Server-level chaos validation is excluded from the default release gate and requires explicit opt-in, separate setup, separate harness execution, and mandatory teardown.
 - Verification scripts disable shared Roslyn compilation and restore process environment variables after execution to reduce lingering compiler-server/process lifetime risk on local Windows runs.
 
-## Verification Areas
+## Verification Manifest Version
 
+`manifest.json` uses `"version": "v2.6.0"` as a workflow manifest marker for the verification database/script matrix. It is not the NuGet package version. Release package metadata is sourced from `Lib.Db.csproj`, and release package guards compare that project version against explicit tag/package overrides.
+
+## Verification Areas
 Release-grade maintainer validation covers:
 
 1. Build and packaging readiness.

@@ -130,6 +130,48 @@ public sealed class DbSessionSecurityTests
             .WithMessage("*연결 문자열*");
     }
 
+    [Theory]
+    [InlineData("dbo.Target;DROP TABLE dbo.Target")]
+    [InlineData("dbo.Target -- comment")]
+    [InlineData("server.database.schema.Target")]
+    [InlineData("[dbo].Target")]
+    [InlineData("dbo.[Target]")]
+    public async Task BulkInsertAsync_ShouldRejectUnsafeDestinationTableBeforeOpeningConnection(string destinationTable)
+    {
+        Mock<IDbConnectionFactory> connectionFactory = new(MockBehavior.Strict);
+        await using DbSession session = new(
+            Mock.Of<IDbExecutorFactory>(),
+            connectionFactory.Object,
+            TestOptionsFactory.CreateValidOptions());
+
+        var result = await session.BulkInsertAsync(
+            "Default",
+            destinationTable,
+            new[] { new RawBlockRow(1) },
+            options: null,
+            ct: TestContext.Current.CancellationToken);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().NotBeNull();
+        result.Error!.Value.Message.Should().NotContain("DROP");
+        connectionFactory.Verify(x => x.CreateConnectionAsync(
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("Target", "Target")]
+    [InlineData("#TempTarget", "#TempTarget")]
+    [InlineData("dbo.Target", "[dbo].[Target]")]
+    [InlineData("[dbo].[Target]", "[dbo].[Target]")]
+    public void BuildLegacyBulkDestinationTableName_ShouldValidateWithoutForcingDefaultSchema(
+        string destinationTable,
+        string expected)
+    {
+        DbSession.BuildLegacyBulkDestinationTableName(destinationTable)
+            .Should().Be(expected);
+    }
+
     [Fact]
     public async Task UseConnectionString_ProductionProfile_ShouldApplySecurityValidation()
     {

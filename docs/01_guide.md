@@ -16,6 +16,8 @@ IDbSession
   ├─ .Default          → IProcedureStage (기본 DB)
   ├─ .Use("DB1")       → IProcedureStage (명명된 DB)
   ├─ .UseConnectionString("...") → IProcedureStage (Ad-hoc)
+  ├─ .Schema           → ISchemaMaintenanceStage (기본 DB 스키마 관리)
+  ├─ .UseSchema("DB1") → ISchemaMaintenanceStage (명명된 DB 스키마 관리)
   └─ .BeginTransactionAsync("DB1") → IDbTransactionScope
 ```
 
@@ -144,7 +146,7 @@ DbResult<User?> result = await session.Default
 ```
 
 보간된 값 인수는 파라미터로 바인딩되어 값 기반 SQL injection 위험을 줄입니다.
-테이블명, 컬럼명, 정렬 방향 같은 SQL 구조는 파라미터화되지 않으므로 사용자 입력을 직접 조립하지 말고 allow-list로 선택하세요.
+테이블명, 컬럼명, 정렬 방향 같은 SQL 구조는 파라미터화되지 않으므로 사용자 입력을 직접 조립하지 말고 allow-list로 선택하세요. `RawSqlPolicy.DenyWriteText`는 mutating raw SQL과 bare and qualified `sp_executesql` mutating wrappers를 차단하는 guardrail이지만, 운영 보안 경계는 `DenyAllText`, 저장 프로시저 권한, 최소 권한 DB 계정으로 구성하세요.
 
 ### 3-4. 타임아웃 설정
 

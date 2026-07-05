@@ -311,7 +311,7 @@ builder.Services.AddLibDb(options =>
 builder.Services.AddLibDbSharedMemoryCache();
 ```
 
-`AddLibDbSharedMemoryCache()`는 `EnableSharedMemoryCache = true`를 최종 옵션에 반영합니다. Redis/SQL/Postgres/NCache 같은 외부 `IDistributedCache` provider와 함께 등록하면 Lib.Db가 fail-fast합니다.
+`AddLibDbSharedMemoryCache()`는 `EnableSharedMemoryCache = true`를 최종 옵션에 반영합니다. Redis/SQL/Postgres/NCache 같은 외부 `IDistributedCache` provider와 함께 등록하면 Lib.Db가 fail-fast합니다. SharedMemoryCache는 keyed integrity metadata와 quota enforcement를 사용하며, quota 확인이 불가능하거나 초과된 쓰기는 약한 fallback write로 대체하지 않습니다.
 
 `Microsoft.Extensions.DependencyInjection`은 같은 service type이 여러 번 등록되면 단일 `IDistributedCache` 해석에서 마지막 등록을 사용합니다. 그래서 `AddLibDbSharedMemoryCache()` 호출 뒤에 다른 provider가 추가되는 잘못된 구성은 등록 시점이 아니라 Generic Host 시작 시 `LibDbSharedMemoryCacheStartupValidator`가 전체 `IDistributedCache` 등록을 검사해 실패시킵니다. Generic Host를 시작하지 않는 비호스팅 테스트/도구에서는 이 hosted validator가 자동 실행되지 않으므로, shared-memory opt-in과 외부 provider를 섞지 않는 구성을 별도로 검증해야 합니다.
 

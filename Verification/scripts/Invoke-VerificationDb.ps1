@@ -143,23 +143,44 @@ function Assert-SqlcmdIncludesAllowed {
 
     $baseDirectory = Split-Path -Parent $SqlFile
     foreach ($line in [System.IO.File]::ReadLines($SqlFile)) {
-        if ($line -notmatch '^\s*:r\s+(.+?)\s*$') {
+        if ($line -match '^\s*!!') {
+            throw "SQLCMD shell escape is not allowed in $SqlFile."
+        }
+
+        if ($line -notmatch '^\s*:(\S+)(?:\s+(.*?))?\s*$') {
             continue
         }
 
-        $include = $Matches[1].Trim().Trim('"')
-        if ([System.IO.Path]::IsPathRooted($include)) {
-            throw "Absolute SQLCMD include is not allowed in $SqlFile."
+        $command = $Matches[1]
+        $argument = if ($Matches.Count -gt 2) { $Matches[2] } else { $null }
+
+        if ([string]::Equals($command, 'r', [StringComparison]::OrdinalIgnoreCase)) {
+            if ([string]::IsNullOrWhiteSpace($argument)) {
+                throw "SQLCMD include path is required in ${SqlFile}."
+            }
+
+            $include = $argument.Trim().Trim('"')
+            if ([System.IO.Path]::IsPathRooted($include)) {
+                throw "Absolute SQLCMD include is not allowed in $SqlFile."
+            }
+
+            if ($include -split '[\\/]' | Where-Object { $_ -eq '..' }) {
+                throw "Path traversal is not allowed in SQLCMD includes in $SqlFile."
+            }
+
+            $includePath = (Resolve-Path -LiteralPath (Join-Path $baseDirectory $include) -ErrorAction Stop).Path
+            if (-not $allowed.Contains($includePath)) {
+                throw "SQLCMD include is not allowlisted: $include"
+            }
+
+            continue
         }
 
-        if ($include -split '[\\/]' | Where-Object { $_ -eq '..' }) {
-            throw "Path traversal is not allowed in SQLCMD includes in $SqlFile."
+        if ($command -in @('ON', 'setvar')) {
+            continue
         }
 
-        $includePath = (Resolve-Path -LiteralPath (Join-Path $baseDirectory $include) -ErrorAction Stop).Path
-        if (-not $allowed.Contains($includePath)) {
-            throw "SQLCMD include is not allowlisted: $include"
-        }
+        throw "Unsupported SQLCMD command is not allowed in ${SqlFile}: $command"
     }
 }
 
@@ -219,7 +240,7 @@ function Invoke-AllowlistedSqlFile {
             [Environment]::SetEnvironmentVariable('SQLCMDINI', $null, 'Process')
         }
 
-        $args = @('-X', '-S', $Server, '-U', $User, '-N', $encryptValue, '-i', $SqlFile, '-f', '65001', '-b')
+        $args = @('-S', $Server, '-U', $User, '-N', $encryptValue, '-i', $SqlFile, '-f', '65001', '-b')
         if ($TrustServerCertificate) {
             $args += '-C'
         }

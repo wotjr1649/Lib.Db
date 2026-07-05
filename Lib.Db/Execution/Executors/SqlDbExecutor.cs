@@ -1024,6 +1024,9 @@ internal sealed partial class SqlDbExecutor(
 
     private static bool ContainsBlockedRawSqlToken(ReadOnlySpan<char> sql)
     {
+        if (IsBlockedBareRawSqlInvocation(sql))
+            return true;
+
         ReadOnlySpan<char> span = sql;
         int position = 0;
 
@@ -1098,6 +1101,234 @@ internal sealed partial class SqlDbExecutor(
         return false;
     }
 
+    private static bool IsBlockedBareRawSqlInvocation(ReadOnlySpan<char> sql)
+    {
+        Span<Range> parts = stackalloc Range[4];
+        Span<bool> delimitedParts = stackalloc bool[4];
+        int partCount = ReadLeadingRawSqlMultipartIdentifier(sql, parts, delimitedParts, out bool hasOmittedSchema);
+        if (partCount == 0)
+            return false;
+
+        if (IsBlockedSpExecuteSqlIdentifier(sql, parts, partCount, hasOmittedSchema))
+            return true;
+
+        return delimitedParts[0] || !IsNonExecutableLeadingRawSqlKeyword(sql[parts[0]]);
+    }
+
+    private static bool IsBlockedSpExecuteSqlIdentifier(
+        ReadOnlySpan<char> sql,
+        ReadOnlySpan<Range> parts,
+        int partCount,
+        bool hasOmittedSchema)
+    {
+        if (partCount == 1)
+            return sql[parts[0]].Equals("sp_executesql", StringComparison.OrdinalIgnoreCase);
+
+        if (partCount >= 2 &&
+            sql[parts[partCount - 2]].Equals("sys", StringComparison.OrdinalIgnoreCase) &&
+            sql[parts[partCount - 1]].Equals("sp_executesql", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return hasOmittedSchema &&
+               partCount >= 2 &&
+               sql[parts[partCount - 1]].Equals("sp_executesql", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsNonExecutableLeadingRawSqlKeyword(ReadOnlySpan<char> token)
+    {
+        return token.Equals("SELECT", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("WITH", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("DECLARE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("SET", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("IF", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("BEGIN", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("END", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("ELSE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("WHILE", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("RETURN", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("VALUES", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("PRINT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ReadLeadingRawSqlMultipartIdentifier(
+        ReadOnlySpan<char> sql,
+        Span<Range> parts,
+        Span<bool> delimitedParts,
+        out bool hasOmittedSchema)
+    {
+        int position = SkipRawSqlLeadingLabels(sql);
+        int partCount = 0;
+        hasOmittedSchema = false;
+        while (partCount < parts.Length && TryReadRawSqlIdentifier(sql, ref position, out Range part, out bool isDelimited))
+        {
+            parts[partCount] = part;
+            delimitedParts[partCount] = isDelimited;
+            partCount++;
+
+            int afterPart = SkipRawSqlTrivia(sql, position);
+            if (afterPart >= sql.Length || sql[afterPart] != '.')
+                break;
+
+            position = afterPart + 1;
+            int afterDot = SkipRawSqlTrivia(sql, position);
+            if (afterDot < sql.Length && sql[afterDot] == '.')
+            {
+                hasOmittedSchema = true;
+                position = afterDot + 1;
+            }
+        }
+
+        return partCount;
+    }
+
+    private static int SkipRawSqlLeadingLabels(ReadOnlySpan<char> span)
+    {
+        int position = SkipRawSqlLeadingTrivia(span);
+        while (position < span.Length)
+        {
+            int afterLabel = position;
+            if (!TryReadRawSqlIdentifier(span, ref afterLabel, out _, out _))
+                return position;
+
+            afterLabel = SkipRawSqlTrivia(span, afterLabel);
+            if (afterLabel >= span.Length || span[afterLabel] != ':')
+                return position;
+
+            position = SkipRawSqlLeadingTrivia(span, afterLabel + 1);
+        }
+
+        return position;
+    }
+
+    private static int SkipRawSqlLeadingTrivia(ReadOnlySpan<char> span, int position = 0)
+    {
+        while (position < span.Length)
+        {
+            position = SkipRawSqlTrivia(span, position);
+            if (position < span.Length && span[position] == ';')
+            {
+                position++;
+                continue;
+            }
+
+            return position;
+        }
+
+        return position;
+    }
+
+    private static int SkipRawSqlWhitespace(ReadOnlySpan<char> span, int position)
+    {
+        while (position < span.Length && char.IsWhiteSpace(span[position]))
+            position++;
+
+        return position;
+    }
+
+    private static int SkipRawSqlTrivia(ReadOnlySpan<char> span, int position)
+    {
+        while (position < span.Length)
+        {
+            position = SkipRawSqlWhitespace(span, position);
+            ReadOnlySpan<char> remaining = span[position..];
+            if (remaining.StartsWith("--", StringComparison.Ordinal))
+            {
+                int lineBreak = remaining.IndexOfAny('\r', '\n');
+                if (lineBreak < 0)
+                    return span.Length;
+
+                position += lineBreak + 1;
+                continue;
+            }
+
+            if (remaining.StartsWith("/*", StringComparison.Ordinal))
+            {
+                int commentLength = GetBlockCommentLength(remaining);
+                if (commentLength < 0)
+                    return position;
+
+                position += commentLength;
+                continue;
+            }
+
+            return position;
+        }
+
+        return position;
+    }
+
+    private static bool TryReadRawSqlIdentifier(
+        ReadOnlySpan<char> span,
+        ref int position,
+        out Range identifier,
+        out bool isDelimited)
+    {
+        position = SkipRawSqlTrivia(span, position);
+        identifier = default;
+        isDelimited = false;
+        if (position >= span.Length)
+            return false;
+
+        char ch = span[position];
+        if (ch == '[')
+        {
+            isDelimited = true;
+            return TryReadDelimitedRawSqlIdentifier(span, ref position, ']', out identifier);
+        }
+
+        if (ch == '"')
+        {
+            isDelimited = true;
+            return TryReadDelimitedRawSqlIdentifier(span, ref position, '"', out identifier);
+        }
+
+        if (!char.IsLetter(ch) && ch != '_')
+            return false;
+
+        int start = position;
+        position++;
+        while (position < span.Length &&
+               (char.IsLetterOrDigit(span[position]) || span[position] == '_'))
+        {
+            position++;
+        }
+
+        identifier = start..position;
+        return true;
+    }
+
+    private static bool TryReadDelimitedRawSqlIdentifier(
+        ReadOnlySpan<char> span,
+        ref int position,
+        char closeDelimiter,
+        out Range identifier)
+    {
+        identifier = default;
+        int contentStart = position + 1;
+        int contentEnd = contentStart;
+        while (contentEnd < span.Length)
+        {
+            if (span[contentEnd] == closeDelimiter)
+            {
+                if (contentEnd + 1 < span.Length && span[contentEnd + 1] == closeDelimiter)
+                {
+                    contentEnd += 2;
+                    continue;
+                }
+
+                identifier = contentStart..contentEnd;
+                position = contentEnd + 1;
+                return true;
+            }
+
+            contentEnd++;
+        }
+
+        return false;
+    }
+
     private static bool IsBlockedRawSqlToken(ReadOnlySpan<char> token)
     {
         return token.Equals("INSERT", StringComparison.OrdinalIgnoreCase)
@@ -1118,7 +1349,10 @@ internal sealed partial class SqlDbExecutor(
             || token.Equals("DBCC", StringComparison.OrdinalIgnoreCase)
             || token.Equals("BULK", StringComparison.OrdinalIgnoreCase)
             || token.Equals("USE", StringComparison.OrdinalIgnoreCase)
-            || token.Equals("INTO", StringComparison.OrdinalIgnoreCase);
+            || token.Equals("INTO", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("WAITFOR", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("KILL", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("SHUTDOWN", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int SkipSingleQuotedLiteral(ReadOnlySpan<char> span, int position)

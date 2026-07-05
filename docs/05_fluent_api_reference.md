@@ -154,7 +154,7 @@ public interface IProcedureStage
 `Sql(string)`은 Raw SQL 텍스트를 그대로 전달합니다. 사용자 입력 값은 문자열 결합하지 말고 `SqlInterpolated(FormattableString)`, `Sql(FormattableString)` 또는 `.With(...)` 파라미터로 전달하세요.
 `SqlInterpolated(FormattableString)`는 외부 구현체 호환성을 위해 default interface method로 제공되며, 기본 동작은 `Sql(FormattableString)` 위임입니다.
 
-`Use(string)`과 `UseSchema(string)`에는 등록된 인스턴스 이름만 전달하세요. 전체 연결 문자열이 필요한 일회성 경로는 `UseConnectionString(string)`을 사용하며, 운영 보안 프로필에서는 구성 연결 문자열과 동일한 검증을 받습니다.
+`IDbSession.Schema`는 기본 인스턴스 스키마 관리 stage이고, `UseSchema(string)`은 등록된 명명 인스턴스 스키마 관리 stage입니다. `Use(string)`과 `UseSchema(string)`에는 등록된 인스턴스 이름만 전달하세요. 전체 연결 문자열이 필요한 일회성 경로는 `UseConnectionString(string)`을 사용하며, 운영 보안 프로필에서는 구성 연결 문자열과 동일한 검증을 받습니다.
 
 ### 2-4. IParameterStage (2단계)
 

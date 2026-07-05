@@ -7,6 +7,7 @@
 using System.Collections;
 using System.Reflection;
 using System.Text.Json;
+using Lib.Db.Caching;
 using Lib.Db.Contracts.Core;
 using Lib.Db.Contracts.Entry;
 using Lib.Db.Contracts.Execution;
@@ -246,6 +247,7 @@ public sealed class RuntimeUtilityCoverageTests
         direct.RawSqlPolicy.Should().Be(RawSqlPolicy.DenyWriteText);
         direct.IncludeParametersInTrace.Should().BeFalse();
 
+        string sharedMemoryBasePath = Path.Combine(Path.GetTempPath(), "LibDbBinderParity");
         ServiceCollection services = new();
         IConfiguration configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -257,16 +259,55 @@ public sealed class RuntimeUtilityCoverageTests
                 ["LibDb:ConnectionSecurityProfile"] = "Production",
                 ["LibDb:AllowProductionTrustServerCertificateWaiver"] = "true",
                 ["LibDb:AllowProductionSaLoginWaiver"] = "true",
-                ["LibDb:ConnectionStrings:Primary"] = "Server=localhost;Database=PrimaryDb;Integrated Security=True;Encrypt=True;TrustServerCertificate=True",
-                ["LibDb:ConnectionStrings:Reporting"] = "Server=localhost;Database=ReportingDb;Integrated Security=True;Encrypt=True;TrustServerCertificate=True",
+                ["LibDb:Mars"] = "ForceEnable",
                 ["LibDb:ConnectionStringNames:0"] = "Primary",
                 ["LibDb:ConnectionStringNames:1"] = "Reporting",
+                ["LibDb:WatchedInstances:0"] = "Primary",
                 ["LibDb:PrewarmSchemas:0"] = "dbo",
                 ["LibDb:PrewarmSchemas:1"] = "audit",
+                ["LibDb:PrewarmIncludePatterns:0"] = "usp_*",
+                ["LibDb:PrewarmExcludePatterns:0"] = "usp_Archive*",
+                ["LibDb:StrictRequiredParameterCheck"] = "false",
+                ["LibDb:TvpValidationMode"] = "LogOnly",
+                ["LibDb:EnableGeneratedTvpBinder"] = "false",
+                ["LibDb:DefaultCommandTimeoutSeconds"] = "45",
+                ["LibDb:BulkCommandTimeoutSeconds"] = "700",
+                ["LibDb:BulkBatchSize"] = "6000",
+                ["LibDb:TvpMemoryWarningThresholdBytes"] = "20971520",
+                ["LibDb:ResumableQueryMaxRetries"] = "6",
+                ["LibDb:ResumableQueryBaseDelayMs"] = "150",
+                ["LibDb:ResumableQueryMaxDelayMs"] = "6000",
                 ["LibDb:Resilience:MaxRetryCount"] = "5",
                 ["LibDb:Resilience:BaseRetryDelayMs"] = "25",
+                ["LibDb:Resilience:MaxRetryDelayMs"] = "2500",
+                ["LibDb:Resilience:UseRetryJitter"] = "false",
+                ["LibDb:Resilience:RetryBackoffType"] = "Linear",
+                ["LibDb:Resilience:CircuitBreakerThreshold"] = "7",
+                ["LibDb:Resilience:CircuitBreakerSamplingDurationMs"] = "1000",
+                ["LibDb:Resilience:CircuitBreakerBreakDurationMs"] = "2000",
+                ["LibDb:Resilience:CircuitBreakerFailureRatio"] = "0.25",
                 ["LibDb:EnableResilience"] = "true",
-                ["LibDb:SharedMemoryCache:BasePath"] = "ignored"
+                ["LibDb:MaxCacheSize"] = "2000",
+                ["LibDb:SchemaSnapshotWarningThreshold"] = "3000",
+                ["LibDb:SharedMemoryCache:BasePath"] = sharedMemoryBasePath,
+                ["LibDb:SharedMemoryCache:Scope"] = "Machine",
+                ["LibDb:SharedMemoryCache:MaxCacheSizeBytes"] = "2097152",
+                ["LibDb:SharedMemoryCache:IsolationKey"] = "binder-tenant",
+                ["LibDb:EnableSharedMemoryCache"] = "true",
+                ["LibDb:EnableEpochCoordination"] = "true",
+                ["LibDb:EpochCheckIntervalSeconds"] = "9",
+                ["LibDb:Chaos:Enabled"] = "true",
+                ["LibDb:Chaos:ExceptionRate"] = "0.2",
+                ["LibDb:Chaos:LatencyRate"] = "0.3",
+                ["LibDb:Chaos:MinLatencyMs"] = "10",
+                ["LibDb:Chaos:MaxLatencyMs"] = "20",
+                ["LibDb:HealthCheckThrottleSeconds"] = "4",
+                ["LibDb:HealthCheckTimeoutSeconds"] = "5",
+                ["LibDb:EnableObservability"] = "true",
+                ["LibDb:IncludeParametersInTrace"] = "true",
+                ["LibDb:SchemaLockCleanupThreshold"] = "1100",
+                ["LibDb:SchemaLockCleanupIntervalMs"] = "61000",
+                ["LibDb:PrewarmMaxConcurrency"] = "2"
             })
             .Build();
 
@@ -287,9 +328,115 @@ public sealed class RuntimeUtilityCoverageTests
         options.Value.HealthCheckTimeoutSeconds.Should().Be(3);
         options.Value.EnableSchemaCaching.Should().BeFalse();
         options.Value.SchemaRefreshIntervalSeconds.Should().Be(12);
+        options.Value.EnableDryRun.Should().BeTrue();
+        options.Value.RawSqlPolicy.Should().Be(RawSqlPolicy.DenyAllText);
+        options.Value.ConnectionSecurityProfile.Should().Be(ConnectionSecurityProfile.Production);
+        options.Value.AllowProductionTrustServerCertificateWaiver.Should().BeTrue();
+        options.Value.AllowProductionSaLoginWaiver.Should().BeTrue();
+        options.Value.StrictRequiredParameterCheck.Should().BeFalse();
+        options.Value.TvpValidationMode.Should().Be(TvpValidationMode.LogOnly);
+        options.Value.EnableGeneratedTvpBinder.Should().BeFalse();
+        options.Value.Mars.Should().Be(MarsPolicy.ForceEnable);
         options.Value.ConnectionStringNames.Should().Equal("Primary", "Reporting");
+        options.Value.WatchedInstances.Should().Equal("Primary");
         options.Value.PrewarmSchemas.Should().Equal("dbo", "audit");
+        options.Value.PrewarmIncludePatterns.Should().Equal("usp_*");
+        options.Value.PrewarmExcludePatterns.Should().Equal("usp_Archive*");
+        options.Value.DefaultCommandTimeoutSeconds.Should().Be(45);
+        options.Value.BulkCommandTimeoutSeconds.Should().Be(700);
+        options.Value.BulkBatchSize.Should().Be(6000);
+        options.Value.TvpMemoryWarningThresholdBytes.Should().Be(20L * 1024L * 1024L);
+        options.Value.ResumableQueryMaxRetries.Should().Be(6);
+        options.Value.ResumableQueryBaseDelayMs.Should().Be(150);
+        options.Value.ResumableQueryMaxDelayMs.Should().Be(6000);
+        options.Value.EnableResilience.Should().BeTrue();
         options.Value.Resilience.MaxRetryCount.Should().Be(5);
+        options.Value.Resilience.BaseRetryDelayMs.Should().Be(25);
+        options.Value.Resilience.MaxRetryDelayMs.Should().Be(2500);
+        options.Value.Resilience.UseRetryJitter.Should().BeFalse();
+        options.Value.Resilience.RetryBackoffType.Should().Be(LibDbOptions.RetryBackoffType.Linear);
+        options.Value.Resilience.CircuitBreakerThreshold.Should().Be(7);
+        options.Value.Resilience.CircuitBreakerSamplingDurationMs.Should().Be(1000);
+        options.Value.Resilience.CircuitBreakerBreakDurationMs.Should().Be(2000);
+        options.Value.Resilience.CircuitBreakerFailureRatio.Should().Be(0.25);
+        options.Value.MaxCacheSize.Should().Be(2000);
+        options.Value.SchemaSnapshotWarningThreshold.Should().Be(3000);
+        options.Value.SharedMemoryCache.BasePath.Should().Be(sharedMemoryBasePath);
+        options.Value.SharedMemoryCache.Scope.Should().Be(CacheScope.Machine);
+        options.Value.SharedMemoryCache.MaxCacheSizeBytes.Should().Be(2L * 1024L * 1024L);
+        options.Value.SharedMemoryCache.IsolationKey.Should().Be("binder-tenant");
+        options.Value.EnableSharedMemoryCache.Should().BeTrue();
+        options.Value.EnableEpochCoordination.Should().BeTrue();
+        options.Value.EpochCheckIntervalSeconds.Should().Be(9);
+        options.Value.Chaos.Enabled.Should().BeTrue();
+        options.Value.Chaos.ExceptionRate.Should().Be(0.2);
+        options.Value.Chaos.LatencyRate.Should().Be(0.3);
+        options.Value.Chaos.MinLatencyMs.Should().Be(10);
+        options.Value.Chaos.MaxLatencyMs.Should().Be(20);
+        options.Value.HealthCheckThrottleSeconds.Should().Be(4);
+        options.Value.EnableObservability.Should().BeTrue();
+        options.Value.IncludeParametersInTrace.Should().BeTrue();
+        options.Value.SchemaLockCleanupThreshold.Should().Be(1100);
+        options.Value.SchemaLockCleanupIntervalMs.Should().Be(61000);
+        options.Value.PrewarmMaxConcurrency.Should().Be(2);
+    }
+
+    [Fact]
+    public void LibDbOptionsExtensions_ShouldClearExplicitlyEmptyListSections()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["LibDb:WatchedInstances"] = string.Empty,
+                ["LibDb:PrewarmIncludePatterns"] = string.Empty,
+                ["LibDb:PrewarmExcludePatterns"] = string.Empty
+            })
+            .Build();
+
+        ServiceCollection services = new();
+        services.AddLibDbOptions(options =>
+        {
+            LibDbOptions valid = TestOptionsFactory.CreateValidOptions();
+            options.ConnectionStringNames = valid.ConnectionStringNames;
+            options.ConnectionStrings = valid.ConnectionStrings;
+            options.WatchedInstances = ["legacy"];
+            options.PrewarmIncludePatterns = ["legacy-include"];
+            options.PrewarmExcludePatterns = ["legacy-exclude"];
+        });
+        services.AddLibDbOptionsFromConfiguration(configuration);
+
+        using ServiceProvider provider = services.BuildServiceProvider();
+        LibDbOptions options = provider.GetRequiredService<IOptions<LibDbOptions>>().Value;
+
+        options.WatchedInstances.Should().BeEmpty();
+        options.PrewarmIncludePatterns.Should().BeEmpty();
+        options.PrewarmExcludePatterns.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void LibDbOptionsExtensions_ShouldRejectBlankSharedMemoryCacheBasePath()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["LibDb:SharedMemoryCache:BasePath"] = "   "
+            })
+            .Build();
+
+        ServiceCollection services = new();
+        services.AddLibDbOptions(options =>
+        {
+            LibDbOptions valid = TestOptionsFactory.CreateValidOptions();
+            options.ConnectionStringNames = valid.ConnectionStringNames;
+            options.ConnectionStrings = valid.ConnectionStrings;
+        });
+        services.AddLibDbOptionsFromConfiguration(configuration);
+
+        using ServiceProvider provider = services.BuildServiceProvider();
+        Action act = () => _ = provider.GetRequiredService<IOptions<LibDbOptions>>().Value;
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*BasePath*");
     }
 
     [Fact]
@@ -318,7 +465,7 @@ public sealed class RuntimeUtilityCoverageTests
     }
 
     [Fact]
-    public void StringPreprocessor_ShouldRemoveBracketsTrimWhitespaceAndCutAtNull()
+    public void StringPreprocessor_ShouldRemoveBrackets()
     {
         string unchanged = "dbo.Table";
 
@@ -328,9 +475,6 @@ public sealed class RuntimeUtilityCoverageTests
         StringPreprocessor.RemoveBrackets("[dbo].[Table]").Should().Be("dbo.Table");
         StringPreprocessor.RemoveBrackets("[]").Should().Be("");
 
-        StringPreprocessor.Sanitize((string?)null).ToString().Should().Be("");
-        StringPreprocessor.Sanitize(" \u200B value \0 tail ").ToString().Should().Be("value");
-        StringPreprocessor.Sanitize(" \u200B \u00A0 ").ToString().Should().Be("");
     }
 
     [Fact]

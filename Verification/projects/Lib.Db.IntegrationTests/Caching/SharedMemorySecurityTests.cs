@@ -4,17 +4,24 @@
 // 대상: .NET 10 / C# 14
 // ============================================================================
 
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO;
+using System.IO.Hashing;
 using System.Text;
 using Lib.Db.Caching;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Lib.Db.IntegrationTests.Caching;
 
 public sealed class SharedMemorySecurityTests : IDisposable
 {
     private const string CacheKey = "SecurityTestKey";
+    private const int CacheHeaderSize = 64;
+    private const int CacheHeaderCrcOffset = 24;
+    private const int ProtectedPayloadNonceSize = 12;
     private readonly SharedMemoryCache _cache;
     private readonly string _mapName;
 
@@ -142,6 +149,124 @@ public sealed class SharedMemorySecurityTests : IDisposable
         Assert.Empty(errors);
     }
 
+    [Fact]
+    public void TamperedProtectedPayloadWithUpdatedCrc_ShouldReturnMiss()
+    {
+        string key = "tamper-payload";
+        byte[] original = Encoding.UTF8.GetBytes("trusted-value");
+        _cache.Set(key, original, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        string file = GetSingleCacheFile(_mapName);
+        byte[] bytes = File.ReadAllBytes(file);
+        int protectedPayloadLength = bytes.Length - CacheHeaderSize;
+        int firstCiphertextByteOffset = CacheHeaderSize + ProtectedPayloadNonceSize;
+
+        bytes[firstCiphertextByteOffset] ^= 0x01;
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(CacheHeaderCrcOffset, sizeof(uint)),
+            Crc32.HashToUInt32(bytes.AsSpan(CacheHeaderSize, protectedPayloadLength)));
+        File.WriteAllBytes(file, bytes);
+
+        Assert.Null(_cache.Get(key));
+    }
+
+    [Fact]
+    public void TamperedHeader_ShouldReturnMiss()
+    {
+        string key = "tamper-header";
+        byte[] value = Encoding.UTF8.GetBytes("trusted-value");
+        _cache.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        string file = GetSingleCacheFile(_mapName);
+        byte[] bytes = File.ReadAllBytes(file);
+
+        bytes[7] ^= 0x01;
+        File.WriteAllBytes(file, bytes);
+
+        Assert.Null(_cache.Get(key));
+    }
+
+    [Fact]
+    public void UnrecognizedHeaderVersion_ShouldReturnMiss()
+    {
+        string key = "tamper-version";
+        byte[] value = Encoding.UTF8.GetBytes("trusted-value");
+        _cache.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+        string file = GetSingleCacheFile(_mapName);
+        byte[] bytes = File.ReadAllBytes(file);
+
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4, sizeof(ushort)), ushort.MaxValue);
+        File.WriteAllBytes(file, bytes);
+
+        Assert.Null(_cache.Get(key));
+    }
+
+    [Fact]
+    public void ValidFile_ShouldRoundTrip()
+    {
+        string key = "valid-roundtrip";
+        byte[] value = Encoding.UTF8.GetBytes("trusted-value");
+
+        _cache.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+
+        Assert.Equal(value, _cache.Get(key));
+    }
+
+    [Fact]
+    public void CopiedFileWithDifferentIsolationKey_ShouldReturnMiss()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "LibDb_Isolation_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using SharedMemoryCache first = CreateCache(root, "tenant-a");
+            using SharedMemoryCache second = CreateCache(root, "tenant-b");
+            string key = "copied-cross-isolation";
+            byte[] value = Encoding.UTF8.GetBytes("tenant-a-value");
+
+            first.Set(key, value, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
+            string firstFile = GetSingleCacheFile(root);
+            string firstDirectory = Path.GetDirectoryName(firstFile)!;
+            string secondDirectory = Directory.GetDirectories(root)
+                .Single(directory => !StringComparer.OrdinalIgnoreCase.Equals(directory, firstDirectory));
+            File.Copy(firstFile, Path.Combine(secondDirectory, Path.GetFileName(firstFile)));
+
+            Assert.Null(second.Get(key));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    private static SharedMemoryCache CreateCache(string basePath, string isolationKey)
+    {
+        SharedMemoryCacheOptions options = new()
+        {
+            BasePath = basePath,
+            Scope = CacheScope.User,
+            MaxCacheSizeBytes = 10 * 1024 * 1024,
+            IsolationKey = isolationKey
+        };
+
+        return new SharedMemoryCache(
+            Options.Create(options),
+            NullLogger<SharedMemoryCache>.Instance);
+    }
+
+    private static string GetSingleCacheFile(string basePath)
+        => Directory.GetFiles(basePath, "*.cache", SearchOption.AllDirectories).Single();
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+        }
+    }
     public void Dispose()
     {
         _cache.Dispose();

@@ -5,6 +5,7 @@
 // ============================================================================
 
 using System.Data;
+using System.Text;
 using Lib.Db.Caching;
 using Lib.Db.Contracts.Models;
 using Lib.Db.Execution.Binding;
@@ -88,6 +89,80 @@ public sealed class CacheHostingCoverageTests
         prefix.Should().NotContain("Password=");
         prefix.Should().NotContain("TenantA");
         prefix.Should().Contain(CacheInternalHelpers.BuildSafeIsolationKey(secretIsolationKey));
+    }
+
+    [Fact]
+    public void SharedMemoryCache_ShouldProtectPayloadBytesOnDiskAndReadAcrossInstances()
+    {
+        string basePath = CreateTempDirectory();
+        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));
+        var options = new SharedMemoryCacheOptions
+        {
+            BasePath = basePath,
+            IsolationKey = "payload-protection-test"
+        };
+        byte[] payload = Encoding.UTF8.GetBytes("libdb-cache-plaintext-marker");
+
+        using (var writer = new SharedMemoryCache(
+            Options.Create(options),
+            loggerFactory.CreateLogger<SharedMemoryCache>()))
+        {
+            writer.Set(
+                "protected-key",
+                payload,
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+                });
+        }
+
+        string cacheFile = Directory.EnumerateFiles(basePath, "*.cache", SearchOption.AllDirectories)
+            .Should().ContainSingle()
+            .Subject;
+        byte[] persisted = File.ReadAllBytes(cacheFile);
+        persisted.AsSpan().IndexOf(payload).Should().Be(-1);
+
+        using var reader = new SharedMemoryCache(
+            Options.Create(options),
+            loggerFactory.CreateLogger<SharedMemoryCache>());
+        reader.Get("protected-key").Should().Equal(payload);
+    }
+
+    [Fact]
+    public void SharedMemoryCache_ShouldUseLocalKeyMaterialSecretForProtectedPayloads()
+    {
+        string basePath = CreateTempDirectory();
+        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));
+        var options = new SharedMemoryCacheOptions
+        {
+            BasePath = basePath,
+            IsolationKey = "key-material-test"
+        };
+
+        using (var writer = new SharedMemoryCache(
+            Options.Create(options),
+            loggerFactory.CreateLogger<SharedMemoryCache>()))
+        {
+            writer.Set(
+                "protected-key",
+                [1, 2, 3, 4],
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+                });
+        }
+
+        string secretFile = Directory.EnumerateFiles(basePath, "*.key", SearchOption.AllDirectories)
+            .Should().ContainSingle()
+            .Subject;
+        byte[] secret = File.ReadAllBytes(secretFile);
+        secret.Should().HaveCount(32);
+        File.WriteAllBytes(secretFile, Enumerable.Repeat((byte)0x42, secret.Length).ToArray());
+
+        using var reader = new SharedMemoryCache(
+            Options.Create(options),
+            loggerFactory.CreateLogger<SharedMemoryCache>());
+        reader.Get("protected-key").Should().BeNull();
     }
 
     [Fact]
