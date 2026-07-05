@@ -54,10 +54,21 @@ public sealed class ReleaseMetadataGuardTests
         string cookbook = await ReadRepoFileAsync("docs", "06_cookbook.md");
         string history = await ReadRepoFileAsync("docs", "history.md");
 
-        history.Should().Contain(ExpectedPackageVersion);
-        history.Should().Contain("sp_executesql");
-        history.Should().Contain("SharedMemoryCache");
-        history.Should().Contain("configuration binding parity");
+        int v262Start = history.IndexOf("## 2.6.2 Summary", StringComparison.Ordinal);
+        int v261Start = history.IndexOf("## 2.6.1 Summary", StringComparison.Ordinal);
+        v262Start.Should().BeGreaterThanOrEqualTo(0);
+        v261Start.Should().BeGreaterThan(v262Start);
+        string historyV262 = history[v262Start..v261Start];
+
+        historyV262.Should().Contain(ExpectedPackageVersion);
+        historyV262.Should().Contain("sp_executesql");
+        historyV262.Should().Contain("SharedMemoryCache");
+        historyV262.Should().Contain("legacy bulk destination names");
+        historyV262.Should().Contain("single-part destination names");
+        historyV262.Should().Contain("string parameter values");
+        historyV262.Should().Contain("shared cache key material");
+        historyV262.Should().Contain("epoch mutex namespace");
+        historyV262.Should().Contain("configuration binding parity");
 
         guide.Should().Contain("IDbSession");
         guide.Should().Contain(".Schema");

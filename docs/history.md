@@ -8,6 +8,10 @@ Current usage docs are intended to stay version-neutral and describe the current
 
 - Tightened `RawSqlPolicy.DenyWriteText` so bare and qualified `sp_executesql` text commands that wrap mutating SQL are blocked as write-like raw SQL. `DenyWriteText` remains a conservative guardrail, not a full SQL parser or permission boundary.
 - Hardened `SharedMemoryCache` with keyed integrity metadata, user/path/isolation-key namespacing, and quota enforcement so quota-rejected or quota-unverified writes are treated as cache misses rather than written to fallback state.
+- Strengthened shared cache key material so local coordination names derive from scoped, non-reversible material instead of exposing caller-supplied isolation inputs.
+- Namespaced epoch mutex namespace and stripe coordination by cache scope so unrelated Lib.Db processes do not share cross-process invalidation locks.
+- Validated legacy bulk destination names while preserving compatibility for single-part destination names, including temporary table names, instead of forcing an implicit default schema.
+- Preserved scalar string parameter values so `.With(...)` treats strings as parameter values rather than reflecting them as parameter bags.
 - Aligned manual `LibDbOptions` configuration binding with the supported concrete `LibDbConfig` values, including `Mars`, resilience, schema warmup, diagnostics, chaos, and shared-memory cache options.
 
 ### Changed
@@ -17,8 +21,9 @@ Current usage docs are intended to stay version-neutral and describe the current
 
 ### Verification
 
-- Added regression coverage for raw SQL `sp_executesql` policy cases, shared-memory cache isolation/integrity/quota behavior, and configuration binding parity.
+- Added regression coverage for raw SQL `sp_executesql` policy cases, shared-memory cache isolation/integrity/quota/key material behavior, epoch mutex namespace isolation, legacy bulk destination validation/compatibility, string parameter values, and configuration binding parity.
 - Added release metadata and docs/API coverage guards for the v2.6.2 package surface.
+
 ## 2.6.1 Summary
 
 ### Fixed
