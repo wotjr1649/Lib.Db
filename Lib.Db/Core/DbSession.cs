@@ -112,6 +112,13 @@ internal sealed class DbSession(
         return new DbRequestBuilder(executor, tempInstanceName);
     }
 
+    internal static string BuildLegacyBulkDestinationTableName(string destinationTable)
+    {
+        BulkIdentifier identifier = BulkIdentifier.ParseTableName(destinationTable);
+        return destinationTable.Contains('.', StringComparison.Ordinal)
+            ? identifier.ToSql()
+            : identifier.Name;
+    }
     /// <summary>
     /// 기본('Default') 인스턴스를 사용하여 작업을 시작합니다.
     /// <para>
@@ -217,7 +224,7 @@ internal sealed class DbSession(
         try
         {
             options ??= new BulkInsertOptions();
-            string safeDestinationTable = BulkIdentifier.ParseTableName(destinationTable).ToSql();
+            string safeDestinationTable = BuildLegacyBulkDestinationTableName(destinationTable);
 
             // 레코드를 List로 구체화 (카운트 확인 + 재사용)
             List<T> recordList = records as List<T> ?? [.. records];

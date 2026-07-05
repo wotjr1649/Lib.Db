@@ -159,6 +159,19 @@ public sealed class DbSessionSecurityTests
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData("Target", "Target")]
+    [InlineData("#TempTarget", "#TempTarget")]
+    [InlineData("dbo.Target", "[dbo].[Target]")]
+    [InlineData("[dbo].[Target]", "[dbo].[Target]")]
+    public void BuildLegacyBulkDestinationTableName_ShouldValidateWithoutForcingDefaultSchema(
+        string destinationTable,
+        string expected)
+    {
+        DbSession.BuildLegacyBulkDestinationTableName(destinationTable)
+            .Should().Be(expected);
+    }
+
     [Fact]
     public async Task UseConnectionString_ProductionProfile_ShouldApplySecurityValidation()
     {
