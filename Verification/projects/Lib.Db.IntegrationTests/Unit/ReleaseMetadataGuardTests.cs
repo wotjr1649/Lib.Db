@@ -106,6 +106,8 @@ public sealed class ReleaseMetadataGuardTests
         string connectionSecurity = await ReadRepoFileAsync(".agents", "skills", "lib-db", "references", "connection-security.md");
         string caching = await ReadRepoFileAsync(".agents", "skills", "lib-db", "references", "caching.md");
         string bulk = await ReadRepoFileAsync(".agents", "skills", "lib-db", "references", "bulk-insert.md");
+        string parameters = await ReadRepoFileAsync(".agents", "skills", "lib-db", "references", "parameters-and-binding.md");
+        string aot = await ReadRepoFileAsync(".agents", "skills", "lib-db", "references", "aot-trimming.md");
         string schema = await ReadRepoFileAsync(".agents", "skills", "lib-db", "references", "schema-maintenance.md");
 
         connectionSecurity.Should().Contain("sp_executesql");
@@ -114,6 +116,10 @@ public sealed class ReleaseMetadataGuardTests
         caching.Should().Contain("quota");
         caching.Should().Contain("integrity");
         bulk.Should().Contain("AOT-safe");
+        parameters.Should().Contain("top-level scalar `string` value");
+        parameters.Should().Contain("is not reflected as a parameter bag");
+        aot.Should().Contain("Lib.Db.Generator");
+        aot.Should().Contain("not a v2.6.2 runtime API");
         schema.Should().Contain("db.Schema");
         schema.Should().Contain("UseSchema");
     }
