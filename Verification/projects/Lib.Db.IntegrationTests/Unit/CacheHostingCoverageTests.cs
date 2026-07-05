@@ -129,6 +129,43 @@ public sealed class CacheHostingCoverageTests
     }
 
     [Fact]
+    public void SharedMemoryCache_ShouldUseLocalKeyMaterialSecretForProtectedPayloads()
+    {
+        string basePath = CreateTempDirectory();
+        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));
+        var options = new SharedMemoryCacheOptions
+        {
+            BasePath = basePath,
+            IsolationKey = "key-material-test"
+        };
+
+        using (var writer = new SharedMemoryCache(
+            Options.Create(options),
+            loggerFactory.CreateLogger<SharedMemoryCache>()))
+        {
+            writer.Set(
+                "protected-key",
+                [1, 2, 3, 4],
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+                });
+        }
+
+        string secretFile = Directory.EnumerateFiles(basePath, "*.key", SearchOption.AllDirectories)
+            .Should().ContainSingle()
+            .Subject;
+        byte[] secret = File.ReadAllBytes(secretFile);
+        secret.Should().HaveCount(32);
+        File.WriteAllBytes(secretFile, Enumerable.Repeat((byte)0x42, secret.Length).ToArray());
+
+        using var reader = new SharedMemoryCache(
+            Options.Create(options),
+            loggerFactory.CreateLogger<SharedMemoryCache>());
+        reader.Get("protected-key").Should().BeNull();
+    }
+
+    [Fact]
     public async Task CacheMaintenanceService_ShouldKeepRunningWhenMaintenanceCycleThrows()
     {
         using ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));

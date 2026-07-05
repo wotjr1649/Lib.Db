@@ -54,8 +54,10 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     private const int AES_GCM_NONCE_SIZE = 12;
     private const int AES_GCM_TAG_SIZE = 16;
     private const int PROTECTED_PAYLOAD_OVERHEAD = AES_GCM_NONCE_SIZE + AES_GCM_TAG_SIZE;
+    private const int LOCAL_KEY_MATERIAL_SIZE = 32;
     private const int HEADER_SIZE = HEADER_METADATA_SIZE + MAC_SIZE;
     private const int MUTEX_STRIPE_COUNT = 128;
+    private const string LOCAL_KEY_MATERIAL_FILE_NAME = "shared-memory-cache.key";
 
     private static readonly byte[] IntegrityKeyDomain = Encoding.UTF8.GetBytes("Lib.Db.SharedMemoryCache.IntegrityKey.v1");
     private static readonly byte[] IntegrityMacDomain = Encoding.UTF8.GetBytes("Lib.Db.SharedMemoryCache.File.v3");
@@ -121,8 +123,8 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         _basePath = CacheInternalHelpers.ResolveStoragePath(_options);
         _mutexPrefix = CacheInternalHelpers.GetMutexPrefix(_options);
         _mutexScope = _options.Scope.ToString();
-        _integrityKey = CreateIntegrityKey(_options.IsolationKey);
-        _payloadProtectionKey = CreatePayloadProtectionKey(_options.IsolationKey);
+        _integrityKey = [];
+        _payloadProtectionKey = [];
         _quotaMutex = new Lazy<Mutex>(InitQuotaMutex);
 
         try
@@ -132,6 +134,16 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
             // 디렉토리 생성
             Directory.CreateDirectory(_basePath);
+            byte[] localKeyMaterial = LoadOrCreateLocalKeyMaterial();
+            try
+            {
+                _integrityKey = CreateIntegrityKey(_options.IsolationKey, localKeyMaterial);
+                _payloadProtectionKey = CreatePayloadProtectionKey(_options.IsolationKey, localKeyMaterial);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(localKeyMaterial);
+            }
 
             // Mutex 초기화 (Lazy)
             _mutexStripes = new Lazy<Mutex[]>(InitMutexes);
@@ -144,6 +156,8 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         }
         catch (Exception ex)
         {
+            CryptographicOperations.ZeroMemory(_integrityKey);
+            CryptographicOperations.ZeroMemory(_payloadProtectionKey);
             _isFallbackMode = true;
             _mutexStripes = new Lazy<Mutex[]>(() => Array.Empty<Mutex>()); // Dummy
             _logger.LogError(
@@ -836,21 +850,73 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
             maxBytes);
     }
 
-    private static byte[] CreateIntegrityKey(string? isolationKey)
+    private byte[] LoadOrCreateLocalKeyMaterial()
+    {
+        string path = Path.Combine(_basePath, LOCAL_KEY_MATERIAL_FILE_NAME);
+        byte[]? existing = TryReadLocalKeyMaterial(path);
+        if (existing is not null)
+            return existing;
+
+        byte[] generated = RandomNumberGenerator.GetBytes(LOCAL_KEY_MATERIAL_SIZE);
+        try
+        {
+            using FileStream stream = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            stream.Write(generated);
+            stream.Flush(flushToDisk: true);
+            return generated;
+        }
+        catch (IOException)
+        {
+            CryptographicOperations.ZeroMemory(generated);
+            existing = TryReadLocalKeyMaterial(path);
+            if (existing is not null)
+                return existing;
+
+            throw;
+        }
+    }
+
+    private static byte[]? TryReadLocalKeyMaterial(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+
+        try
+        {
+            byte[] material = File.ReadAllBytes(path);
+            if (material.Length == LOCAL_KEY_MATERIAL_SIZE)
+                return material;
+
+            CryptographicOperations.ZeroMemory(material);
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static byte[] CreateIntegrityKey(string? isolationKey, ReadOnlySpan<byte> localKeyMaterial)
     {
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(IntegrityKeyDomain);
         hash.AppendData([0]);
         AppendLengthPrefixedUtf8(hash, string.IsNullOrWhiteSpace(isolationKey) ? "default" : isolationKey.Trim());
+        hash.AppendData(localKeyMaterial);
         return hash.GetHashAndReset();
     }
 
-    private static byte[] CreatePayloadProtectionKey(string? isolationKey)
+    private static byte[] CreatePayloadProtectionKey(string? isolationKey, ReadOnlySpan<byte> localKeyMaterial)
     {
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(PayloadProtectionKeyDomain);
         hash.AppendData([0]);
         AppendLengthPrefixedUtf8(hash, string.IsNullOrWhiteSpace(isolationKey) ? "default" : isolationKey.Trim());
+        hash.AppendData(localKeyMaterial);
         return hash.GetHashAndReset();
     }
 
