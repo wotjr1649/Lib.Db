@@ -37,7 +37,7 @@ namespace Lib.Db.Caching;
 /// <para><strong>⚙️ 핵심 메커니즘</strong></para>
 /// <list type="bullet">
 /// <item><description><strong>Stripe Locking</strong>: 키별 CRC32 해시를 기반으로 128개의 Mutex 스트라이프로 세분화하여 동시성 경합을 최소화합니다.</description></item>
-/// <item><description><strong>무결성 검증</strong>: 헤더 내 HMAC 태그, CRC32 체크섬, Magic Number 검증을 통해 변조, 메모리 오염, 쓰기 중단 상황을 감지합니다.</description></item>
+/// <item><description><strong>기밀성/무결성 보호</strong>: AES-GCM payload 보호, 헤더 HMAC 태그, CRC32 체크섬, Magic Number 검증을 통해 로컬 파일 노출과 변조, 메모리 오염, 쓰기 중단 상황을 감지합니다.</description></item>
 /// <item><description><strong>자가 치유</strong>: 파일 손상 감지 시 자동으로 파일을 삭제하고 폴백(MemoryCache) 모드로 전환하거나 재생성을 시도합니다.</description></item>
 /// </list>
 /// </remarks>
@@ -46,16 +46,20 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     #region 상수 및 필드
 
     private const uint MAGIC = 0x4244424C;
-    private const ushort SCHEMA_VERSION = 2;
+    private const ushort SCHEMA_VERSION = 3;
     private const byte STATE_WRITING = 0;
     private const byte STATE_COMMITTED = 1;
     private const int HEADER_METADATA_SIZE = 32;
     private const int MAC_SIZE = 32;
+    private const int AES_GCM_NONCE_SIZE = 12;
+    private const int AES_GCM_TAG_SIZE = 16;
+    private const int PROTECTED_PAYLOAD_OVERHEAD = AES_GCM_NONCE_SIZE + AES_GCM_TAG_SIZE;
     private const int HEADER_SIZE = HEADER_METADATA_SIZE + MAC_SIZE;
     private const int MUTEX_STRIPE_COUNT = 128;
 
     private static readonly byte[] IntegrityKeyDomain = Encoding.UTF8.GetBytes("Lib.Db.SharedMemoryCache.IntegrityKey.v1");
-    private static readonly byte[] IntegrityMacDomain = Encoding.UTF8.GetBytes("Lib.Db.SharedMemoryCache.File.v2");
+    private static readonly byte[] IntegrityMacDomain = Encoding.UTF8.GetBytes("Lib.Db.SharedMemoryCache.File.v3");
+    private static readonly byte[] PayloadProtectionKeyDomain = Encoding.UTF8.GetBytes("Lib.Db.SharedMemoryCache.PayloadProtectionKey.v1");
 
     private readonly string _basePath;
     private readonly SharedMemoryCacheOptions _options;
@@ -65,6 +69,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
     private readonly string _mutexPrefix;
     private readonly string _mutexScope;
     private readonly byte[] _integrityKey;
+    private readonly byte[] _payloadProtectionKey;
     private readonly bool _isFallbackMode;
     private volatile bool _disposed;
 
@@ -117,10 +122,14 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         _mutexPrefix = CacheInternalHelpers.GetMutexPrefix(_options);
         _mutexScope = _options.Scope.ToString();
         _integrityKey = CreateIntegrityKey(_options.IsolationKey);
+        _payloadProtectionKey = CreatePayloadProtectionKey(_options.IsolationKey);
         _quotaMutex = new Lazy<Mutex>(InitQuotaMutex);
 
         try
         {
+            if (!AesGcm.IsSupported)
+                throw new PlatformNotSupportedException("AES-GCM is not supported on this platform.");
+
             // 디렉토리 생성
             Directory.CreateDirectory(_basePath);
 
@@ -273,29 +282,45 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
 
             byte[] storedMac = new byte[MAC_SIZE];
             accessor.ReadArray(HEADER_METADATA_SIZE, storedMac, 0, MAC_SIZE);
-            byte[] data = new byte[(int)header.DataLength];
-            accessor.ReadArray(HEADER_SIZE, data, 0, (int)header.DataLength);
+            byte[] protectedData = new byte[(int)header.DataLength];
+            accessor.ReadArray(HEADER_SIZE, protectedData, 0, (int)header.DataLength);
 
-            // CRC32 검증
-            uint actualCrc = Crc32.HashToUInt32(data);
-            if (actualCrc != header.Crc32)
+            try
             {
-                _logger.LogWarning(
-                    "[Cache] CRC Mismatch: {KeyHash}",
-                    HashKeyForDiagnostics(key));
-                return null;
-            }
+                // CRC32 검증
+                uint actualCrc = Crc32.HashToUInt32(protectedData);
+                if (actualCrc != header.Crc32)
+                {
+                    _logger.LogWarning(
+                        "[Cache] CRC Mismatch: {KeyHash}",
+                        HashKeyForDiagnostics(key));
+                    return null;
+                }
 
-            if (!VerifyIntegrity(header, key, data, storedMac))
+                if (!VerifyIntegrity(header, key, protectedData, storedMac))
+                {
+                    _logger.LogWarning(
+                        "[Cache] Integrity check failed: {KeyHash}",
+                        HashKeyForDiagnostics(key));
+                    return null;
+                }
+
+                byte[]? data = UnprotectPayload(protectedData);
+                if (data is null)
+                {
+                    _logger.LogWarning(
+                        "[Cache] Payload protection check failed: {KeyHash}",
+                        HashKeyForDiagnostics(key));
+                    return null;
+                }
+
+                DbMetrics.IncrementCacheHit();
+                return data;
+            }
+            finally
             {
-                _logger.LogWarning(
-                    "[Cache] Integrity check failed: {KeyHash}",
-                    HashKeyForDiagnostics(key));
-                return null;
+                CryptographicOperations.ZeroMemory(protectedData);
             }
-
-            DbMetrics.IncrementCacheHit();
-            return data;
 
             #endregion
         }
@@ -390,54 +415,61 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
                 }
 
                 string filePath = GetFilePath(key);
-                long totalSize = HEADER_SIZE + value.LongLength;
+                long protectedPayloadSize = value.LongLength + PROTECTED_PAYLOAD_OVERHEAD;
+                long totalSize = HEADER_SIZE + protectedPayloadSize;
                 if (!TryReserveStorageQuota(filePath, totalSize, key))
                 {
                     DeleteSharedEntryAfterQuotaRejection(filePath, key);
                     return;
                 }
 
-                long expiryTicks = GetExpiryTicks(options);
-                uint crc = Crc32.HashToUInt32(value);
-                uint keyHash = ComputeKeyHash(key); // Quick check 용
-
-                // Temp 파일 생성 (Atomic Swap은 아님 - MMF 특성상 직접 씀)
-                // 참고: EpochStore 처럼 Atomic Swap을 쓰면 좋지만, Cache는 즉시성이 중요하고 MMF Lock이 있으므로 덮어쓰기 허용
-
-                using FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-
-                // 파일 크기 확보
-                if (fs.Length != totalSize)
-                    fs.SetLength(totalSize);
-
-                using MemoryMappedFile mmf = MemoryMappedFile.CreateFromFile(fs, null, totalSize, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, false);
-                using MemoryMappedViewAccessor accessor = mmf.CreateViewAccessor(0, totalSize);
-
-                // 1. Write Header (State = Writing)
-                MmfHeader header = new MmfHeader
+                byte[] protectedValue = ProtectPayload(value);
+                try
                 {
-                    Magic = MAGIC,
-                    Version = SCHEMA_VERSION,
-                    State = STATE_WRITING,
-                    ExpiryTicks = expiryTicks,
-                    DataLength = value.LongLength,
-                    Crc32 = crc,
-                    KeyHash = keyHash
-                };
-                accessor.Write(0, ref header);
+                    long expiryTicks = GetExpiryTicks(options);
+                    uint crc = Crc32.HashToUInt32(protectedValue);
+                    uint keyHash = ComputeKeyHash(key); // Quick check 용
 
-                // 2. Write Data
-                accessor.WriteArray(HEADER_SIZE, value, 0, value.Length);
+                    // MMF lock을 잡은 상태에서 최종 cache 파일에 보호 payload를 기록합니다.
+                    using FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
-                // 3. Commit (State = Committed)
-                header.State = STATE_COMMITTED;
-                byte[] mac = ComputeIntegrityMac(header, key, value);
-                accessor.WriteArray(HEADER_METADATA_SIZE, mac, 0, mac.Length);
-                CryptographicOperations.ZeroMemory(mac);
-                accessor.Write(0, ref header);
+                    // 파일 크기 확보
+                    if (fs.Length != totalSize)
+                        fs.SetLength(totalSize);
 
-                // fs.Flush handled by Dispose? Not necessarily for MMF.
-                // accessor.Flush(); // OS Page Flush
+                    using MemoryMappedFile mmf = MemoryMappedFile.CreateFromFile(fs, null, totalSize, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, false);
+                    using MemoryMappedViewAccessor accessor = mmf.CreateViewAccessor(0, totalSize);
+
+                    // 1. Write Header (State = Writing)
+                    MmfHeader header = new MmfHeader
+                    {
+                        Magic = MAGIC,
+                        Version = SCHEMA_VERSION,
+                        State = STATE_WRITING,
+                        ExpiryTicks = expiryTicks,
+                        DataLength = protectedValue.LongLength,
+                        Crc32 = crc,
+                        KeyHash = keyHash
+                    };
+                    accessor.Write(0, ref header);
+
+                    // 2. Write protected payload
+                    accessor.WriteArray(HEADER_SIZE, protectedValue, 0, protectedValue.Length);
+
+                    // 3. Commit (State = Committed)
+                    header.State = STATE_COMMITTED;
+                    byte[] mac = ComputeIntegrityMac(header, key, protectedValue);
+                    accessor.WriteArray(HEADER_METADATA_SIZE, mac, 0, mac.Length);
+                    CryptographicOperations.ZeroMemory(mac);
+                    accessor.Write(0, ref header);
+
+                    // fs.Flush handled by Dispose? Not necessarily for MMF.
+                    // accessor.Flush(); // OS Page Flush
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(protectedValue);
+                }
             }
             finally
             {
@@ -813,6 +845,51 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         return hash.GetHashAndReset();
     }
 
+    private static byte[] CreatePayloadProtectionKey(string? isolationKey)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(PayloadProtectionKeyDomain);
+        hash.AppendData([0]);
+        AppendLengthPrefixedUtf8(hash, string.IsNullOrWhiteSpace(isolationKey) ? "default" : isolationKey.Trim());
+        return hash.GetHashAndReset();
+    }
+
+    private byte[] ProtectPayload(ReadOnlySpan<byte> plaintext)
+    {
+        byte[] protectedPayload = new byte[PROTECTED_PAYLOAD_OVERHEAD + plaintext.Length];
+        Span<byte> nonce = protectedPayload.AsSpan(0, AES_GCM_NONCE_SIZE);
+        Span<byte> ciphertext = protectedPayload.AsSpan(AES_GCM_NONCE_SIZE, plaintext.Length);
+        Span<byte> tag = protectedPayload.AsSpan(AES_GCM_NONCE_SIZE + plaintext.Length, AES_GCM_TAG_SIZE);
+
+        RandomNumberGenerator.Fill(nonce);
+        using var aes = new AesGcm(_payloadProtectionKey, AES_GCM_TAG_SIZE);
+        aes.Encrypt(nonce, plaintext, ciphertext, tag);
+        return protectedPayload;
+    }
+
+    private byte[]? UnprotectPayload(ReadOnlySpan<byte> protectedPayload)
+    {
+        if (protectedPayload.Length < PROTECTED_PAYLOAD_OVERHEAD)
+            return null;
+
+        ReadOnlySpan<byte> nonce = protectedPayload[..AES_GCM_NONCE_SIZE];
+        ReadOnlySpan<byte> ciphertext = protectedPayload[AES_GCM_NONCE_SIZE..^AES_GCM_TAG_SIZE];
+        ReadOnlySpan<byte> tag = protectedPayload[^AES_GCM_TAG_SIZE..];
+        byte[] plaintext = new byte[ciphertext.Length];
+
+        try
+        {
+            using var aes = new AesGcm(_payloadProtectionKey, AES_GCM_TAG_SIZE);
+            aes.Decrypt(nonce, ciphertext, tag, plaintext);
+            return plaintext;
+        }
+        catch (CryptographicException)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            return null;
+        }
+    }
+
     private bool VerifyIntegrity(
         MmfHeader header,
         string key,
@@ -892,6 +969,7 @@ public sealed class SharedMemoryCache : IDistributedCache, IDisposable
         _disposed = true;
 
         CryptographicOperations.ZeroMemory(_integrityKey);
+        CryptographicOperations.ZeroMemory(_payloadProtectionKey);
 
         if (_quotaMutex.IsValueCreated)
             _quotaMutex.Value.Dispose();
