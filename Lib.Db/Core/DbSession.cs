@@ -217,6 +217,7 @@ internal sealed class DbSession(
         try
         {
             options ??= new BulkInsertOptions();
+            string safeDestinationTable = BulkIdentifier.ParseTableName(destinationTable).ToSql();
 
             // 레코드를 List로 구체화 (카운트 확인 + 재사용)
             List<T> recordList = records as List<T> ?? [.. records];
@@ -236,7 +237,7 @@ internal sealed class DbSession(
 
             using SqlBulkCopy bulkCopy = new(connection, copyOptions, null)
             {
-                DestinationTableName = destinationTable,
+                DestinationTableName = safeDestinationTable,
                 BatchSize = options.BatchSize,
                 BulkCopyTimeout = options.TimeoutSeconds,
                 EnableStreaming = options.EnableStreaming,
