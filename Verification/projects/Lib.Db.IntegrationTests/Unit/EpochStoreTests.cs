@@ -27,4 +27,37 @@ public sealed class EpochStoreTests
         EpochStore.RedactInstanceForDiagnostics("instance-hash-1")
             .Should().Be("instance-hash-1");
     }
+
+    [Fact]
+    public void BuildMutexLogicalName_ShouldIncludeStorageNamespaceWithoutRawBasePath()
+    {
+        string firstBasePath = Path.Combine(Path.GetTempPath(), "LibDbEpochA-" + Guid.NewGuid().ToString("N"));
+        string secondBasePath = Path.Combine(Path.GetTempPath(), "LibDbEpochB-" + Guid.NewGuid().ToString("N"));
+
+        string first = EpochStore.BuildMutexLogicalName(firstBasePath, 7);
+        string firstAgain = EpochStore.BuildMutexLogicalName(firstBasePath, 7);
+        string second = EpochStore.BuildMutexLogicalName(secondBasePath, 7);
+
+        first.Should().Be(firstAgain);
+        first.Should().NotBe(second);
+        first.Should().Contain("Stripe7");
+        first.Should().NotContain(firstBasePath);
+        second.Should().NotContain(secondBasePath);
+    }
+
+    [Fact]
+    public void BuildMutexLogicalName_ShouldCanonicalizeEquivalentBasePaths()
+    {
+        string basePath = Path.Combine(Path.GetTempPath(), "LibDbEpochCanonical-" + Guid.NewGuid().ToString("N"));
+        string withSeparator = basePath + Path.DirectorySeparatorChar;
+
+        EpochStore.BuildMutexLogicalName(withSeparator, 3)
+            .Should().Be(EpochStore.BuildMutexLogicalName(basePath, 3));
+
+        if (OperatingSystem.IsWindows())
+        {
+            EpochStore.BuildMutexLogicalName(basePath.ToUpperInvariant(), 3)
+                .Should().Be(EpochStore.BuildMutexLogicalName(basePath.ToLowerInvariant(), 3));
+        }
+    }
 }

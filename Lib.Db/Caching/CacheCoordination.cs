@@ -9,6 +9,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.IO.Hashing;
+using System.Security.Cryptography;
 using System.IO.MemoryMappedFiles;
 using Lib.Db.Diagnostics;
 using Microsoft.Extensions.Options;
@@ -131,12 +132,14 @@ public sealed class GlobalCacheEpoch : IDisposable
 /// </remarks>
 public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool enabled = true) : IDisposable
 {
+    private const int MutexStripeCount = 128;
+
     private readonly bool _enabled = enabled;
     private readonly string _basePath = enabled ? EnsureBasePath(basePath) : string.Empty;
     // 128개 뮤텍스의 지연 초기화 (Lazy Initialization)
     private readonly Lazy<Mutex[]> _mutexStripes = new(() =>
-        Enumerable.Range(0, 128)
-            .Select(i => CreateFallbackMutex($"Lib.Db.Epoch.Stripe{i}", logger))
+        Enumerable.Range(0, MutexStripeCount)
+            .Select(i => CreateFallbackMutex(BuildMutexLogicalName(basePath, i), logger))
             .ToArray());
 
     // 지연 뮤텍스 생성 로직 (3단계 폴백 전략)
@@ -162,9 +165,35 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool
 
     private static string EnsureBasePath(string basePath)
     {
+        string fullPath = GetFullBasePath(basePath);
+        Directory.CreateDirectory(fullPath);
+        return fullPath;
+    }
+
+    internal static string BuildMutexLogicalName(string basePath, int stripe)
+    {
+        if ((uint)stripe >= MutexStripeCount)
+            throw new ArgumentOutOfRangeException(nameof(stripe), stripe, "Epoch mutex stripe is out of range.");
+
+        string namespacePath = NormalizeBasePathForMutexNamespace(basePath);
+        byte[] pathBytes = Encoding.UTF8.GetBytes(namespacePath);
+        byte[] hash = SHA256.HashData(pathBytes);
+        string namespaceHash = Convert.ToHexString(hash.AsSpan(0, 8));
+        return $"Lib.Db.Epoch.{namespaceHash}.Stripe{stripe}";
+    }
+
+    private static string GetFullBasePath(string basePath)
+    {
         ArgumentNullException.ThrowIfNull(basePath);
-        Directory.CreateDirectory(basePath);
-        return basePath;
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(basePath));
+    }
+
+    private static string NormalizeBasePathForMutexNamespace(string basePath)
+    {
+        string fullPath = GetFullBasePath(basePath);
+        return OperatingSystem.IsWindows()
+            ? fullPath.ToUpperInvariant()
+            : fullPath;
     }
 
     /// <summary>
@@ -281,7 +310,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool
             Span<byte> buffer = stackalloc byte[maxBytes];
             int written = Encoding.UTF8.GetBytes(key.AsSpan(), buffer);
             uint hash = Crc32.HashToUInt32(buffer[..written]);
-            return _mutexStripes.Value[hash % 128];
+            return _mutexStripes.Value[hash % MutexStripeCount];
         }
         else
         {
@@ -290,7 +319,7 @@ public sealed class EpochStore(string basePath, ILogger<EpochStore> logger, bool
             {
                 int written = Encoding.UTF8.GetBytes(key.AsSpan(), leased.AsSpan());
                 uint hash = Crc32.HashToUInt32(leased.AsSpan(0, written));
-                return _mutexStripes.Value[hash % 128];
+                return _mutexStripes.Value[hash % MutexStripeCount];
             }
             finally { ArrayPool<byte>.Shared.Return(leased); }
         }
