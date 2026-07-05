@@ -53,6 +53,7 @@ public sealed class ReleaseMetadataGuardTests
         string fluent = await ReadRepoFileAsync("docs", "05_fluent_api_reference.md");
         string cookbook = await ReadRepoFileAsync("docs", "06_cookbook.md");
         string history = await ReadRepoFileAsync("docs", "history.md");
+        string aotRiskLedger = await ReadRepoFileAsync("docs", "security", "aot-tvp-risk-ledger.md");
 
         int v262Start = history.IndexOf("## 2.6.2 Summary", StringComparison.Ordinal);
         int v261Start = history.IndexOf("## 2.6.1 Summary", StringComparison.Ordinal);
@@ -65,10 +66,13 @@ public sealed class ReleaseMetadataGuardTests
         historyV262.Should().Contain("SharedMemoryCache");
         historyV262.Should().Contain("legacy bulk destination names");
         historyV262.Should().Contain("single-part destination names");
-        historyV262.Should().Contain("string parameter values");
+        historyV262.Should().Contain("string values inside named parameter objects and dictionaries");
         historyV262.Should().Contain("shared cache key material");
         historyV262.Should().Contain("epoch mutex namespace");
         historyV262.Should().Contain("configuration binding parity");
+        historyV262.Should().Contain("Microsoft.Data.SqlClient` 7.0.2");
+        historyV262.Should().Contain("aot-warnings.json");
+        historyV262.Should().Contain("Lib.Db-owned warning count");
 
         guide.Should().Contain("IDbSession");
         guide.Should().Contain(".Schema");
@@ -99,6 +103,10 @@ public sealed class ReleaseMetadataGuardTests
 
         cookbook.Should().Contain("AOT-safe bulk operations");
         cookbook.Should().Contain("BulkWriteOptions");
+
+        aotRiskLedger.Should().Contain("Microsoft.Data.SqlClient` is pinned to `7.0.2`");
+        aotRiskLedger.Should().Contain("aot-warnings.json");
+        aotRiskLedger.Should().NotContain("Microsoft.Data.SqlClient` is pinned to `7.0.1`");
     }
     [Fact]
     public async Task CuratedLibDbSkillReferences_ShouldCoverSensitiveV262Usage()
@@ -116,7 +124,7 @@ public sealed class ReleaseMetadataGuardTests
         caching.Should().Contain("quota");
         caching.Should().Contain("integrity");
         bulk.Should().Contain("AOT-safe");
-        parameters.Should().Contain("top-level scalar `string` value");
+        parameters.Should().Contain("A `string` value inside a named parameter object or dictionary");
         parameters.Should().Contain("is not reflected as a parameter bag");
         aot.Should().Contain("Lib.Db.Generator");
         aot.Should().Contain("not a v2.6.2 runtime API");

@@ -11,7 +11,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 - Strengthened shared cache key material so local coordination names derive from scoped, non-reversible material instead of exposing caller-supplied isolation inputs.
 - Namespaced epoch mutex namespace and stripe coordination by cache scope so unrelated Lib.Db processes do not share cross-process invalidation locks.
 - Validated legacy bulk destination names while preserving compatibility for single-part destination names, including temporary table names, instead of forcing an implicit default schema.
-- Preserved scalar string parameter values so `.With(...)` treats strings as parameter values rather than reflecting them as parameter bags.
+- Preserved string values inside named parameter objects and dictionaries so `.With(...)` keeps them as scalar parameter values rather than reflecting string values as parameter bags.
 - Aligned manual `LibDbOptions` configuration binding with the supported concrete `LibDbConfig` values, including `Mars`, resilience, schema warmup, diagnostics, chaos, and shared-memory cache options.
 
 ### Changed
@@ -23,6 +23,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 
 - Added regression coverage for raw SQL `sp_executesql` policy cases, shared-memory cache isolation/integrity/quota/key material behavior, epoch mutex namespace isolation, legacy bulk destination validation/compatibility, string parameter values, and configuration binding parity.
 - Added release metadata and docs/API coverage guards for the v2.6.2 package surface.
+- Verified the `Microsoft.Data.SqlClient` 7.0.2 Native AOT warning baseline through the checked-in `aot-warnings.json` baseline; provider-owned warnings remain accepted only when the Lib.Db-owned warning count stays zero.
 
 ## 2.6.1 Summary
 

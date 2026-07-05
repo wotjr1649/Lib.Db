@@ -19,6 +19,9 @@ namespace Lib.Db.IntegrationTests.Caching;
 public sealed class SharedMemorySecurityTests : IDisposable
 {
     private const string CacheKey = "SecurityTestKey";
+    private const int CacheHeaderSize = 64;
+    private const int CacheHeaderCrcOffset = 24;
+    private const int ProtectedPayloadNonceSize = 12;
     private readonly SharedMemoryCache _cache;
     private readonly string _mapName;
 
@@ -147,18 +150,20 @@ public sealed class SharedMemorySecurityTests : IDisposable
     }
 
     [Fact]
-    public void TamperedPayloadWithUpdatedCrc_ShouldReturnMiss()
+    public void TamperedProtectedPayloadWithUpdatedCrc_ShouldReturnMiss()
     {
         string key = "tamper-payload";
         byte[] original = Encoding.UTF8.GetBytes("trusted-value");
-        byte[] tampered = Encoding.UTF8.GetBytes("evil-value-xx");
         _cache.Set(key, original, new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1) });
         string file = GetSingleCacheFile(_mapName);
         byte[] bytes = File.ReadAllBytes(file);
-        int payloadOffset = bytes.Length - original.Length;
+        int protectedPayloadLength = bytes.Length - CacheHeaderSize;
+        int firstCiphertextByteOffset = CacheHeaderSize + ProtectedPayloadNonceSize;
 
-        tampered.CopyTo(bytes.AsSpan(payloadOffset));
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(24, sizeof(uint)), Crc32.HashToUInt32(tampered));
+        bytes[firstCiphertextByteOffset] ^= 0x01;
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(CacheHeaderCrcOffset, sizeof(uint)),
+            Crc32.HashToUInt32(bytes.AsSpan(CacheHeaderSize, protectedPayloadLength)));
         File.WriteAllBytes(file, bytes);
 
         Assert.Null(_cache.Get(key));
