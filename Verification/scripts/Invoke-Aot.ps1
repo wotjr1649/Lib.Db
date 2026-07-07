@@ -492,6 +492,7 @@ $publishArguments = @(
     '-c', 'Release',
     '-r', $aotRid,
     '--self-contained', 'true',
+    '--no-restore',
     '-p:PublishAot=true',
     '-p:GeneratePackageOnBuild=false',
     '-p:TreatWarningsAsErrors=false',

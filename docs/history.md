@@ -7,8 +7,8 @@ Current usage docs are intended to stay version-neutral and describe the current
 ### Changed
 
 - Released `2.6.3` as a hardening-only maintenance update with no runtime API change, dependency churn, SQL behavior change, or legacy bulk default breaking change.
-- Added a release NuGet audit gate that restores with `NuGetAudit=true` and `NuGetAuditMode=all`; `NU1900`, `NU1903`, and `NU1904` block release, while `NU1901` and `NU1902` remain documented-accept warnings that require release-owner review.
-- Pinned GitHub workflow action references to a full commit SHA and retained the reviewed source action version beside each pin.
+- Added an early release NuGet audit gate that restores with `NuGetAudit=true` and `NuGetAuditMode=all` before verification build/test/package work; `NU1900`, `NU1903`, and `NU1904` block release, while `NU1901` and `NU1902` require explicit release-owner acceptance.
+- Pinned GitHub workflow action references to a full commit SHA, pinned release workflow runner/image/SDK selectors where practical, and retained the reviewed source action version beside each pin.
 - Kept public consumer docs free of maintainer-only verification commands and paths.
 
 ### Security

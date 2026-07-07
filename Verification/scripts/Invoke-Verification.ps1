@@ -96,6 +96,15 @@ function Write-SecretSafeEnvironmentSummary {
 Write-Host 'Lib.Db verification started.'
 Write-SecretSafeEnvironmentSummary
 
+if (-not $SkipNuGetAudit) {
+    Invoke-Checked 'pwsh' @(
+        '-NoProfile',
+        '-File', $nugetAuditScript
+    )
+}
+else {
+    $skippedGates.Add('nuget-audit')
+}
 Invoke-Checked 'dotnet' @(
     'build',
     $integrationProject,
@@ -165,15 +174,6 @@ else {
     $skippedGates.Add('aot')
 }
 
-if (-not $SkipNuGetAudit) {
-    Invoke-Checked 'pwsh' @(
-        '-NoProfile',
-        '-File', $nugetAuditScript
-    )
-}
-else {
-    $skippedGates.Add('nuget-audit')
-}
 
 if (-not $SkipReleasePackage) {
     & pwsh -NoProfile -File $releasePackageScript -ArtifactsDirectory $releasePackageArtifactsDirectory
