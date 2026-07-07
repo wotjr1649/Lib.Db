@@ -102,4 +102,4 @@ The legacy `BulkInsertAsync<T>(..., BulkInsertOptions?)` overload uses reflectio
 
 ## Generated Result Mappers
 
-Use `[DbResult]` partial DTOs only where an application already has an installed and verified generator package. `Lib.Db.Generator` remains roadmap/prototype guidance, not a v2.6.2 runtime API. Keep generated mappers compatible with `DbDataReader` wrappers.
+Use `[DbResult]` partial DTOs only where an application already has an installed and verified generator package. `Lib.Db.Generator` remains roadmap/prototype guidance, not a v2.6.3 runtime API. Keep generated mappers compatible with `DbDataReader` wrappers.

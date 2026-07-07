@@ -35,10 +35,10 @@ jobs:
       DOTNET_NOLOGO: true
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # action-version: actions/checkout@v6
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v5
+      uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # action-version: actions/setup-dotnet@v5
       with:
         dotnet-version: '10.0.x'
 
@@ -94,7 +94,7 @@ jobs:
       run: pwsh -NoProfile -File ./Verification/scripts/Scan-VerificationArtifacts.ps1 -Paths "Verification/artifacts/aot-${{ matrix.rid }}"
 
     - name: Upload Native AOT artifacts
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # action-version: actions/upload-artifact@v6
       with:
         name: native-aot-${{ matrix.rid }}-${{ github.run_id }}
         path: Verification/artifacts/aot-${{ matrix.rid }}/**

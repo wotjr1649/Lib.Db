@@ -3,6 +3,7 @@ param(
     [switch] $SkipBenchmark,
     [switch] $SkipMatrixDbTests,
     [switch] $SkipAot,
+    [switch] $SkipNuGetAudit,
     [switch] $SkipReleasePackage,
     [ValidateSet('Dry', 'Short', 'Default')]
     [string] $BenchmarkJob = 'Short',
@@ -20,6 +21,7 @@ $testScript = Join-Path $PSScriptRoot 'Invoke-Tests.ps1'
 $coverageScript = Join-Path $PSScriptRoot 'Invoke-Coverage.ps1'
 $benchmarkScript = Join-Path $PSScriptRoot 'Invoke-Benchmarks.ps1'
 $aotScript = Join-Path $PSScriptRoot 'Invoke-Aot.ps1'
+$nugetAuditScript = Join-Path $PSScriptRoot 'Invoke-NuGetAudit.ps1'
 $releasePackageScript = Join-Path $PSScriptRoot 'Invoke-ReleasePackage.ps1'
 $artifactScanner = Join-Path $PSScriptRoot 'Scan-VerificationArtifacts.ps1'
 $artifactTrackingGate = Join-Path $PSScriptRoot 'Assert-GeneratedArtifactsUntracked.ps1'
@@ -161,6 +163,16 @@ if (-not $SkipAot) {
 }
 else {
     $skippedGates.Add('aot')
+}
+
+if (-not $SkipNuGetAudit) {
+    Invoke-Checked 'pwsh' @(
+        '-NoProfile',
+        '-File', $nugetAuditScript
+    )
+}
+else {
+    $skippedGates.Add('nuget-audit')
 }
 
 if (-not $SkipReleasePackage) {

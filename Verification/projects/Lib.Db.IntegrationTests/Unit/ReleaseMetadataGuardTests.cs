@@ -1,6 +1,6 @@
 // ============================================================================
 // 파일: Unit/ReleaseMetadataGuardTests.cs
-// 설명: v2.6.2 release metadata, docs, and curated public API drift guard
+// 설명: v2.6.3 release metadata, docs, and curated public API drift guard
 // 대상: .NET 10
 // ============================================================================
 
@@ -10,11 +10,11 @@ namespace Lib.Db.IntegrationTests.Unit;
 
 public sealed class ReleaseMetadataGuardTests
 {
-    private const string ExpectedPackageVersion = "2.6.2";
+    private const string ExpectedPackageVersion = "2.6.3";
     private const string VerificationManifestVersion = "v2.6.0";
 
     [Fact]
-    public async Task PackageMetadata_ShouldDeclareV262ReleaseVersion()
+    public async Task PackageMetadata_ShouldDeclareV263ReleaseVersion()
     {
         XDocument project = XDocument.Parse(await ReadRepoFileAsync("Lib.Db", "Lib.Db.csproj"));
 
@@ -44,7 +44,7 @@ public sealed class ReleaseMetadataGuardTests
     }
 
     [Fact]
-    public async Task PublicDocs_ShouldCoverV262ReleaseSurfaceByDocument()
+    public async Task PublicDocs_ShouldCoverV263ReleaseSurfaceByDocument()
     {
         string guide = await ReadRepoFileAsync("docs", "01_guide.md");
         string advanced = await ReadRepoFileAsync("docs", "02_advanced.md");
@@ -55,24 +55,24 @@ public sealed class ReleaseMetadataGuardTests
         string history = await ReadRepoFileAsync("docs", "history.md");
         string aotRiskLedger = await ReadRepoFileAsync("docs", "security", "aot-tvp-risk-ledger.md");
 
+        int v263Start = history.IndexOf("## 2.6.3 Summary", StringComparison.Ordinal);
         int v262Start = history.IndexOf("## 2.6.2 Summary", StringComparison.Ordinal);
-        int v261Start = history.IndexOf("## 2.6.1 Summary", StringComparison.Ordinal);
-        v262Start.Should().BeGreaterThanOrEqualTo(0);
-        v261Start.Should().BeGreaterThan(v262Start);
-        string historyV262 = history[v262Start..v261Start];
+        v263Start.Should().BeGreaterThanOrEqualTo(0);
+        v262Start.Should().BeGreaterThan(v263Start);
+        string historyV263 = history[v263Start..v262Start];
 
-        historyV262.Should().Contain(ExpectedPackageVersion);
-        historyV262.Should().Contain("sp_executesql");
-        historyV262.Should().Contain("SharedMemoryCache");
-        historyV262.Should().Contain("legacy bulk destination names");
-        historyV262.Should().Contain("single-part destination names");
-        historyV262.Should().Contain("string values inside named parameter objects and dictionaries");
-        historyV262.Should().Contain("shared cache key material");
-        historyV262.Should().Contain("epoch mutex namespace");
-        historyV262.Should().Contain("configuration binding parity");
-        historyV262.Should().Contain("Microsoft.Data.SqlClient` 7.0.2");
-        historyV262.Should().Contain("aot-warnings.json");
-        historyV262.Should().Contain("Lib.Db-owned warning count");
+        historyV263.Should().Contain(ExpectedPackageVersion);
+        historyV263.Should().Contain("hardening-only");
+        historyV263.Should().Contain("NuGet audit");
+        historyV263.Should().Contain("NU1900");
+        historyV263.Should().Contain("NU1903");
+        historyV263.Should().Contain("NU1904");
+        historyV263.Should().Contain("workflow action");
+        historyV263.Should().Contain("full commit SHA");
+        historyV263.Should().Contain("DenyWriteText");
+        historyV263.Should().Contain("guardrail");
+        historyV263.Should().Contain("SharedMemoryCache");
+        historyV263.Should().Contain("not an OS ACL or security boundary");
 
         guide.Should().Contain("IDbSession");
         guide.Should().Contain(".Schema");
@@ -109,7 +109,7 @@ public sealed class ReleaseMetadataGuardTests
         aotRiskLedger.Should().NotContain("Microsoft.Data.SqlClient` is pinned to `7.0.1`");
     }
     [Fact]
-    public async Task CuratedLibDbSkillReferences_ShouldCoverSensitiveV262Usage()
+    public async Task CuratedLibDbSkillReferences_ShouldCoverSensitiveV263Usage()
     {
         string connectionSecurity = await ReadRepoFileAsync(".agents", "skills", "lib-db", "references", "connection-security.md");
         string caching = await ReadRepoFileAsync(".agents", "skills", "lib-db", "references", "caching.md");
@@ -127,7 +127,7 @@ public sealed class ReleaseMetadataGuardTests
         parameters.Should().Contain("A `string` value inside a named parameter object or dictionary");
         parameters.Should().Contain("is not reflected as a parameter bag");
         aot.Should().Contain("Lib.Db.Generator");
-        aot.Should().Contain("not a v2.6.2 runtime API");
+        aot.Should().Contain("not a v2.6.3 runtime API");
         schema.Should().Contain("db.Schema");
         schema.Should().Contain("UseSchema");
     }

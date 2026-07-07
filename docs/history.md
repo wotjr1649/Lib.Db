@@ -2,6 +2,24 @@
 
 Current usage docs are intended to stay version-neutral and describe the current API. This file owns version-specific history: release changes, verification summaries, migration notes, and archived report summaries that should not remain scattered through active guides.
 
+## 2.6.3 Summary
+
+### Changed
+
+- Released `2.6.3` as a hardening-only maintenance update with no runtime API change, dependency churn, SQL behavior change, or legacy bulk default breaking change.
+- Added a release NuGet audit gate that restores with `NuGetAudit=true` and `NuGetAuditMode=all`; `NU1900`, `NU1903`, and `NU1904` block release, while `NU1901` and `NU1902` remain documented-accept warnings that require release-owner review.
+- Pinned GitHub workflow action references to a full commit SHA and retained the reviewed source action version beside each pin.
+- Kept public consumer docs free of maintainer-only verification commands and paths.
+
+### Security
+
+- Reaffirmed that `RawSqlPolicy.DenyWriteText` is a mutating raw SQL guardrail, not a full SQL parser or permission boundary.
+- Reaffirmed that `SharedMemoryCache` keyed integrity, namespace isolation, and quota behavior are cache hardening, not an OS ACL or security boundary.
+
+### Verification
+
+- Added guard coverage for v2.6.3 release metadata, NuGet audit policy, workflow action SHA pinning, public documentation boundaries, and active Lib.Db skill wording.
+
 ## 2.6.2 Summary
 
 ### Fixed
@@ -16,7 +34,7 @@ Current usage docs are intended to stay version-neutral and describe the current
 
 ### Changed
 
-- v2.6.2 freezes the public bulk-copy surface for this hardening patch. Optional `TableLock` and `KeepNulls` destination options are deferred to the v2.6.3 brainstorming backlog.
+- v2.6.2 freezes the public bulk-copy surface for this hardening patch. Optional `TableLock` and `KeepNulls` destination options are deferred to a future compatibility-reviewed backlog.
 - The checked-in verification manifest keeps its `v2.6.0` workflow manifest marker; the NuGet package version is sourced from `Lib.Db.csproj`.
 
 ### Verification

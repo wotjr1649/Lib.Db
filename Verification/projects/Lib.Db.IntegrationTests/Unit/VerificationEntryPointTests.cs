@@ -469,6 +469,8 @@ public sealed class VerificationEntryPointTests
         string publicDocs = string.Join(
             Environment.NewLine,
             EnumeratePublicDocumentationFiles(repoRoot).Select(File.ReadAllText));
+        publicDocs.Should().NotContain("docs/verification.md");
+        publicDocs.Should().NotContain("[Verification]");
         publicDocs.Should().NotContain("Verification/scripts/");
         publicDocs.Should().NotContain("Invoke-Tests.ps1");
         publicDocs.Should().NotContain("Invoke-Coverage.ps1");
@@ -559,6 +561,8 @@ public sealed class VerificationEntryPointTests
         activeSkillGuidance.Should().NotContain("tvpgen-guide.md");
         activeSkillGuidance.Should().NotContain("runtime-api.md");
         activeSkillGuidance.Should().NotContain("security-guardrails.md");
+        activeSkillGuidance.Should().Contain("not an OS ACL or security boundary");
+        activeSkillGuidance.Should().NotContain("isolates per OS user");
         activeSkillGuidance.Should().NotContain("BenchmarkDotNet");
         activeSkillGuidance.Should().NotContain("Invoke-Verification.ps1");
     }
