@@ -282,6 +282,10 @@ public sealed class ReleasePackageGuardTests
 
         string aotScript = await ReadRepoFileAsync("Verification", "scripts", "Invoke-Aot.ps1");
         aotScript.Should().Contain("'--no-restore'");
+
+        string nativeAotWorkflow = await ReadRepoFileAsync(".github", "workflows", "native-aot.yml");
+        nativeAotWorkflow.Should().Contain("- 'Verification/scripts/Invoke-NuGetAudit.ps1'");
+        nativeAotWorkflow.Should().Contain("- 'global.json'");
     }
 
     [Fact]

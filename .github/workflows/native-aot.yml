@@ -7,10 +7,12 @@ on:
       - main
     paths:
       - '.github/workflows/native-aot.yml'
+      - 'global.json'
       - 'Lib.Db/**'
       - 'Verification/baselines/aot-warnings.json'
       - 'Verification/projects/Lib.Db.AotVerification/**'
       - 'Verification/scripts/Invoke-Aot.ps1'
+      - 'Verification/scripts/Invoke-NuGetAudit.ps1'
       - 'Verification/scripts/Scan-VerificationArtifacts.ps1'
 
 permissions:
