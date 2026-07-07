@@ -149,7 +149,6 @@ See [Configuration](https://github.com/wotjr1649/Lib.Db/blob/main/docs/02_config
 - [Operations](https://github.com/wotjr1649/Lib.Db/blob/main/docs/04_operations.md) covers production configuration and operational guardrails.
 - [Fluent API Reference](https://github.com/wotjr1649/Lib.Db/blob/main/docs/05_fluent_api_reference.md) documents the staged procedure call API.
 - [Cookbook](https://github.com/wotjr1649/Lib.Db/blob/main/docs/06_cookbook.md) provides task-focused examples.
-- [Verification](https://github.com/wotjr1649/Lib.Db/blob/main/docs/verification.md) explains maintainer-only release validation and generated artifact policy.
 - [History](https://github.com/wotjr1649/Lib.Db/blob/main/docs/history.md) contains release notes and migration history.
 
 ## License

@@ -1,6 +1,6 @@
 # Lib.Db Verification Policy
 
-Updated: 2026-05-22
+Updated: 2026-07-07
 
 This is an internal maintainer policy, not consumer API documentation. Consumer applications do not need this workflow to install or use `Lib.Db`.
 
@@ -29,6 +29,18 @@ Release-grade maintainer validation covers:
 7. Secret-pattern scanning of generated verification artifacts before preserving or sharing reports.
 8. Generated artifact tracking gates so benchmark, test, coverage, and AOT outputs are not committed as source.
 9. Provider-neutral caching gates: `AddLibDb()` preserves an existing host-owned `IDistributedCache`, `AddLibDbSharedMemoryCache()` rejects an existing provider at registration time, and providers added after shared-memory opt-in fail Generic Host startup through the hosted validator.
+10. NuGet audit restore with `NuGetAudit=true` and `NuGetAuditMode=all` before verification build, test, AOT, and package work.
+11. GitHub workflow action references pinned to full commit SHA values, with release runner/image/SDK selectors pinned where practical.
+
+## NuGet Audit Release Gate
+
+The release gate runs `Verification/scripts/Invoke-NuGetAudit.ps1` before verification build, test, AOT, and package work. The gate restores the solution with `NuGetAudit=true`, `NuGetAuditMode=all`, and `WarningsAsErrors=NU1900;NU1903;NU1904`. It runs restore with one MSBuild node and node reuse disabled so release audit does not leave stale build worker processes behind on constrained local runners.
+
+`NU1900` blocks release because audit source failure means vulnerability metadata was unavailable. `NU1903` and `NU1904` block release because high and critical known vulnerabilities require an explicit fix or release-owner exception outside the default flow. `NU1901` and `NU1902` remain documented-accept warnings for low and moderate advisories; the audit script fails when they are present unless the release owner reruns it with `-AcceptLowModerateAuditWarnings` after documenting acceptance. NuGet publish does not use `--skip-duplicate`; duplicate package versions must fail rather than report a false successful publish.
+
+## GitHub Actions Pinning
+
+Workflow action references must use a full 40-character commit SHA. Keep the reviewed source action version in the same `uses:` line as an `action-version:` comment so maintainers can update pins intentionally without reverting to mutable tags. Release workflows also pin Ubuntu runner labels, the SQL Server service image digest, and the .NET SDK feature version used for release validation.
 
 ## Provider-Neutral Caching Release Gate
 

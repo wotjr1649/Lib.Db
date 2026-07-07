@@ -31,6 +31,7 @@ public sealed class ReleasePackageGuardTests
         script.Should().Contain("PackageVersion override must match project Version");
         script.Should().Contain("/p:PackageVersion=$effectivePackageVersion");
         script.Should().Contain("/p:Version=$effectivePackageVersion");
+        script.Should().Contain("'--no-restore'");
         script.Should().Contain("RejectsMismatchedPackageVersionOverride");
     }
 
@@ -59,6 +60,15 @@ public sealed class ReleasePackageGuardTests
         guardIndex.Should().BeGreaterThanOrEqualTo(0);
         pushIndex.Should().BeGreaterThanOrEqualTo(0);
         guardIndex.Should().BeLessThan(pushIndex);
+    }
+
+    [Fact]
+    public async Task PublishWorkflow_ShouldFailWhenPackageVersionAlreadyExists()
+    {
+        string workflow = await ReadRepoFileAsync(".github", "workflows", "publish.yml");
+
+        workflow.Should().Contain("dotnet nuget push");
+        workflow.Should().NotContain("--skip-duplicate");
     }
 
     [Fact]
@@ -153,6 +163,149 @@ public sealed class ReleasePackageGuardTests
             string script = await ReadRepoFileAsync(scriptPath.Split('/'));
             script.Should().NotContain("Lib.Db v2.4.0", scriptPath);
         }
+    }
+
+    [Fact]
+    public async Task VerificationGate_ShouldRunNuGetAuditPolicyBeforeReleasePackage()
+    {
+        string verificationScript = await ReadRepoFileAsync("Verification", "scripts", "Invoke-Verification.ps1");
+        string auditScript = await ReadRepoFileAsync("Verification", "scripts", "Invoke-NuGetAudit.ps1");
+        string manifest = await ReadRepoFileAsync("Verification", "manifest.json");
+
+        verificationScript.Should().Contain("Invoke-NuGetAudit.ps1");
+        verificationScript.Should().Contain("$nugetAuditScript");
+        verificationScript.Should().Contain("SkipNuGetAudit");
+        auditScript.Should().Contain("NuGetAudit=true");
+        auditScript.Should().Contain("NuGetAuditMode=all");
+        auditScript.Should().Contain("WarningsAsErrors=NU1900;NU1903;NU1904");
+        auditScript.Should().Contain("WarningsAsErrors=NU1900%3BNU1903%3BNU1904");
+        auditScript.Should().Contain("WarningsNotAsErrors=NU1901%3BNU1902");
+        auditScript.Should().Contain("AcceptLowModerateAuditWarnings");
+        auditScript.Should().Contain("Review the advisory");
+        auditScript.Should().Contain("'-m:1'");
+        auditScript.Should().Contain("'-nr:false'");
+        auditScript.Should().Contain("NU1901/NU1902 are documented-accept warnings");
+        auditScript.Should().Contain("audit source failure");
+        auditScript.Should().NotContain("WarningsAsErrors=NU1900;NU1901;NU1902;NU1903;NU1904");
+        manifest.Should().Contain("nugetAudit");
+        manifest.Should().Contain("scripts/Invoke-NuGetAudit.ps1");
+
+        int auditGateIndex = verificationScript.IndexOf("if (-not $SkipNuGetAudit)", StringComparison.Ordinal);
+        int auditInvokeIndex = verificationScript.IndexOf("'-File', $nugetAuditScript", auditGateIndex, StringComparison.Ordinal);
+        int firstBuildIndex = verificationScript.IndexOf("'build'", StringComparison.Ordinal);
+        int releasePackageGateIndex = verificationScript.IndexOf("if (-not $SkipReleasePackage)", StringComparison.Ordinal);
+        int releasePackageInvokeIndex = verificationScript.IndexOf("-File $releasePackageScript", releasePackageGateIndex, StringComparison.Ordinal);
+        auditGateIndex.Should().BeGreaterThanOrEqualTo(0);
+        auditInvokeIndex.Should().BeGreaterThan(auditGateIndex);
+        firstBuildIndex.Should().BeGreaterThan(auditInvokeIndex);
+        releasePackageGateIndex.Should().BeGreaterThan(auditInvokeIndex);
+        releasePackageInvokeIndex.Should().BeGreaterThan(releasePackageGateIndex);
+    }
+
+    [Fact]
+    public async Task GitHubWorkflowActions_ShouldBePinnedToFullCommitShaAndDocumentSourceVersion()
+    {
+        DirectoryInfo repoRoot = FindRepoRoot();
+        string workflowRoot = Path.Combine(repoRoot.FullName, ".github", "workflows");
+        string[] workflows = Directory.GetFiles(workflowRoot, "*.yml", SearchOption.TopDirectoryOnly);
+
+        workflows.Should().NotBeEmpty();
+        Dictionary<string, string> expectedPins = new(StringComparer.Ordinal)
+        {
+            ["actions/checkout@v6"] = "df4cb1c069e1874edd31b4311f1884172cec0e10",
+            ["actions/setup-dotnet@v5"] = "26b0ec14cb23fa6904739307f278c14f94c95bf1",
+            ["actions/upload-artifact@v6"] = "b7c566a772e6b6bfb58ed0dc250532a479d7789f"
+        };
+
+        foreach (string workflow in workflows)
+        {
+            string[] lines = await File.ReadAllLinesAsync(workflow, TestContext.Current.CancellationToken);
+            for (int index = 0; index < lines.Length; index++)
+            {
+                string trimmed = lines[index].Trim();
+                string? usesValue = null;
+                if (trimmed.StartsWith("- uses:", StringComparison.Ordinal))
+                    usesValue = trimmed["- uses:".Length..].Trim();
+                else if (trimmed.StartsWith("uses:", StringComparison.Ordinal))
+                    usesValue = trimmed["uses:".Length..].Trim();
+
+                if (string.IsNullOrWhiteSpace(usesValue) || usesValue.StartsWith("./", StringComparison.Ordinal) || usesValue.StartsWith("docker://", StringComparison.Ordinal))
+                    continue;
+
+                int commentIndex = usesValue.IndexOf('#');
+                string actionRef = (commentIndex < 0 ? usesValue : usesValue[..commentIndex]).Trim();
+                string comment = commentIndex < 0 ? string.Empty : usesValue[(commentIndex + 1)..].Trim();
+                int atIndex = actionRef.LastIndexOf('@');
+                atIndex.Should().BeGreaterThan(0, $"{workflow}:{index + 1} must use owner/repo@ref syntax");
+
+                string action = actionRef[..atIndex];
+                string reference = actionRef[(atIndex + 1)..];
+                action.Should().MatchRegex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", $"{workflow}:{index + 1} must be a GitHub action ref");
+                reference.Should().MatchRegex("^[0-9a-fA-F]{40}$", $"{workflow}:{index + 1} must pin {action} to a full commit SHA");
+                comment.Should().StartWith("action-version: ", $"{workflow}:{index + 1} must document the source action version next to the SHA pin");
+                string actionVersion = comment["action-version: ".Length..].Trim();
+                int documentedAtIndex = actionVersion.LastIndexOf('@');
+                documentedAtIndex.Should().BeGreaterThan(0, $"{workflow}:{index + 1} action-version comment must use owner/repo@version syntax");
+                expectedPins.Should().ContainKey(actionVersion, $"{workflow}:{index + 1} must document a reviewed source action version");
+                string documentedAction = actionVersion[..documentedAtIndex];
+                documentedAction.Should().Be(action, $"{workflow}:{index + 1} action-version comment must match the pinned action");
+                reference.Should().Be(expectedPins[actionVersion], $"{workflow}:{index + 1} SHA must match the reviewed source action version");
+            }
+        }
+    }
+
+
+    [Fact]
+    public async Task GitHubWorkflows_ShouldRunNuGetAuditBeforeAnyRestoreOrVerificationWork()
+    {
+        (string Path, string FirstGate)[] workflows =
+        [
+            (Path: ".github/workflows/publish.yml", FirstGate: "pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1"),
+            (Path: ".github/workflows/release-verification.yml", FirstGate: "pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1"),
+            (Path: ".github/workflows/native-aot.yml", FirstGate: "pwsh -NoProfile -File ./Verification/scripts/Invoke-Aot.ps1")
+        ];
+
+        foreach ((string path, string firstGate) in workflows)
+        {
+            string workflow = await ReadRepoFileAsync(path.Split('/'));
+            workflow.Should().Contain("Invoke-NuGetAudit.ps1", path);
+            workflow.Should().NotContain("dotnet restore Lib.Db.slnx", path);
+
+            int auditIndex = workflow.IndexOf("Invoke-NuGetAudit.ps1", StringComparison.Ordinal);
+            int restoreToolsIndex = workflow.IndexOf("dotnet tool restore", StringComparison.Ordinal);
+            int firstGateIndex = workflow.IndexOf(firstGate, StringComparison.Ordinal);
+            auditIndex.Should().BeGreaterThanOrEqualTo(0, path);
+            if (restoreToolsIndex >= 0)
+                auditIndex.Should().BeLessThan(restoreToolsIndex, path);
+            firstGateIndex.Should().BeGreaterThan(auditIndex, path);
+        }
+
+        string aotScript = await ReadRepoFileAsync("Verification", "scripts", "Invoke-Aot.ps1");
+        aotScript.Should().Contain("'--no-restore'");
+
+        string nativeAotWorkflow = await ReadRepoFileAsync(".github", "workflows", "native-aot.yml");
+        nativeAotWorkflow.Should().Contain("- 'Verification/scripts/Invoke-NuGetAudit.ps1'");
+        nativeAotWorkflow.Should().Contain("- 'global.json'");
+    }
+
+    [Fact]
+    public async Task GitHubWorkflows_ShouldPinExecutionInputsForReleaseGradeRuns()
+    {
+        string publish = await ReadRepoFileAsync(".github", "workflows", "publish.yml");
+        string releaseVerification = await ReadRepoFileAsync(".github", "workflows", "release-verification.yml");
+        string nativeAot = await ReadRepoFileAsync(".github", "workflows", "native-aot.yml");
+        string globalJson = await ReadRepoFileAsync("global.json");
+        string combined = string.Join(Environment.NewLine, publish, releaseVerification, nativeAot);
+
+        combined.Should().NotContain("ubuntu-latest");
+        combined.Should().NotContain("mssql/server:2022-latest");
+        combined.Should().NotContain("10.0.x");
+        publish.Should().Contain("runs-on: ubuntu-24.04");
+        releaseVerification.Should().Contain("runs-on: ubuntu-24.04");
+        combined.Should().Contain("mcr.microsoft.com/mssql/server@sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56");
+        combined.Should().Contain("dotnet-version: '10.0.301'");
+        globalJson.Should().Contain("\"version\": \"10.0.301\"");
+        globalJson.Should().Contain("\"rollForward\": \"disable\"");
     }
 
     private static async Task<string> ReadRepoFileAsync(params string[] pathParts)

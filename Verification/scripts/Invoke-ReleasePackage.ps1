@@ -683,6 +683,7 @@ $effectivePackageVersion = Resolve-PackageVersion -ProjectVersion $projectVersio
 Invoke-Checked 'dotnet' @(
     'pack',
     $projectPath,
+    '--no-restore',
     '-c', 'Release',
     '-o', $artifactRoot,
     "/p:RepositoryCommit=$head",

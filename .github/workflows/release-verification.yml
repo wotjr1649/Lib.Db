@@ -9,10 +9,10 @@ permissions:
 
 jobs:
   release-verification:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server@sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_PID: Developer
@@ -23,12 +23,12 @@ jobs:
       DOTNET_NOLOGO: true
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # action-version: actions/checkout@v6
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v5
+      uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # action-version: actions/setup-dotnet@v5
       with:
-        dotnet-version: '10.0.x'
+        dotnet-version: '10.0.301'
 
     - name: Wait for SQL Server
       shell: bash
@@ -36,7 +36,7 @@ jobs:
         LIBDB_TEST_SQL_PASSWORD: LibDb_CI_${{ github.run_id }}_${{ github.run_attempt }}!aA1
       run: |
         set -euo pipefail
-        container_id="$(docker ps --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest --format '{{.ID}}' | head -n 1)"
+        container_id="$(docker ps --filter ancestor=mcr.microsoft.com/mssql/server@sha256:e07b9699a2b749969f19d86563ceeea22bd3a69f7f1db85a8d1ac4bdaf0c6f56 --format '{{.ID}}' | head -n 1)"
         if [[ -z "$container_id" ]]; then
           echo "ERROR: SQL Server service container was not found." >&2
           docker ps
@@ -56,8 +56,9 @@ jobs:
         docker logs "$container_id" --tail 80
         exit 1
 
-    - name: Restore dependencies
-      run: dotnet restore Lib.Db.slnx
+    - name: Run NuGet audit gate
+      shell: pwsh
+      run: pwsh -NoProfile -File ./Verification/scripts/Invoke-NuGetAudit.ps1
 
     - name: Restore local tools
       run: dotnet tool restore
@@ -71,7 +72,7 @@ jobs:
         pwsh -NoProfile -File ./Verification/scripts/Invoke-Verification.ps1 -BenchmarkJob Short
 
     - name: Upload verification artifacts
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # action-version: actions/upload-artifact@v6
       with:
         name: verification-artifacts-${{ github.run_id }}
         path: |

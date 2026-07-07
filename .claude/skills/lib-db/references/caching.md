@@ -111,4 +111,4 @@ await hybridCache.RemoveByTagAsync("entity:user-profile", ct);
 
 `LibDbOptions.SharedMemoryCache` includes `BasePath`, `Scope`, `MaxCacheSizeBytes`, `FallbackCache`, and `IsolationKey`.
 
-`CacheScope.User` isolates per OS user. `CacheScope.Machine` is machine-wide and needs stronger operational review. SharedMemoryCache entries use keyed integrity metadata, namespace-safe isolation, and quota enforcement; quota-rejected or quota-unverified writes must not be treated as successful cache writes.
+`CacheScope.User` scopes cache coordination and key material to the current OS user context, but SharedMemoryCache is not an OS ACL or security boundary. `CacheScope.Machine` is machine-wide and needs stronger operational review. SharedMemoryCache entries use keyed integrity metadata, namespace-safe isolation, and quota enforcement; quota-rejected or quota-unverified writes must not be treated as successful cache writes.
